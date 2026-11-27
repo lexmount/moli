@@ -1470,7 +1470,7 @@ async fn performance_measure_entries_are_observable_and_clearable() -> Result<()
 #[tokio::test]
 async fn secondary_webapis_cover_file_file_list_and_resize_observer_basics() -> Result<()> {
     let server = FixtureServer::spawn().await?;
-    let browser = Browser::new(AppConfig::default().with_layout_policy(LayoutPolicy::OnDemand))?;
+    let browser = Browser::new(AppConfig::default().with_layout_policy(LayoutPolicy::Lazy))?;
 
     let mut page = browser
         .fetch(&server.url("/compat/secondary-webapis"))
@@ -5879,7 +5879,7 @@ async fn intersection_observer_root_scopes_delivery_to_descendants_only() -> Res
 #[tokio::test]
 async fn root_client_metrics_track_window_surface_profile() -> Result<()> {
     let server = FixtureServer::spawn().await?;
-    let browser = Browser::new(AppConfig::default().with_layout_policy(LayoutPolicy::OnDemand))?;
+    let browser = Browser::new(AppConfig::default().with_layout_policy(LayoutPolicy::Lazy))?;
 
     let mut page = browser.fetch(&server.url("/static")).await?;
 
@@ -6049,7 +6049,7 @@ async fn inline_geometry_uses_synthetic_box_for_authored_widths_and_percentages(
 #[tokio::test]
 async fn intersection_observer_root_geometry_reflects_root_and_target_rects() -> Result<()> {
     let server = FixtureServer::spawn().await?;
-    let browser = Browser::new(AppConfig::default().with_layout_policy(LayoutPolicy::OnDemand))?;
+    let browser = Browser::new(AppConfig::default().with_layout_policy(LayoutPolicy::Lazy))?;
 
     let mut page = browser
         .fetch(&server.url("/compat/intersection-observer-root-geometry"))

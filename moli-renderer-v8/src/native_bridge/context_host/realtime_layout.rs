@@ -1,22 +1,26 @@
-use std::cell::{Cell, RefCell};
+use std::{
+    cell::{Cell, RefCell},
+    collections::HashMap,
+    rc::Rc,
+};
 
 use moli_layout::{
-    LayoutError, LayoutFlushReason, LayoutPassRequest, LayoutPassResult, LayoutViewport,
-    ScrollProjectionRefresh,
+    LayoutCssImageReference, LayoutError, LayoutFlushReason, LayoutPassRequest, LayoutPassResult,
+    LayoutSourceChange, LayoutViewport, ScrollProjectionRefresh,
 };
+use style::servo::restyle_damage::ServoRestyleDamage;
 
 use super::realtime_animation_frames::RealtimeAnimationFrames;
 use super::realtime_environment::RealtimeEnvironmentState;
 use super::realtime_events::RealtimeRenderingEvents;
 use super::realtime_rendering::RealtimeFrameState;
 #[cfg(feature = "devtools")]
-use super::screencast_paint::{
-    RendererScreencastPaintSession, ScreenPaintEntry, ScreencastPaintState,
-};
+use super::screencast_paint::{RendererScreencastPaintSession, ScreenPaintConsumers};
 use super::{OwnerDispatchScope, PageScriptHost, WindowDocumentTaskTarget};
 use crate::{
-    document_runtime::DomHandle, layout_renderer::ContainerSizeFeedback,
-    style_engine::StyloStyleEnvironment,
+    document_runtime::DomHandle,
+    layout_renderer::{LayoutPassFeedback, screen_targets_allow_layout_reuse},
+    style_engine::{ScreenStyleCoverage, StyleInvalidationScope, StyloStyleEnvironment},
 };
 
 /// The consumer explicitly decides whether a pass may update screen geometry.
@@ -34,7 +38,8 @@ enum LayoutPublication {
     CurrentScreen {
         document: DomHandle,
         inputs: ScreenLayoutInputs,
-        paint_generation: Option<u64>,
+        source_dom_version: u64,
+        retain_paint: bool,
     },
     Transient,
 }
@@ -44,15 +49,26 @@ impl PreparedLayoutPublication {
         !matches!(self.0, LayoutPublication::Transient)
     }
 
+    pub(crate) fn input_retention(
+        &self,
+        policy: moli_page_types::LayoutPolicy,
+    ) -> crate::layout_renderer::LayoutInputRetention {
+        use crate::layout_renderer::LayoutInputRetention;
+        match self.0 {
+            LayoutPublication::CurrentScreen { .. } => LayoutInputRetention::Realtime,
+            LayoutPublication::LegacyLatest(_) if policy == moli_page_types::LayoutPolicy::Lazy => {
+                LayoutInputRetention::Frozen
+            }
+            _ => LayoutInputRetention::Transient,
+        }
+    }
+
     pub(crate) fn layout_request(&self, request: LayoutPassRequest) -> LayoutPassRequest {
-        if let LayoutPublication::CurrentScreen {
-            paint_generation, ..
-        } = &self.0
-        {
+        if let LayoutPublication::CurrentScreen { retain_paint, .. } = &self.0 {
             request
                 .with_frame_coverage(moli_layout::LayoutFrameCoverage::AllLayoutBoxes)
                 .with_scroll_projection(true)
-                .with_screen_paint(paint_generation.is_some())
+                .with_screen_paint(*retain_paint)
         } else {
             request
         }
@@ -60,13 +76,15 @@ impl PreparedLayoutPublication {
 }
 
 /// The validity and lifecycle state for one Realtime screen publication.
-/// An active screencast owns its optional paint input through a session lease.
+/// Screen paint consumers request optional data on the document's publication.
 pub(super) struct RealtimeLayoutState {
     non_dom_revision: Cell<Option<u64>>,
     scroll_projection_dirty: Cell<bool>,
     published: RefCell<Option<ScreenLayoutInputs>>,
+    css_images: RefCell<Rc<[LayoutCssImageReference<DomHandle>]>>,
+    css_images_need_preparation: Cell<bool>,
     #[cfg(feature = "devtools")]
-    screencast_paint: ScreencastPaintState,
+    screen_paint_consumers: ScreenPaintConsumers,
     pub(super) frame: RefCell<RealtimeFrameState>,
     pub(super) animation_frames: RefCell<RealtimeAnimationFrames>,
     pub(super) environment: RefCell<RealtimeEnvironmentState>,
@@ -80,8 +98,10 @@ impl Default for RealtimeLayoutState {
             non_dom_revision: Cell::new(Some(0)),
             scroll_projection_dirty: Cell::new(false),
             published: RefCell::new(None),
+            css_images: RefCell::default(),
+            css_images_need_preparation: Cell::new(false),
             #[cfg(feature = "devtools")]
-            screencast_paint: ScreencastPaintState::default(),
+            screen_paint_consumers: ScreenPaintConsumers::default(),
             frame: RefCell::new(RealtimeFrameState::default()),
             animation_frames: RefCell::new(RealtimeAnimationFrames::default()),
             environment: RefCell::new(RealtimeEnvironmentState::default()),
@@ -102,10 +122,17 @@ impl RealtimeLayoutState {
         );
     }
 
+    fn has_screen_paint_consumers(&self) -> bool {
+        #[cfg(feature = "devtools")]
+        return self.screen_paint_consumers.is_active();
+        #[cfg(not(feature = "devtools"))]
+        false
+    }
+
     pub(super) fn clear_publication(&self) {
         self.published.borrow_mut().take();
-        #[cfg(feature = "devtools")]
-        self.screencast_paint.publish(None);
+        self.css_images.take();
+        self.css_images_need_preparation.set(false);
     }
 
     pub(super) fn reset(&self) {
@@ -121,12 +148,12 @@ struct DocumentLayoutInputs {
     document: DomHandle,
     root: Option<DomHandle>,
     target: Option<WindowDocumentTaskTarget>,
+    dom_revision: u64,
     stylesheet_sources: u64,
 }
 
 #[derive(Debug, PartialEq)]
 struct ScreenLayoutInputs {
-    dom: u64,
     non_dom: u64,
     viewport: LayoutViewport,
     environment: StyloStyleEnvironment,
@@ -140,11 +167,9 @@ impl ScreenLayoutInputs {
     fn permits_reuse(&self) -> bool {
         // Existing source counters saturate. At exhaustion, rebuilding is
         // preferable to falsely treating different inputs as equal.
-        self.dom != u64::MAX
-            && self
-                .documents
-                .iter()
-                .all(|document| document.stylesheet_sources != u64::MAX)
+        self.documents.iter().all(|document| {
+            document.dom_revision != u64::MAX && document.stylesheet_sources != u64::MAX
+        })
     }
 }
 
@@ -183,7 +208,8 @@ impl PageScriptHost {
             LayoutPublication::CurrentScreen {
                 document,
                 inputs,
-                paint_generation: self.screen_paint_generation(state),
+                source_dom_version: self.dom_host().dom_version(),
+                retain_paint: state.has_screen_paint_consumers(),
             },
         ))
     }
@@ -191,17 +217,28 @@ impl PageScriptHost {
     pub(crate) fn finish_layout_publication(
         &self,
         publication: PreparedLayoutPublication,
-        pass: LayoutPassResult<DomHandle>,
-        feedback: ContainerSizeFeedback<'_>,
+        mut pass: LayoutPassResult<DomHandle>,
+        mut feedback: LayoutPassFeedback<'_>,
     ) -> Result<(), LayoutError> {
         match publication.0 {
             LayoutPublication::LegacyLatest(document) => {
-                self.publish_layout_pass_for_document(document, pass);
+                self.publish_layout_pass_for_document(
+                    document,
+                    pass,
+                    false,
+                    feedback.take_frame_owner_styles(),
+                );
+                let coverage = feedback.take_screen_style_coverage();
+                drop(feedback);
+                for (document, styles) in coverage {
+                    self.style_engine.publish_screen_styles(document, styles);
+                }
             }
             LayoutPublication::CurrentScreen {
                 document,
                 inputs,
-                paint_generation,
+                source_dom_version,
+                retain_paint,
             } => {
                 let state = self.realtime_layout_state.as_ref().ok_or_else(|| {
                     LayoutError::source_contract(
@@ -209,76 +246,98 @@ impl PageScriptHost {
                         "layout policy changed during pass",
                     )
                 })?;
-                if pass.viewport != inputs.viewport || self.screen_layout_inputs(state)? != inputs {
+                if pass.viewport != inputs.viewport
+                    || self.dom_host().dom_version() != source_dom_version
+                    || self.screen_layout_inputs(state)? != inputs
+                {
                     return Err(LayoutError::source_contract(
                         "screen layout",
                         "source inputs or Document owners changed during layout",
                     ));
                 }
-                #[cfg(feature = "devtools")]
-                let (pass, paint) = {
-                    let mut pass = pass;
-                    let paint = paint_generation.zip(pass.take_screen_paint()).map(
-                        |(resource_generation, layout)| ScreenPaintEntry {
-                            layout,
-                            resource_generation,
-                            css_images: pass.css_image_references().to_vec(),
-                        },
-                    );
-                    (pass, paint)
-                };
-                #[cfg(not(feature = "devtools"))]
-                let _ = paint_generation;
-                self.publish_layout_pass_for_document(document, pass);
-                feedback.commit();
-                #[cfg(feature = "devtools")]
-                state.screencast_paint.publish(paint);
-                self.did_publish_screen_layout(state, inputs);
+                let images = pass.take_css_image_references();
+                self.publish_layout_pass_for_document(
+                    document,
+                    pass,
+                    retain_paint && state.has_screen_paint_consumers(),
+                    Default::default(),
+                );
+                state.css_images_need_preparation.set(!images.is_empty());
+                *state.css_images.borrow_mut() = images.into();
+                self.did_publish_screen_layout(state, inputs, feedback.commit());
             }
             LayoutPublication::Transient => {}
         }
         Ok(())
     }
 
-    fn did_publish_screen_layout(&self, state: &RealtimeLayoutState, inputs: ScreenLayoutInputs) {
+    pub(crate) fn take_realtime_css_image_preparation(
+        &self,
+    ) -> Option<Rc<[LayoutCssImageReference<DomHandle>]>> {
+        let state = self.realtime_layout_state.as_ref()?;
+        (state.css_images_need_preparation.get()
+            && crate::document_runtime::DocumentRuntime::css_image_fetch_enabled(self))
+        .then(|| {
+            state.css_images_need_preparation.set(false);
+            state.css_images.borrow().clone()
+        })
+    }
+
+    pub(crate) fn begin_screen_style_layout(&self, document: DomHandle) {
+        self.style_engine.begin_screen_layout(document);
+    }
+
+    fn did_publish_screen_layout(
+        &self,
+        state: &RealtimeLayoutState,
+        inputs: ScreenLayoutInputs,
+        mut coverage: HashMap<DomHandle, ScreenStyleCoverage>,
+    ) {
+        if moli_trace::cpu_profile_enabled() {
+            tracing::info!(
+                target: "moli_cpu_profile",
+                stage = "screen_style_publication",
+                documents = coverage.len(),
+                lazy_pseudo_owners = coverage
+                    .values()
+                    .map(|document| document.lazy_pseudo_owners.len())
+                    .sum::<usize>(),
+            );
+        }
+        for document in &inputs.documents {
+            self.style_engine.publish_screen_styles(
+                document.document,
+                coverage.remove(&document.document).unwrap_or_default(),
+            );
+        }
         // Attach the verified inputs after the geometry update retires the previous validity.
+        self.dom_host().track_layout_changes(
+            self.document_layout_state
+                .borrow()
+                .has_reusable_layout()
+                .then(|| self.document_handle()),
+        );
         *state.published.borrow_mut() = Some(inputs);
         state.scroll_projection_dirty.set(false);
         crate::observer_runtime::did_publish_realtime_resize_observer_layout(self);
         self.did_publish_realtime_font_layout();
     }
 
-    fn screen_paint_generation(&self, state: &RealtimeLayoutState) -> Option<u64> {
-        #[cfg(feature = "devtools")]
-        if state.screencast_paint.is_active() {
-            let generation = self.visual_resource_generation();
-            return (generation != u64::MAX).then_some(generation);
-        }
-        #[cfg(not(feature = "devtools"))]
-        let _ = state;
-        None
-    }
-
     #[cfg(all(test, feature = "devtools"))]
     pub(crate) fn has_screencast_paint_for_test(&self) -> bool {
-        self.realtime_layout_state
-            .as_ref()
-            .is_some_and(|state| state.screencast_paint.read(|_| ()).is_some())
+        self.document_layout_state
+            .borrow()
+            .has_retained_paint_for_test()
     }
 
     #[cfg(feature = "devtools")]
-    pub(crate) fn paint_current_screencast_layout(
+    pub(crate) fn paint_current_screen_layout(
         &self,
-        session: &RendererScreencastPaintSession,
+        session: Option<&RendererScreencastPaintSession>,
         viewport: LayoutViewport,
         capture: moli_layout::PaintCaptureRequest,
-    ) -> Result<
-        Option<(
-            moli_layout::PaintSnapshot,
-            Vec<moli_layout::LayoutCssImageReference<DomHandle>>,
-        )>,
-        LayoutError,
-    > {
+        reason: LayoutFlushReason,
+    ) -> Result<Option<moli_layout::PaintSnapshot>, LayoutError> {
         let Some(state) = &self.realtime_layout_state else {
             return Ok(None);
         };
@@ -286,25 +345,86 @@ impl PageScriptHost {
         if viewport != self.layout_viewport_for_document(document) {
             return Ok(None);
         }
-        state.screencast_paint.attach(session);
-        self.ensure_current_screen_layout(LayoutFlushReason::Screencast)?;
-        let layout = self.document_layout_state.borrow();
-        let Some(tree) = layout.latest_layout(document) else {
+        if let Some(session) = session {
+            state
+                .screen_paint_consumers
+                .attach(session, &self.document_layout_state);
+        } else if !state.has_screen_paint_consumers()
+            || self
+                .document_layout_state
+                .borrow()
+                .retained_screen_paint(document)
+                .is_none()
+        {
+            // An explicit screenshot only borrows paint already kept by a consumer.
             return Ok(None);
+        }
+        self.ensure_current_screen_layout(reason)?;
+        let paint_geometry =
+            RefCell::new(HashMap::<DomHandle, crate::layout_renderer::SvgGeometry>::new());
+        let snapshot = {
+            let layout = self.document_layout_state.borrow();
+            let Some((tree, retained)) = layout.retained_screen_paint(document) else {
+                return Ok(None);
+            };
+            let images = self.css_image_paint_snapshot();
+            let css_image = |root, url: &str| {
+                self.layout_document_for_source(root)
+                    .map_or_else(moli_layout::LayoutCssImageState::default, |document| {
+                        images.image(document, url)
+                    })
+            };
+            let replaced_image =
+                |source, kind| crate::layout_renderer::native_replaced_image(self, source, kind);
+            let inline_svg =
+                |root,
+                 viewport,
+                 node,
+                 style: &moli_layout::ResolvedLayoutStyle,
+                 size,
+                 _input: Option<&moli_layout::InlineSvgInput<DomHandle>>| {
+                    let collect_geometry = tree
+                        .tree_for_root(root)
+                        .is_some_and(|member| member.pending_svg_viewport(node).is_some());
+                    let decoded = crate::layout_renderer::prepare_svg_paint(
+                        self,
+                        root,
+                        viewport,
+                        node,
+                        style,
+                        size,
+                        collect_geometry,
+                    );
+                    let (image, objects) = decoded.map_or_else(
+                        || (None, Vec::new()),
+                        |(image, objects)| (Some(image), objects),
+                    );
+                    if collect_geometry {
+                        paint_geometry
+                            .borrow_mut()
+                            .entry(root)
+                            .or_default()
+                            .push((node, objects));
+                    }
+                    image
+                };
+            retained.paint(
+                tree,
+                capture,
+                None,
+                &css_image,
+                &replaced_image,
+                &inline_svg,
+            )?
         };
-        let resource_generation = self.visual_resource_generation();
-        state
-            .screencast_paint
-            .read(|paint| {
-                if paint.resource_generation != resource_generation {
-                    return Ok(None);
-                }
-                Ok(Some((
-                    paint.layout.paint(tree, capture)?,
-                    paint.css_images.clone(),
-                )))
-            })
-            .unwrap_or(Ok(None))
+        let geometry = paint_geometry.into_inner();
+        if !geometry.is_empty() {
+            let mut layout = self.document_layout_state.borrow_mut();
+            for (root, scenes) in geometry {
+                layout.append_svg_geometry(root, scenes)?;
+            }
+        }
+        Ok(Some(snapshot))
     }
 
     #[cfg(test)]
@@ -315,6 +435,11 @@ impl PageScriptHost {
     /// Called at native source commits, before any callback can observe them.
     /// Legacy modes do not allocate state, advance revisions, or enqueue work.
     pub(crate) fn note_realtime_layout_input_change(&self) {
+        self.dom_host().track_layout_changes(None);
+        self.note_realtime_tracked_input_change();
+    }
+
+    pub(super) fn note_realtime_tracked_input_change(&self) {
         if let Some(state) = &self.realtime_layout_state {
             state.invalidate();
             self.request_realtime_rendering_opportunity();
@@ -322,30 +447,55 @@ impl PageScriptHost {
     }
 
     pub(super) fn note_selection_paint_change(&self) {
+        self.dom_host().track_layout_changes(None);
         #[cfg(feature = "devtools")]
-        if let Some(state) = &self.realtime_layout_state {
-            state.screencast_paint.publish(None);
-            self.document_layout_state
-                .borrow_mut()
-                .mark_visual_state_dirty();
+        if self.realtime_layout_state.is_some() {
+            let mut layout = self.document_layout_state.borrow_mut();
+            layout.discard_screen_paint();
+            layout.mark_visual_state_dirty();
         }
     }
 
     /// Scrolling changes the projection and lifecycle demand, but leaves the
     /// dimensions that were computed by the last layout pass intact.
-    pub(crate) fn note_realtime_scroll_change(&self) {
+    pub(crate) fn note_realtime_scroll_change(&self, target: Option<DomHandle>) {
         if let Some(state) = &self.realtime_layout_state {
+            if let Some(target) = target {
+                self.dom_host().note_tracked_layout_target(target);
+            }
             state.scroll_projection_dirty.set(true);
             self.invalidate_layout_projection();
             self.request_realtime_rendering_opportunity();
         }
     }
 
+    pub(crate) fn retained_box_tree_changes(
+        &self,
+        document: DomHandle,
+    ) -> Option<Vec<LayoutSourceChange<DomHandle>>> {
+        let host = self.dom_host();
+        let mut changes: Vec<_> = host
+            .tracked_layout_targets(document)?
+            .into_iter()
+            .map(LayoutSourceChange::Node)
+            .collect();
+        changes.extend(
+            self.style_engine
+                .screen_layout_style_targets(host, document)?
+                .into_iter()
+                .map(|(target, scope)| match scope {
+                    StyleInvalidationScope::Element => LayoutSourceChange::Node(target),
+                    StyleInvalidationScope::Subtree => LayoutSourceChange::Subtree(target),
+                }),
+        );
+        Some(changes)
+    }
+
     /// Public geometry and coordinate input share this policy decision.
     /// Explicitly sampled geometry continues to use the snapshot-only APIs.
     pub(crate) fn ensure_observable_layout(&self) -> Result<(), LayoutError> {
         match self.layout_policy {
-            moli_page_types::LayoutPolicy::Mock | moli_page_types::LayoutPolicy::OnDemand => {
+            moli_page_types::LayoutPolicy::Mock | moli_page_types::LayoutPolicy::Lazy => {
                 self.ensure_initial_layout()
             }
             moli_page_types::LayoutPolicy::Realtime => {
@@ -368,6 +518,7 @@ impl PageScriptHost {
                 .dom()
                 .document_element_handle_for_document(document),
             target: self.current_window_document_task_target_for_dispatch_scope(dispatch_scope),
+            dom_revision: self.dom_host().document_layout_version(document),
             stylesheet_sources: self
                 .style_engine
                 .source_set_generation_for_document(document),
@@ -384,7 +535,6 @@ impl PageScriptHost {
                 }),
         );
         Ok(ScreenLayoutInputs {
-            dom: self.dom_host().dom_version(),
             non_dom,
             viewport: self.layout_viewport_for_document(document),
             environment: StyloStyleEnvironment::from_emulated_media(self.emulated_media()),
@@ -406,28 +556,57 @@ impl PageScriptHost {
             .expect("Realtime policy installs its document state");
         let inputs = self.screen_layout_inputs(state)?;
         let document = self.document_handle();
-        if self.can_reuse_screen_layout(state, &inputs)
+        let resolve_style_changes = self.has_screen_style_invalidations(&inputs);
+        if resolve_style_changes {
+            self.prepare_current_screen_styles(&inputs);
+        }
+        let inline_style_update = resolve_style_changes
+            && self.published_layout_matches_inline_style_update(state, &inputs);
+        if (self.screen_layout_matches_inputs(state, &inputs) || inline_style_update)
+            && (!resolve_style_changes || self.screen_styles_allow_layout_reuse(&inputs))
             && (inputs.documents[0].root.is_none()
                 || !state.scroll_projection_dirty.get()
                 || self.refresh_published_scroll_projection()?
                     != ScrollProjectionRefresh::Unavailable)
         {
+            if resolve_style_changes {
+                self.document_layout_state
+                    .borrow_mut()
+                    .clear_inline_svg_content();
+                for document in &inputs.documents {
+                    self.style_engine
+                        .consume_screen_style_work(document.document);
+                }
+            }
+            if inline_style_update {
+                *state.published.borrow_mut() = Some(inputs);
+                self.dom_host().track_layout_changes(Some(document));
+            }
             state.scroll_projection_dirty.set(false);
             return Ok(());
         }
 
         // Native invalidation/geometry only: no input dispatch, callbacks,
         // network admission, or nested event-loop checkpoint at this boundary.
-        self.prepare_current_screen_styles(&inputs);
-        let paint_generation = self.screen_paint_generation(state);
+        if !resolve_style_changes {
+            self.prepare_current_screen_styles(&inputs);
+        }
+        let source_dom_version = self.dom_host().dom_version();
+        let retain_paint = state.has_screen_paint_consumers();
         let request = LayoutPassRequest::new(inputs.viewport, reason)
             .with_frame_coverage(moli_layout::LayoutFrameCoverage::AllLayoutBoxes)
             .with_scroll_projection(true)
-            .with_screen_paint(paint_generation.is_some());
-        let Some((pass, feedback)) =
-            self.build_layout_pass_for_document_in_environment(document, request, None)?
+            .with_screen_paint(retain_paint);
+        let Some((pass, feedback)) = self.build_layout_pass_for_document_in_environment(
+            document,
+            request,
+            None,
+            crate::layout_renderer::LayoutInputRetention::Realtime,
+        )?
         else {
-            if self.screen_layout_inputs(state)? != inputs {
+            if self.dom_host().dom_version() != source_dom_version
+                || self.screen_layout_inputs(state)? != inputs
+            {
                 return Err(LayoutError::source_contract(
                     "screen layout",
                     "source inputs or Document owners changed during layout",
@@ -439,14 +618,15 @@ impl PageScriptHost {
                 .borrow_mut()
                 .clear_latest_layout();
             state.clear_publication();
-            self.did_publish_screen_layout(state, inputs);
+            self.did_publish_screen_layout(state, inputs, HashMap::new());
             return Ok(());
         };
         self.finish_layout_publication(
             PreparedLayoutPublication(LayoutPublication::CurrentScreen {
                 document,
                 inputs,
-                paint_generation,
+                source_dom_version,
+                retain_paint,
             }),
             pass,
             feedback,
@@ -463,17 +643,42 @@ impl PageScriptHost {
         let Some(state) = &self.realtime_layout_state else {
             return false;
         };
-        if !state.published.borrow().as_ref().is_some_and(|published| {
-            published.dom == self.dom_host().dom_version()
-                && Some(published.non_dom) == state.non_dom_revision.get()
-        }) {
+        if !state
+            .published
+            .borrow()
+            .as_ref()
+            .is_some_and(|published| Some(published.non_dom) == state.non_dom_revision.get())
+        {
             return false;
         }
-        self.screen_layout_inputs(state)
-            .is_ok_and(|inputs| self.can_reuse_screen_layout(state, &inputs))
+        self.screen_layout_inputs(state).is_ok_and(|inputs| {
+            self.screen_layout_matches_inputs(state, &inputs)
+                && !self.has_screen_style_invalidations(&inputs)
+        })
     }
 
-    fn can_reuse_screen_layout(
+    #[cfg(test)]
+    pub(crate) fn observed_screen_style_damage_for_test(&self) -> ServoRestyleDamage {
+        self.style_engine
+            .observed_screen_damage_for_test(self.document_handle())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn screen_style_damage_for_node_for_test(
+        &self,
+        handle: DomHandle,
+    ) -> Option<ServoRestyleDamage> {
+        self.style_engine
+            .screen_style_damage_for_node_for_test(self.document_handle(), handle)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn element_style_resolutions_for_test(&self) -> u64 {
+        self.style_engine
+            .element_style_resolution_count_for_document_for_test(self.document_handle())
+    }
+
+    fn screen_layout_matches_inputs(
         &self,
         state: &RealtimeLayoutState,
         inputs: &ScreenLayoutInputs,
@@ -486,6 +691,106 @@ impl PageScriptHost {
                     .borrow()
                     .latest_layout(self.document_handle())
                     .is_some())
+    }
+
+    fn published_layout_matches_inline_style_update(
+        &self,
+        state: &RealtimeLayoutState,
+        inputs: &ScreenLayoutInputs,
+    ) -> bool {
+        let document = self.document_handle();
+        if inputs.documents.len() != 1
+            || !inputs.permits_reuse()
+            || !self
+                .dom_host()
+                .tracked_layout_changes_are_inline_style_only(document)
+            || !self.document_layout_state.borrow().has_reusable_layout()
+        {
+            return false;
+        }
+        let published = state.published.borrow();
+        let Some(published) = published
+            .as_ref()
+            .filter(|previous| previous.documents.len() == 1)
+        else {
+            return false;
+        };
+        let previous_document = &published.documents[0];
+        let current = &inputs.documents[0];
+        published.viewport == inputs.viewport
+            && published.environment == inputs.environment
+            && published.scrollbars_hidden == inputs.scrollbars_hidden
+            && previous_document.document == current.document
+            && previous_document.target == current.target
+            && previous_document.root == current.root
+            && previous_document.stylesheet_sources == current.stylesheet_sources
+    }
+
+    fn has_screen_style_invalidations(&self, inputs: &ScreenLayoutInputs) -> bool {
+        inputs.documents.iter().any(|document| {
+            self.style_engine
+                .has_screen_style_invalidation(document.document)
+        })
+    }
+
+    fn screen_styles_allow_layout_reuse(&self, inputs: &ScreenLayoutInputs) -> bool {
+        let supported_damage = if inputs.documents.len() == 1
+            && self.document_layout_state.borrow().has_reusable_layout()
+        {
+            ServoRestyleDamage::RECALCULATE_OVERFLOW
+        } else {
+            ServoRestyleDamage::empty()
+        };
+        if !inputs.documents.iter().all(|document| {
+            let Some(restyles) = self.style_engine.screen_restyle_targets(
+                self.dom_host(),
+                document.document,
+                supported_damage,
+            ) else {
+                return false;
+            };
+            restyles.targets.is_empty()
+                || screen_targets_allow_layout_reuse(
+                    self,
+                    document.document,
+                    restyles.targets,
+                    restyles.after,
+                    supported_damage,
+                )
+        }) {
+            return false;
+        }
+        if supported_damage.is_empty() {
+            return true;
+        }
+
+        let document = self.document_handle();
+        let Some(updates) = self
+            .style_engine
+            .screen_projection_style_updates(document, supported_damage)
+        else {
+            return false;
+        };
+        if updates.styles.is_empty() {
+            return true;
+        }
+        if ServoRestyleDamage::REPAINT.contains(updates.damage) {
+            return self
+                .document_layout_state
+                .borrow_mut()
+                .update_repaint_styles(updates.styles);
+        }
+
+        let reprojected = self
+            .document_layout_state
+            .borrow_mut()
+            .update_screen_style_projection(document, updates.styles, |source| {
+                crate::layout_renderer::native_scroll_offset(self.dom_host(), source)
+            });
+        if reprojected {
+            self.clear_layout_rect_cache();
+        }
+        reprojected
     }
 
     fn prepare_current_screen_styles(&self, inputs: &ScreenLayoutInputs) {

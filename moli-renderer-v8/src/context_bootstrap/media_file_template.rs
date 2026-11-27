@@ -24,6 +24,7 @@ use super::canvas::{
     canvas_context_set_transform_callback, canvas_context_stroke_callback,
     canvas_context_stroke_rect_callback, canvas_context_stroke_style_getter_callback,
     canvas_context_stroke_style_setter_callback, canvas_context_stroke_text_callback,
+    canvas_context_text_baseline_getter_callback, canvas_context_text_baseline_setter_callback,
     canvas_context_transform_callback, canvas_context_translate_callback, canvas_path_arc_callback,
     canvas_path_arc_to_callback, canvas_path_bezier_curve_to_callback,
     canvas_path_close_path_callback, canvas_path_ellipse_callback, canvas_path_line_to_callback,
@@ -108,6 +109,13 @@ struct CanvasRenderingContext2dTemplateDeclaration {
         setter = canvas_context_font_setter_callback
     )]
     font: (),
+
+    #[webapi(
+        accessor_property = "textBaseline",
+        getter = canvas_context_text_baseline_getter_callback,
+        setter = canvas_context_text_baseline_setter_callback
+    )]
+    text_baseline: (),
 
     #[webapi(
         accessor_property = "imageSmoothingEnabled",

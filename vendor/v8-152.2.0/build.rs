@@ -69,7 +69,13 @@ fn main() {
     "GN_ARGS",
     "HOST",
     "LIBCLANG_PATH",
+    "MOLIO_IOS_V8_CXX",
+    "MOLIO_IOS_V8_DEFINES",
+    "MOLIO_IOS_V8_SOURCE",
+    "MOLI_OHOS_V8_CXX",
+    "MOLI_OHOS_V8_SOURCE",
     "NINJA",
+    "OHOS_SDK_NATIVE",
     "OUT_DIR",
     "RUSTY_V8_ARCHIVE",
     "RUSTY_V8_ARCHIVE_SHA256",
@@ -105,6 +111,10 @@ fn main() {
   if is_cargo_doc {
     print_prebuilt_src_binding_path();
     return;
+  }
+
+  if env::var("TARGET").as_deref() == Ok("aarch64-apple-ios") {
+    require_ios_device_artifacts();
   }
 
   print_link_flags();
@@ -157,6 +167,38 @@ fn main() {
 
   download_static_lib_binaries();
   build_moli_v8_ext(&moli_v8_ext_sources);
+}
+
+fn require_ios_device_artifacts() {
+  assert!(
+    env::var_os("CARGO_FEATURE_V8_ENABLE_POINTER_COMPRESSION").is_some(),
+    "iPhoneOS requires the v8_enable_pointer_compression Cargo feature"
+  );
+  assert!(
+    !env_bool("V8_FROM_SOURCE") && !env_bool("RUSTY_V8_SKIP_DOWNLOAD"),
+    "Build the pinned iPhoneOS V8 with client/molio-ios/build-v8.sh first"
+  );
+  for feature in ["V8_ENABLE_SANDBOX", "V8_ENABLE_V8_CHECKS"] {
+    assert!(
+      env::var_os(format!("CARGO_FEATURE_{feature}")).is_none(),
+      "iPhoneOS V8 artifacts require {feature} disabled"
+    );
+  }
+  let required_file = |key: &str| {
+    let path = PathBuf::from(env::var_os(key).unwrap_or_else(|| {
+      panic!("{key} must point to a self-built iPhoneOS V8 artifact")
+    }));
+    assert!(
+      path.is_absolute() && path.is_file(),
+      "{key}: invalid file {path:?}"
+    );
+    println!("cargo:rerun-if-changed={}", path.display());
+    path
+  };
+  let archive = required_file("RUSTY_V8_ARCHIVE");
+  required_file("RUSTY_V8_SRC_BINDING_PATH");
+  let sha = pinned_archive_sha256().expect("iPhoneOS requires RUSTY_V8_ARCHIVE_SHA256");
+  verify_pinned_source(&archive, Some(&sha)).expect("iPhoneOS archive SHA-256 verification failed");
 }
 
 fn moli_v8_ext_sources() -> Vec<PathBuf> {
@@ -406,6 +448,9 @@ fn build_moli_v8_ext(sources: &[PathBuf]) {
     .include("v8/include")
     .std("c++20")
     .flag_if_supported("-w");
+  if env::var("CARGO_CFG_TARGET_ENV").as_deref() == Ok("ohos") {
+    configure_ohos_moli_v8_ext(&mut build);
+  }
   if env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") {
     // V8's Windows build and public headers require Clang intrinsics such as
     // `__builtin_frame_address`. clang-cl preserves the MSVC ABI used by the
@@ -427,6 +472,43 @@ fn build_moli_v8_ext(sources: &[PathBuf]) {
   if env::var("CARGO_FEATURE_V8_ENABLE_V8_CHECKS").is_ok() {
     build.define("V8_ENABLE_CHECKS", None);
   }
+  if env::var("TARGET").as_deref() == Ok("aarch64-apple-ios") {
+    // The GN archive uses Chromium's libc++ ABI. Compile our extension TUs
+    // with the same headers and defines, including APIs that return STL types.
+    let source = PathBuf::from(
+      env::var_os("MOLIO_IOS_V8_SOURCE").expect("missing matching V8 source checkout"),
+    );
+    let defines = PathBuf::from(
+      env::var_os("MOLIO_IOS_V8_DEFINES").expect("missing V8 target defines"),
+    );
+    println!("cargo:rerun-if-changed={}", defines.display());
+    build
+      .compiler(env::var_os("MOLIO_IOS_V8_CXX").expect("missing V8 C++ toolchain"))
+      .std("c++23")
+      .flag("-nostdinc++");
+    for include in [
+      "buildtools/third_party/libc++",
+      "third_party/libc++/src/include",
+      "third_party/libc++abi/src/include",
+    ] {
+      let path = source.join(include);
+      assert!(path.is_dir(), "missing V8 C++ headers: {}", path.display());
+      build.flag("-isystem").flag(path.as_os_str());
+    }
+    let defines = fs::read_to_string(defines).expect("read V8 target defines");
+    for line in defines.lines() {
+      match line {
+        "V8_COMPRESS_POINTERS" | "V8_COMPRESS_POINTERS_IN_SHARED_CAGE"
+        | "V8_31BIT_SMIS_ON_64BIT_ARCH" => {}
+        _ => {
+          let (name, value) = line
+            .split_once('=')
+            .map_or((line, None), |(name, value)| (name, Some(value)));
+          build.define(name, value);
+        }
+      }
+    }
+  }
   let compiler = build.get_compiler();
   if compiler.is_like_msvc() && !compiler.is_like_clang_cl() {
     build.flag("/Zc:__cplusplus");
@@ -435,6 +517,43 @@ fn build_moli_v8_ext(sources: &[PathBuf]) {
     build.file(source);
   }
   build.compile("rusty_v8_moli_ext");
+}
+
+fn configure_ohos_moli_v8_ext(build: &mut cc::Build) {
+  let sdk = PathBuf::from(env::var_os("OHOS_SDK_NATIVE").expect(
+    "OHOS_SDK_NATIVE must point to the native SDK (see scripts/build-ohos-arm64.sh)",
+  ));
+  let source = PathBuf::from(env::var_os("MOLI_OHOS_V8_SOURCE").expect(
+    "MOLI_OHOS_V8_SOURCE must contain the matching rusty_v8 sources (see scripts/build-ohos-arm64.sh)",
+  ));
+  let compiler = env::var_os("MOLI_OHOS_V8_CXX").unwrap_or_else(|| "clang++".into());
+  // The ARM64 musl archive includes Chromium's libc++ with its own ABI namespace.
+  build
+    .compiler(compiler)
+    .cpp_link_stdlib(None)
+    .flag("--sysroot")
+    .flag(sdk.join("sysroot"))
+    .flag("-nostdinc++")
+    .include(source.join("buildtools/third_party/libc++"))
+    .include(source.join("third_party/libc++/src/include"))
+    .include(source.join("third_party/libc++abi/src/include"))
+    .define("__MUSL__", None)
+    .define("_LIBCPP_DISABLE_VISIBILITY_ANNOTATIONS", None)
+    .define("_LIBCPP_HARDENING_MODE", Some("_LIBCPP_HARDENING_MODE_NONE"));
+
+  // Rust links with -nodefaultlibs. V8's instruction cache flush needs
+  // __clear_cache from the SDK's compiler-rt archive.
+  let target = env::var("TARGET").unwrap();
+  let output = Command::new(sdk.join("llvm/bin").join(format!("{target}-clang")))
+    .arg("-print-libgcc-file-name")
+    .output()
+    .expect("query OHOS compiler-rt path");
+  assert!(output.status.success(), "query OHOS compiler-rt path");
+  let path = String::from_utf8(output.stdout).expect("OHOS compiler-rt path");
+  let archive = Path::new(path.trim());
+  assert!(archive.is_file(), "missing OHOS compiler-rt archive: {archive:?}");
+  println!("cargo:rustc-link-search=native={}", archive.parent().unwrap().display());
+  println!("cargo:rustc-link-lib=static:+verbatim={}", archive.file_name().unwrap().display());
 }
 
 /// Builds the explicit Linux header-search arguments for bindgen.

@@ -6,14 +6,17 @@ pub(crate) fn registry_association_retargets_before_removal(
     root: DomHandle,
 ) -> Vec<RegistryAssociationRetarget> {
     let host = unsafe { &*host_ptr };
-    if !host.has_explicit_custom_element_registry_associations()
-        && !host.dom_host().has_shadow_roots()
-    {
+    let has_shadow_roots = host.dom_host().has_shadow_roots();
+    if !has_shadow_roots && !host.has_explicit_custom_element_registry_associations() {
         return Vec::new();
     }
     let mut retargets = Vec::new();
     for handle in host.dom_host().shadow_including_subtree(root) {
         if !should_record_import_clone_registry_association(host.dom_host(), handle) {
+            continue;
+        }
+        let has_explicit_registry = host.custom_element_registry_association(handle).is_some();
+        if !has_shadow_roots && !has_explicit_registry {
             continue;
         }
         let current = host.effective_custom_element_registry_association(handle);
@@ -22,8 +25,7 @@ pub(crate) fn registry_association_retargets_before_removal(
         };
         let document_default =
             host.default_custom_element_registry_association_for_document(owner_document);
-        if current != document_default || host.custom_element_registry_association(handle).is_some()
-        {
+        if current != document_default || has_explicit_registry {
             retargets.push(RegistryAssociationRetarget {
                 handle,
                 association: current,
@@ -61,26 +63,15 @@ pub(crate) fn apply_parser_created_null_registry_associations(
             );
         }
     }
-    let declarative_default_roots = host
+    for root in host
         .dom_host()
-        .snapshot_shadow_root_bindings()
-        .into_iter()
-        .filter(|binding| binding.declarative && !binding.init.null_custom_element_registry())
-        .filter_map(|binding| {
-            if host
-                .custom_element_registry_association(binding.root)
-                .is_some()
-            {
-                return None;
-            }
-            let owner_document = host.dom_host().owner_document_handle(binding.root)?;
-            Some((
-                binding.root,
-                host.effective_custom_element_registry_association(owner_document),
-            ))
-        })
-        .collect::<Vec<_>>();
-    for (root, association) in declarative_default_roots {
-        host.set_custom_element_registry_association(root, association);
+        .declarative_shadow_roots_with_document_registry()
+    {
+        if host.custom_element_registry_association(root).is_none()
+            && let Some(document) = host.dom_host().owner_document_handle(root)
+        {
+            let association = host.effective_custom_element_registry_association(document);
+            host.set_custom_element_registry_association(root, association);
+        }
     }
 }

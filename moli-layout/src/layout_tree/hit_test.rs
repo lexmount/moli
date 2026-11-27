@@ -217,7 +217,11 @@ where
             let local_to_viewport = if is_root {
                 LayoutTransform2D::IDENTITY
             } else {
-                layout_box.coordinate_space.local_to_viewport
+                let Some(transform) = self.local_to_viewport(layout_box.geometry.coordinate_space)
+                else {
+                    continue;
+                };
+                transform
             };
             let Some(viewport_to_local) = local_to_viewport.inverse() else {
                 continue;
@@ -294,15 +298,15 @@ where
         }
 
         let fragment = self.fragment(top_entry.fragment)?;
-        let space = self.coordinate_space(top_entry.coordinate_space)?;
-        let inverse = space.local_to_viewport.inverse()?;
+        let local_to_viewport = self.local_to_viewport(top_entry.coordinate_space)?;
+        let inverse = local_to_viewport.inverse()?;
         let local_point = inverse.map_point(viewport_point);
         let caret_x = if local_point.x <= fragment.rect.x + fragment.rect.width / 2.0 {
             fragment.rect.x
         } else {
             fragment.rect.right()
         };
-        let rect = space.local_to_viewport.map_rect(LayoutRect::new(
+        let rect = local_to_viewport.map_rect(LayoutRect::new(
             caret_x,
             fragment.rect.y,
             0.0,
@@ -362,8 +366,8 @@ where
         else {
             return None;
         };
-        let space = self.coordinate_space(entry.coordinate_space)?;
-        let local_point = space.local_to_viewport.inverse()?.map_point(viewport_point);
+        let local_to_viewport = self.local_to_viewport(entry.coordinate_space)?;
+        let local_point = local_to_viewport.inverse()?.map_point(viewport_point);
         let source_len = source_utf16_range
             .end
             .saturating_sub(source_utf16_range.start);
@@ -378,7 +382,7 @@ where
         Some(LayoutCaretPosition {
             source: entry.source,
             utf16_offset: Some(source_utf16_range.start + fragment_offset),
-            rect: space.local_to_viewport.map_rect(LayoutRect::new(
+            rect: local_to_viewport.map_rect(LayoutRect::new(
                 caret_x,
                 fragment.rect.y,
                 0.0,
@@ -393,8 +397,8 @@ where
         entry: &LayoutHitTestEntry<N>,
         viewport_point: LayoutPoint,
     ) -> Option<f64> {
-        let space = self.coordinate_space(entry.coordinate_space)?;
-        let local_point = space.local_to_viewport.inverse()?.map_point(viewport_point);
+        let local_to_viewport = self.local_to_viewport(entry.coordinate_space)?;
+        let local_point = local_to_viewport.inverse()?.map_point(viewport_point);
         let nearest_local = LayoutPoint::new(
             local_point
                 .x
@@ -403,7 +407,7 @@ where
                 .y
                 .clamp(entry.local_rect.y, entry.local_rect.bottom()),
         );
-        let nearest_viewport = space.local_to_viewport.map_point(nearest_local);
+        let nearest_viewport = local_to_viewport.map_point(nearest_local);
         if !self.point_passes_clip_chain(nearest_viewport, entry.clip_chain) {
             return None;
         }
@@ -475,10 +479,7 @@ where
         if !ignore_pointer_events_none && !entry.pointer_events {
             return None;
         }
-        let inverse = self
-            .coordinate_space(entry.coordinate_space)?
-            .local_to_viewport
-            .inverse()?;
+        let inverse = self.local_to_viewport(entry.coordinate_space)?.inverse()?;
         let local_point = inverse.map_point(clips.point);
         if !entry.local_rect.contains(local_point) {
             return None;
@@ -511,8 +512,8 @@ where
     N: Copy + Debug + Eq + Hash,
 {
     fn point_passes_clip(&self, viewport_point: LayoutPoint, node: &LayoutClipNode) -> bool {
-        self.coordinate_space(node.coordinate_space)
-            .and_then(|space| space.local_to_viewport.inverse())
+        self.local_to_viewport(node.coordinate_space)
+            .and_then(LayoutTransform2D::inverse)
             .is_some_and(|inverse| node.rect.contains(inverse.map_point(viewport_point)))
     }
 
@@ -610,7 +611,6 @@ mod tests {
             LayoutPoint::ZERO,
             LayoutSize::new(100.0, 100.0),
             LayoutOutputBoxId::from_index(0),
-            Vec::new(),
             Vec::new(),
             Vec::new(),
             Vec::new(),

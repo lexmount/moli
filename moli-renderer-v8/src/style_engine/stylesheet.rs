@@ -5,7 +5,6 @@ use std::{
 };
 
 use euclid::{Scale, Size2D};
-use moli_selector::StyloSourceDependencySummary;
 use style::{
     context::QuirksMode,
     device::{Device, servo::FontMetricsProvider},
@@ -20,7 +19,7 @@ use style::{
         AllowImportRules, CssRule, CustomMediaMap, DocumentStyleSheet, Origin, Stylesheet,
         StylesheetInDocument, UrlExtraData, scope_rule::ImplicitScopeRoot,
     },
-    stylist::{CascadeData, Stylist},
+    stylist::Stylist,
     values::{
         computed::{
             CSSPixelLength, Length,
@@ -37,25 +36,13 @@ use super::{
     StyleViewport, StyloStyleEnvironment,
     active_stylesheets::{ActiveStylesheet, ActiveStylesheetCollection, ActiveWebFontResource},
     media_list::parse_media_query_list_with_context,
-    source::store::{StyleSourceMetadata, StyloStylesheetSource},
+    source::store::StyloStylesheetSource,
     source_id::{StyleSourceId, StyleSourceKind},
-    ua::HTML_STYLESHEET as MOLI_UA_STYLESHEET,
     world_key::{DEFAULT_VIEWPORT_HEIGHT, DEFAULT_VIEWPORT_WIDTH},
 };
 
 static MOLI_UA_STYLESHEET_BASE_URL: LazyLock<url::Url> =
     LazyLock::new(|| url::Url::parse("about:blank").expect("valid built-in stylesheet base URL"));
-
-static MOLI_UA_SOURCE_METADATA: LazyLock<StyleSourceMetadata> = LazyLock::new(|| {
-    style_source_metadata_for_css_text_with_origin(
-        MOLI_UA_STYLESHEET,
-        moli_ua_stylesheet_base_url(),
-        Origin::UserAgent,
-    )
-});
-
-static MOLI_UA_SOURCE_DEPENDENCY_SUMMARY: LazyLock<StdArc<StyloSourceDependencySummary>> =
-    LazyLock::new(|| StdArc::new(MOLI_UA_SOURCE_METADATA.dependency_summary.clone()));
 
 #[cfg(test)]
 thread_local! {
@@ -135,47 +122,13 @@ pub(super) fn install_active_stylesheet(
     )
 }
 
-pub(super) fn style_source_metadata_for_css_text(
-    css_text: &str,
-    base_url: &url::Url,
-) -> (StyleSourceMetadata, Vec<url::Url>) {
+pub(super) fn stylesheet_import_urls(css_text: &str, base_url: &url::Url) -> Vec<url::Url> {
     let stylesheet = moli_css_parse::parse_detached_author_stylesheet_with_stylo(
         css_text,
         base_url,
         QuirksMode::NoQuirks,
     );
-    let imports = moli_css_parse::stylesheet_imports_from_native_with_stylo(&stylesheet);
-    (
-        style_source_metadata_for_stylesheet(&stylesheet),
-        imports.urls,
-    )
-}
-
-pub(in crate::style_engine) fn style_source_metadata_for_stylesheet(
-    stylesheet: &ServoArc<Stylesheet>,
-) -> StyleSourceMetadata {
-    let guard = stylesheet.shared_lock.read();
-    let quirks_mode = stylesheet.contents.read_with(&guard).quirks_mode;
-    let stylist = new_stylist_with_viewport(
-        StyleViewport::default(),
-        StyloStyleEnvironment::default(),
-        quirks_mode,
-    );
-    let mut cascade_data = CascadeData::new();
-    let document_stylesheet = DocumentStyleSheet::new(stylesheet.clone());
-    if cascade_data
-        .add_stylesheet_for_moli_source_metadata(
-            stylist.device(),
-            quirks_mode,
-            &document_stylesheet,
-            0,
-            &guard,
-        )
-        .is_err()
-    {
-        return StyleSourceMetadata::default();
-    }
-    style_source_metadata_from_cascade_data(&cascade_data)
+    moli_css_parse::stylesheet_imports_from_native_with_stylo(&stylesheet).urls
 }
 
 #[derive(Clone, Debug)]
@@ -338,33 +291,6 @@ fn native_font_sources(
                 .then(|| moli_css_parse::CssFontSource::Url(url.to_string()))
         })
         .collect()
-}
-
-pub(super) fn moli_user_agent_source_dependency_summary() -> StdArc<StyloSourceDependencySummary> {
-    StdArc::clone(&MOLI_UA_SOURCE_DEPENDENCY_SUMMARY)
-}
-
-fn style_source_metadata_for_css_text_with_origin(
-    css_text: &str,
-    base_url: &url::Url,
-    origin: Origin,
-) -> StyleSourceMetadata {
-    let shared_lock = SharedRwLock::new();
-    let stylesheet = ServoArc::new(parse_stylesheet(
-        &shared_lock,
-        base_url,
-        css_text,
-        origin,
-        QuirksMode::NoQuirks,
-        "",
-    ));
-    style_source_metadata_for_stylesheet(&stylesheet)
-}
-
-fn style_source_metadata_from_cascade_data(cascade_data: &CascadeData) -> StyleSourceMetadata {
-    StyleSourceMetadata {
-        dependency_summary: StyloSourceDependencySummary::from_cascade_data(cascade_data),
-    }
 }
 
 pub(super) fn new_stylist_with_viewport(

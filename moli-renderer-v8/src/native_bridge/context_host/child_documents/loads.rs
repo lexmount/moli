@@ -234,6 +234,20 @@ impl PageScriptHost {
             redirect: None,
             request: child_document_load_request(bootstrap)
                 .map(|request| {
+                    let file_from_frame_owner = target_url.scheme() == "file"
+                        && initiator == ChildDocumentNavigationInitiator::FrameOwnerElement
+                        && self
+                            .parent_document_resource_loader_for_child_context(handle)
+                            .is_some_and(|loader| {
+                                loader.request_client().has_document_file_access()
+                            });
+                    let request = if file_from_frame_owner {
+                        request.with_local_file_navigation_access(
+                            moli_fetch::LocalFileNavigationAccess::BrowserGranted,
+                        )
+                    } else {
+                        request
+                    };
                     configure_child_document_navigation_request(
                         request,
                         &initiator_url,
@@ -1577,7 +1591,9 @@ fn child_document_load_request(
         )
         .ok()
         .map(|native_request| {
-            native_request
+            request
+                .initiator
+                .authorize_file_navigation(native_request)
                 .with_request_origin(request.initiator.origin())
                 .with_initiator_url(request.initiator.url())
                 .with_subresource_request_metadata(request.initiator.request_metadata())

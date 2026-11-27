@@ -2,7 +2,10 @@ use super::ProtocolWorkflowState;
 use crate::domains::input::file_chooser::PreparedFileChooserActivation;
 use crate::{
     automation::DevToolsRemoteHandleId,
-    conn::{BackgroundProtocolEvent, CommandOwnerScope, TargetPageResidenceIdentity},
+    conn::{
+        BackgroundProtocolEvent, CommandDispatchContext, CommandOwnerScope,
+        RendererOutputDependencies, TargetPageResidenceIdentity,
+    },
 };
 use anyhow::Result;
 use moli_core::page::{
@@ -12,6 +15,27 @@ use moli_core::page::{
 };
 
 impl ProtocolWorkflowState<'_> {
+    pub fn local_file_policy(&self) -> moli_fetch::LocalFilePolicy {
+        self.connection.local_file_policy()
+    }
+
+    pub(crate) fn publish_input_step_output(
+        self,
+        mut context: CommandDispatchContext,
+        target_id: Option<String>,
+    ) -> RendererOutputDependencies {
+        let dependencies = context.take_renderer_output_dependencies();
+        context.extend_renderer_output_dependencies(dependencies.clone());
+        let events = self
+            .connection
+            .finish_protocol_output_projection(context, target_id.clone());
+        if !events.is_empty() {
+            self.connection
+                .publish_renderer_fenced_protocol_output_after(events, Vec::new(), target_id);
+        }
+        dependencies
+    }
+
     pub(crate) fn input_page_is_current(
         &self,
         owner: &CommandOwnerScope,

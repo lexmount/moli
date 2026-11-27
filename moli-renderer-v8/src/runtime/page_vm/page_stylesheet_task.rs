@@ -27,7 +27,7 @@ impl IntoPageTaskCompletion for PageStylesheetNetworkingTurnAction {
     fn into_page_task_completion(self) -> PageTaskCompletion {
         match self.target_effect {
             // A stylesheet fetch terminal is a real Networking task even
-            // though applying its CSS/state does not itself enter V8. The
+            // though publishing its CSS/state does not run page script. The
             // selected-task dispatcher therefore owns the ordinary task-end
             // checkpoint, but not callback-style runtime reconciliation. A
             // later link/style load or error event remains a separate task.
@@ -50,6 +50,7 @@ impl PageVm {
         action: PageConnectedStyleEventTurnAction,
         loader: &crate::network::ResourceRequestClient,
     ) -> anyhow::Result<()> {
+        let event_owner = action.owner;
         let targeted_current_owner = !matches!(
             action.target_effect,
             PageConnectedStyleEventTargetEffect::DiscardedStaleOwner
@@ -62,7 +63,23 @@ impl PageVm {
             // connected-style task boundary by admitting that follow-up only
             // after the callback checkpoint and runtime reconciliation.
             self.vm_mut()
-                .prime_document_lifecycle_processing_and_record_stylesheet_network_results();
+                .prime_document_lifecycle_and_publish_stylesheets();
+            // A parser started by document.open()/setDocumentContent after
+            // phase one has no main-parser continuation producer. Its script
+            // gate can now become ready only after the link event finishes.
+            // Recheck the exact Document after callbacks and their checkpoint.
+            if self.vm().stylesheet_task_owner_is_current(
+                self.document_lifecycle.identity().document,
+                event_owner,
+            ) && self
+                .vm()
+                .document_runtime
+                .main_parser_continuation_producer()
+                .is_none()
+            {
+                self.run_ready_document_write_stylesheet_blocked_script()
+                    .await?;
+            }
         }
         Ok(())
     }

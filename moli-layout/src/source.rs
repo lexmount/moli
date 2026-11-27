@@ -268,6 +268,12 @@ pub enum LayoutReplacedKind {
     FormControl,
 }
 
+impl LayoutReplacedKind {
+    pub(crate) const fn is_live_paint_image(self) -> bool {
+        matches!(self, Self::Image | Self::Canvas | Self::Media)
+    }
+}
+
 /// Typed HTML inputs consumed by table construction and sizing.
 ///
 /// Values are normalized by the renderer adapter so the layout crate never
@@ -511,15 +517,37 @@ pub struct LayoutImageResource {
     pub svg: Option<Arc<moli_image::SvgImage>>,
 }
 
-/// Pass-local resources aligned with the computed CSS image-layer lists.
-///
-/// The vectors preserve Stylo's layer indices. Missing entries represent a
-/// pending, failed, or unsupported resource and never retain a callback into
-/// the renderer's live resource owner.
+/// The state of a CSS image sampled for one paint projection.
 #[derive(Clone, Debug, Default, PartialEq)]
-pub(crate) struct LayoutCssImageResources {
-    pub(crate) background: Vec<Option<LayoutImageResource>>,
-    pub(crate) mask: Vec<Option<LayoutImageResource>>,
+pub enum LayoutCssImageState {
+    #[default]
+    Unrequested,
+    Pending,
+    Ready(LayoutImageResource),
+    Failed,
+}
+
+impl LayoutCssImageState {
+    pub(crate) fn ready(&self) -> Option<&LayoutImageResource> {
+        match self {
+            Self::Ready(resource) => Some(resource),
+            _ => None,
+        }
+    }
+}
+
+pub(crate) type CssImageLookup<'a> = dyn Fn(&str) -> LayoutCssImageState + 'a;
+pub(crate) type LiveReplacedImageLookup<'a, N> =
+    dyn Fn(N, LayoutReplacedKind) -> Option<LayoutImageResource> + 'a;
+
+pub(crate) fn css_image_url(image: &style::values::computed::Image) -> Option<&str> {
+    let style::values::generics::image::GenericImage::Url(url) = image else {
+        return None;
+    };
+    let url = url.url()?;
+    // SVG URL fragments need a distinct view/element projection.
+    (matches!(url.scheme(), "http" | "https" | "data" | "blob") && url.fragment().is_none())
+        .then(|| url.as_str())
 }
 
 /// A document or form-control selection sampled in UTF-16 units.
@@ -615,29 +643,16 @@ pub trait LayoutSource {
         None
     }
 
-    /// Samples immutable replaced content into the current pass.
+    /// Samples immutable replaced content already available to the source.
     ///
-    /// The resolved root style is supplied because atomic document resources
-    /// such as inline SVG inherit paint inputs (`currentColor`, `font-size`)
-    /// from their outer CSS box. Implementations must not retain the style or
-    /// call back into live DOM/style state after returning.
+    /// Inline SVG scenes come from the paint consumer. Implementations must
+    /// not retain the supplied style or call into live DOM/style state after
+    /// returning.
     fn replaced_image(
         &self,
         _node: Self::NodeId,
         _style: &ResolvedLayoutStyle,
     ) -> Option<LayoutImageResource> {
-        None
-    }
-
-    /// Resolves inline SVG after its CSS viewport has completed numeric layout.
-    /// Object quads use unzoomed CSS pixels relative to the SVG content origin.
-    /// The returned geometry and optional paint resource belong to this pass.
-    fn svg_content(
-        &self,
-        _node: Self::NodeId,
-        _style: &ResolvedLayoutStyle,
-        _viewport: crate::LayoutSize,
-    ) -> Option<LayoutSvgContent<Self::NodeId>> {
         None
     }
 
@@ -649,13 +664,67 @@ pub trait LayoutSource {
     fn css_image_resource(&self, _resolved_url: &str) -> Option<LayoutImageResource> {
         None
     }
+
+    /// Samples the current paint input, including a request still in flight.
+    fn css_image_state(&self, resolved_url: &str) -> LayoutCssImageState {
+        self.css_image_resource(resolved_url)
+            .map_or(LayoutCssImageState::Unrequested, LayoutCssImageState::Ready)
+    }
 }
 
-/// Geometry and paint sampled from the same inline SVG input.
-pub struct LayoutSvgContent<N> {
-    pub image: Option<LayoutImageResource>,
-    pub objects: Vec<(N, crate::LayoutQuad)>,
+/// The original XML, element identities, and sampled styles of one SVG.
+pub struct InlineSvgInput<N> {
+    pub xml: String,
+    pub elements: Vec<N>,
+    pub styles: Vec<Option<moli_image::SvgElementStyle>>,
+    pub style_bytes: usize,
 }
+
+impl<N> InlineSvgInput<N> {
+    pub(crate) fn estimated_bytes(&self) -> usize {
+        self.xml
+            .capacity()
+            .saturating_add(
+                self.elements
+                    .capacity()
+                    .saturating_mul(std::mem::size_of::<N>()),
+            )
+            .saturating_add(
+                self.styles
+                    .capacity()
+                    .saturating_mul(std::mem::size_of::<Option<moli_image::SvgElementStyle>>()),
+            )
+            .saturating_add(self.style_bytes)
+    }
+}
+
+pub type InlineSvgInputLookup<'a, N> =
+    dyn Fn(N, &ResolvedLayoutStyle, crate::LayoutSize) -> Option<InlineSvgInput<N>> + 'a;
+
+pub struct InlineSvgConsumers<'a, N> {
+    pub freeze: Option<&'a InlineSvgInputLookup<'a, N>>,
+    pub paint: Option<&'a InlineSvgImageLookup<'a, N>>,
+}
+
+impl<N> Default for InlineSvgConsumers<'_, N> {
+    fn default() -> Self {
+        Self {
+            freeze: None,
+            paint: None,
+        }
+    }
+}
+
+/// Paint supplies inline SVG images only when it reaches their drawable boxes.
+pub type InlineSvgImageLookup<'a, N> = dyn Fn(
+        N,
+        crate::LayoutViewport,
+        N,
+        &ResolvedLayoutStyle,
+        crate::LayoutSize,
+        Option<&InlineSvgInput<N>>,
+    ) -> Option<LayoutImageResource>
+    + 'a;
 
 /// One element's primary style and the pseudo styles eagerly cascaded with it.
 ///
@@ -724,9 +793,24 @@ where
         node: N,
     ) -> Result<Option<ResolvedLayoutElementStyles>, LayoutError>;
 
+    /// Whether the published primary style is still current and the element
+    /// generates the same principal box without eager pseudo children.
+    fn can_reuse_element_style(&mut self, _node: N, _previous: &ResolvedLayoutStyle) -> bool {
+        false
+    }
+
     /// Returns the style for a marker that generates a box on this list item.
     fn marker_style(&mut self, _node: N) -> Result<Option<ResolvedLayoutPseudoStyle>, LayoutError> {
         Ok(None)
+    }
+
+    /// Whether a retained marker still has the resolved style for this pass.
+    fn can_reuse_marker_style(
+        &self,
+        _previous: &ResolvedLayoutStyle,
+        _current: &ResolvedLayoutStyle,
+    ) -> bool {
+        false
     }
 
     fn placeholder_style(

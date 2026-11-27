@@ -1,6 +1,52 @@
 use super::*;
 
 #[test]
+fn style_attribute_value_is_shared_by_dom_readers() {
+    let mut vm = new_storage_html_test_vm("https://style-attribute-readers.test/");
+    assert_eq!(
+        vm.eval(r#"
+(() => {
+  const el = document.createElement('div');
+  const sheet = document.createElement('style');
+  sheet.textContent = 'div[style*="height: 20px"] { color: rgb(0, 128, 0); }';
+  document.head.append(sheet);
+  document.body.append(el);
+  if (el.hasAttribute('style') || el.matches('[style]')) throw new Error('missing style');
+  const raw = 'width: 10px; /* preserve this */';
+  el.setAttribute('style', raw);
+  if (el.style.width !== '10px' || el.getAttribute('style') !== raw) throw new Error('raw style');
+  const attr = el.getAttributeNode('style');
+  el.style.height = '20px';
+  const expected = 'width: 10px; height: 20px;';
+  const values = [el.getAttribute('STYLE'), el.getAttributeNS(null, 'style'), attr.value,
+    el.attributes.getNamedItemNS(null, 'style').value,
+    el.cloneNode().getAttribute('style'), document.importNode(el).getAttribute('style')];
+  if (values.some(value => value !== expected)) throw new Error(JSON.stringify(values));
+  if (!el.matches('[style$="height: 20px;"]') || document.querySelector('[style]') !== el ||
+      getComputedStyle(el).color !== 'rgb(0, 128, 0)') throw new Error('style selectors');
+  for (const text of [el.outerHTML, new XMLSerializer().serializeToString(el)]) {
+    if (!text.includes(`style="${expected}"`)) throw new Error(text);
+  }
+  el.style.cssText = '';
+  if (!el.hasAttributeNS(null, 'style') || el.getAttribute('style') !== '' || !el.matches('[style=""]')) {
+    throw new Error('empty style');
+  }
+  const xhtml = new DOMParser().parseFromString(
+    '<div xmlns="http://www.w3.org/1999/xhtml" STYLE="case-sensitive"/>', 'application/xml'
+  ).documentElement;
+  if (xhtml.hasAttribute('style') || xhtml.getAttribute('STYLE') !== 'case-sensitive' ||
+      xhtml.getAttributeNode('STYLE').value !== 'case-sensitive') {
+    throw new Error('attribute names in XHTML must retain their case');
+  }
+  return 'ok';
+})()
+"#)
+        .expect("DOM readers should observe the current inline style"),
+        "ok"
+    );
+}
+
+#[test]
 fn attr_attribute_mutations_refresh_computed_values() {
     let mut vm = new_storage_html_test_vm("https://attr-invalidation.test/page.html");
     let result = vm
@@ -150,4 +196,32 @@ fn dir_mutation_refreshes_auto_ancestor_and_attr_dependent_pseudo() {
         )
         .expect("dir mutation should update both style dependencies");
     assert_eq!(result, r#"rtl:"unset"|ltr:"ltr"|rtl:"unset""#);
+}
+#[test]
+fn cssom_style_attribute_updates_value_selectors_after_retained_resolution() {
+    let mut vm = new_parsed_test_vm(
+        "https://cssom-style-attribute-selector.test/",
+        r#"<!doctype html>
+        <style>
+          #probe { color: red; }
+          #parent:has(#box[style*="blue"]) > #probe { color: green; }
+        </style>
+        <div id="parent"><div id="box"></div><span id="probe">text</span></div>"#,
+    );
+    assert_eq!(
+        vm.eval(
+            r#"
+            const box = document.getElementById('box');
+            const probe = document.getElementById('probe');
+            const colors = [getComputedStyle(probe).color];
+            box.style.color = 'blue';
+            colors.push(getComputedStyle(probe).color);
+            box.style.color = 'red';
+            colors.push(getComputedStyle(probe).color);
+            colors.join('/')
+        "#
+        )
+        .unwrap(),
+        "rgb(255, 0, 0)/rgb(0, 128, 0)/rgb(255, 0, 0)",
+    );
 }

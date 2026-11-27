@@ -12,6 +12,7 @@ use crate::{
 
 pub(super) struct ProjectedFilters {
     pub(super) effects: Vec<PaintFilter>,
+    pub(super) has_identity_effect: bool,
     pub(super) skipped_url: bool,
     pub(super) has_backdrop_filter: bool,
 }
@@ -20,11 +21,13 @@ pub(super) fn project_filters(style: &ResolvedLayoutStyle) -> ProjectedFilters {
     let Some(computed) = style.stylo_computed_values() else {
         return ProjectedFilters {
             effects: Vec::new(),
+            has_identity_effect: false,
             skipped_url: false,
             has_backdrop_filter: false,
         };
     };
     let current_color = computed.clone_color();
+    let mut has_identity_effect = false;
     let mut skipped_url = false;
     let effects = computed
         .get_effects()
@@ -53,11 +56,31 @@ pub(super) fn project_filters(style: &ResolvedLayoutStyle) -> ProjectedFilters {
                 }
             })
         })
+        .filter(|effect| {
+            let identity = is_identity_color_filter(*effect);
+            has_identity_effect |= identity;
+            !identity
+        })
         .collect();
     ProjectedFilters {
         effects,
+        has_identity_effect,
         skipped_url,
         has_backdrop_filter: !computed.get_effects().backdrop_filter.0.is_empty(),
+    }
+}
+
+fn is_identity_color_filter(filter: PaintFilter) -> bool {
+    match filter {
+        PaintFilter::Brightness(amount)
+        | PaintFilter::Contrast(amount)
+        | PaintFilter::Opacity(amount)
+        | PaintFilter::Saturate(amount) => amount == 1.0,
+        PaintFilter::Grayscale(amount)
+        | PaintFilter::HueRotate(amount)
+        | PaintFilter::Invert(amount)
+        | PaintFilter::Sepia(amount) => amount == 0.0,
+        PaintFilter::Blur(_) | PaintFilter::DropShadow { .. } => false,
     }
 }
 

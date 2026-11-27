@@ -19,18 +19,23 @@ use super::src::image_selected_request_key;
 const LAZY_IMAGE_VERTICAL_MARGIN_PX: f32 = 1_250.0;
 const LAZY_IMAGE_HORIZONTAL_MARGIN_PX: f32 = LAZY_IMAGE_VERTICAL_MARGIN_PX / 2.0;
 
+pub(super) fn is_lazy_loading_attribute(value: Option<&str>) -> bool {
+    value.is_some_and(|value| value.eq_ignore_ascii_case("lazy"))
+}
+
+pub(super) fn image_uses_lazy_loading(runtime: &PageScriptHost, node: &Node) -> bool {
+    node.as_element().is_some_and(|element| {
+        element.is_html_element("img") && is_lazy_loading_attribute(element.attribute("loading"))
+    }) && node
+        .owner_document()
+        .is_some_and(|document| runtime.document_scripting_enabled(document))
+}
+
 pub(super) fn image_load_is_deferred(runtime: &PageScriptHost, handle: DomHandle) -> bool {
     let Some(node) = runtime.dom_host().node(handle) else {
         return false;
     };
-    let Some(element) = node.as_element() else {
-        return false;
-    };
-    let is_lazy_image = element.is_html_element("img")
-        && element
-            .attribute("loading")
-            .is_some_and(|loading| loading.eq_ignore_ascii_case("lazy"));
-    if !is_lazy_image {
+    if !image_uses_lazy_loading(runtime, node) {
         return false;
     }
     if !node.is_connected() {
@@ -63,6 +68,19 @@ pub(super) fn revealed_lazy_image_handles(
         .collect()
 }
 
+pub(super) fn lazy_image_is_revealed(
+    runtime: &PageScriptHost,
+    document: DomHandle,
+    handle: DomHandle,
+) -> bool {
+    is_unadmitted_lazy_image(runtime, document, handle)
+        && runtime
+            .with_latest_layout_tree_for_document(document, |tree| {
+                image_is_near_live_viewport(runtime, document, tree, handle)
+            })
+            .unwrap_or(false)
+}
+
 fn is_unadmitted_lazy_image(
     runtime: &PageScriptHost,
     document: DomHandle,
@@ -71,13 +89,10 @@ fn is_unadmitted_lazy_image(
     runtime.dom_host().node(handle).is_some_and(|node| {
         node.is_connected()
             && runtime.dom_host().owner_document_handle(handle) == Some(document)
-            && node.as_element().is_some_and(|element| {
-                element.is_html_element("img")
-                    && element
-                        .attribute("loading")
-                        .is_some_and(|loading| loading.eq_ignore_ascii_case("lazy"))
-                    && !element.image_load_dispatched()
-            })
+            && image_uses_lazy_loading(runtime, node)
+            && node
+                .as_element()
+                .is_some_and(|element| !element.image_load_dispatched())
             && runtime.pending_image_load_event(handle).is_none()
     })
 }

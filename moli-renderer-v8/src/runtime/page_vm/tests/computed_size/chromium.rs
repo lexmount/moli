@@ -108,6 +108,86 @@ overflow:auto;direction:{direction};display:{display}}}
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn chromium_empty_placeholder_does_not_expand_viewport_overflow() {
+    run_page_vm_async_test(async move {
+        for (height, width) in [(0, 305), (1, 380)] {
+            let mut page = page_with_size_fixture(&format!(
+                r#"<main style="padding-inline:60px;min-height:400px">
+<div id=placeholder style="width:100vw;height:{height}px"></div>
+</main>"#,
+            ))?;
+            publish_size_layout(&mut page)?;
+            assert_eq!(
+                read_without_layout(
+                    &mut page,
+                    "[document.documentElement.clientWidth,document.documentElement.scrollWidth,placeholder.offsetWidth,placeholder.offsetHeight]",
+                )?,
+                json!([305, width, 320, height]),
+            );
+        }
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .expect("empty viewport-wide placeholders must retain their geometry without scrolling");
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn chromium_absolute_overflow_uses_transformed_bounds() {
+    run_page_vm_async_test(async move {
+        for (transform, width) in [
+            ("none", 260),
+            ("translateX(-70px)", 200),
+            ("translateX(40px)", 300),
+            ("scaleY(0)", 200),
+        ] {
+            let mut page = page_with_size_fixture(&format!(
+                r#"<div id=scroller style="position:relative;overflow:hidden;width:200px;height:100px">
+<div style="position:absolute;left:140px;top:20px;width:120px;height:60px;transform:{transform}"></div>
+</div>"#,
+            ))?;
+            publish_size_layout(&mut page)?;
+            assert_eq!(
+                read_without_layout(&mut page, "[scroller.scrollWidth,scroller.scrollHeight]")?,
+                json!([width, 100]),
+                "{transform}",
+            );
+        }
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .expect("absolute overflow should follow the transformed geometry");
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn chromium_float_overflow_keeps_untransformed_margin_bounds() {
+    run_page_vm_async_test(async move {
+        for (extra_style, scroll_width, right) in [
+            ("margin-right:50px", 350, 300),
+            ("transform:translateX(-100px)", 300, 200),
+        ] {
+            let mut page = page_with_size_fixture(&format!(
+                r#"<div id=scroller style="overflow:hidden;width:200px;height:100px">
+<div style="height:1px"></div>
+<div id=floated style="float:left;width:300px;height:20px;{extra_style}"></div>
+</div>"#,
+            ))?;
+            publish_size_layout(&mut page)?;
+            assert_eq!(
+                read_without_layout(
+                    &mut page,
+                    "[scroller.scrollWidth,floated.getBoundingClientRect().right]",
+                )?,
+                json!([scroll_width, right]),
+                "{extra_style}",
+            );
+        }
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .expect("floats contribute their original margin bounds to the scroll range");
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn chromium_reversed_flex_flow_keeps_physical_scroll_origins() {
     run_page_vm_async_test(async move {
         // Native-scrollbar geometry recorded by the live Chromium differential.

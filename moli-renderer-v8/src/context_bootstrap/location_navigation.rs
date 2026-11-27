@@ -426,11 +426,12 @@ fn navigate_location_object_with_options<'s>(
     };
     // Entering the destination realm must not turn it into the initiator.
     // Freeze the incumbent Document before navigation events can run script.
-    let navigation_source = if matches!(kind, LocationNavigationKind::Reload) {
-        None
-    } else {
-        capture_location_navigation_source(scope, owner, &resolved)
-    };
+    let navigation_source =
+        if matches!(kind, LocationNavigationKind::Reload) && resolved.scheme() != "file" {
+            None
+        } else {
+            capture_location_navigation_source(scope, owner, &resolved)
+        };
     if resolved.scheme() == "javascript" {
         let source_context = scope
             .get_incumbent_context()
@@ -697,6 +698,14 @@ fn navigate_location_object_with_options<'s>(
         child_browsing_context_handle_for_runtime_owner(scope, owner)
     };
     if let Some(handle) = child_handle {
+        let file_source = if resolved.scheme() == "file" {
+            let Some(source) = navigation_source else {
+                return;
+            };
+            Some(source.initiator)
+        } else {
+            None
+        };
         let is_javascript_url = resolved.scheme() == "javascript";
         let host_ptr = context_host_ptr_for_navigation_owner(scope, owner);
         let replaces_initial_empty_document = !is_javascript_url
@@ -736,7 +745,11 @@ fn navigate_location_object_with_options<'s>(
         }
         if let Some(host_ptr) = host_ptr {
             let host = unsafe { &mut *host_ptr };
-            if matches!(kind, LocationNavigationKind::Reload) {
+            if let Some(initiator) = file_source {
+                host.queue_child_file_navigation_without_seed_update(
+                    scope, handle, resolved, initiator,
+                );
+            } else if matches!(kind, LocationNavigationKind::Reload) {
                 host.queue_child_browsing_context_reload_from_existing_seed(
                     scope,
                     handle,
@@ -916,6 +929,18 @@ fn capture_location_navigation_source<'s>(
     target: v8::Local<'s, v8::Object>,
     url: &url::Url,
 ) -> Option<LocationNavigationSource> {
+    if url.scheme() == "file" {
+        let context = scope
+            .get_incumbent_context()
+            .unwrap_or_else(|| scope.get_entered_or_microtask_context());
+        let host_ptr = crate::util::context_host_ptr_from_context_slot(context)?;
+        let host = unsafe { &*host_ptr };
+        let identity = host.window_execution_context_identity_for_access_check(context)?;
+        if !host.window_execution_context_identity_is_current(identity) {
+            return None;
+        }
+        return host.local_file_navigation_source(identity.dispatch_scope());
+    }
     let source_context = scope.get_incumbent_context()?;
     let source_host = crate::util::context_host_ptr_from_context_slot(source_context)?;
     let target_host = crate::util::context_host_ptr_from_window_object(scope, target)?;
@@ -950,6 +975,7 @@ fn capture_location_navigation_source<'s>(
         initiator_url,
         loader.fetch_context().request_origin(),
         policy.referrer_policy.clone(),
+        loader.request_client().has_document_file_access(),
     );
     policy.document_referrer = initiator.outgoing_referrer();
     let base_url = super::window_runtime::entered_window_api_base_url(scope, host);

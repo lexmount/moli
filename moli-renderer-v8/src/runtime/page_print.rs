@@ -32,6 +32,15 @@ impl PageVm {
         Some(StyloStyleEnvironment::from_emulated_media(&print))
     }
 
+    pub(super) fn print_layout_viewport(&self) -> PaintViewport {
+        let surface = self.document_settings.viewport_surface.unwrap_or_default();
+        PaintViewport::new(
+            surface.inner_width,
+            surface.inner_height,
+            surface.device_pixel_ratio as f32,
+        )
+    }
+
     /// Projects print media and encodes PDF without allocating a full-document
     /// bitmap or publishing interactive screen geometry. Both output clients
     /// use this lifecycle, including restoration before any encoding error.
@@ -45,12 +54,7 @@ impl PageVm {
             return Ok(Reply::LayoutDisabled);
         }
         let environment_override = self.print_style_environment_override();
-        let surface = self.document_settings.viewport_surface.unwrap_or_default();
-        let viewport = PaintViewport::new(
-            surface.inner_width,
-            surface.inner_height,
-            surface.device_pixel_ratio as f32,
-        );
+        let viewport = self.print_layout_viewport();
         let result = self.vm_mut().paint_layout_snapshot_with_capture(
             viewport,
             moli_layout::LayoutFlushReason::Print,

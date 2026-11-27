@@ -381,7 +381,7 @@ async fn child_web_fonts_share_the_resource_policy_and_preserve_document_isolati
     ));
     for policy in [
         LayoutPolicy::Mock,
-        LayoutPolicy::OnDemand,
+        LayoutPolicy::Lazy,
         LayoutPolicy::Realtime,
     ] {
         for mask in [
@@ -419,7 +419,7 @@ async fn child_web_fonts_share_the_resource_policy_and_preserve_document_isolati
             }
             assert_eq!(vm.document_web_font_counts_for_test(), (0, 0, 0));
             if policy.uses_real_layout() {
-                if policy == LayoutPolicy::OnDemand {
+                if policy == LayoutPolicy::Lazy {
                     super::child_document_web_fonts::refresh_child_geometry_without_paint(&vm);
                 }
                 let child = vm.eval("String(childTarget.offsetWidth)").unwrap();
@@ -626,4 +626,37 @@ async fn realtime_font_selection_temporary_media_and_viewport_preserve_screen_fo
         "[48,48]"
     );
     assert_eq!(vm.layout_pass_observability_for_test().1, builds + 3);
+}
+
+#[test]
+fn match_media_only_tracks_lists_with_change_listeners_in_all_layout_policies() {
+    for policy in [
+        LayoutPolicy::Mock,
+        LayoutPolicy::Lazy,
+        LayoutPolicy::Realtime,
+    ] {
+        let mut vm =
+            new_parsed_test_vm("https://realtime-media.test/", "<!doctype html><div></div>");
+        vm.set_layout_policy(policy);
+        vm.eval("for (let i = 0; i < 512; i++) { void matchMedia('(min-width: 10px)').matches; }")
+            .unwrap();
+        assert_eq!(vm._context_host.borrow().media_query_count_for_test(), 0);
+        vm.eval("globalThis.unobserved = new WeakRef(matchMedia('(min-width:10px)')); 'ready'")
+            .unwrap();
+        for _ in 0..2 {
+            vm.renderer_document_isolate_ops()
+                .collect_renderer_document_isolate_garbage()
+                .unwrap();
+        }
+        assert_eq!(
+            vm.eval("String(unobserved.deref() === undefined)").unwrap(),
+            "true",
+            "{policy:?}: read-only queries must not be rooted by a hidden registry"
+        );
+        vm.eval("globalThis.query = matchMedia('(min-width: 10px)'); query.onchange = () => {};")
+            .unwrap();
+        assert_eq!(vm._context_host.borrow().media_query_count_for_test(), 1);
+        vm.eval("query.onchange = null;").unwrap();
+        assert_eq!(vm._context_host.borrow().media_query_count_for_test(), 0);
+    }
 }

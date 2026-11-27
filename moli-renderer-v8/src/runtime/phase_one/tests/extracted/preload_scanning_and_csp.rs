@@ -1534,9 +1534,7 @@ fn parser_blocking_pending_late_preload_starts_parser_discovered_source_load() {
 
     runtime.block_on(tokio::task::LocalSet::new().run_until(async move {
         let PhaseOnePageVmHarness {
-            mut page_vm,
-            loader,
-            state,
+            mut page_vm, state, ..
         } = new_phase_one_page_vm_harness_for_test();
         activate_standalone_main_parser_continuation_for_test(&mut page_vm);
         let mut script = prepared_external_classic("https://example.test/late.js");
@@ -1553,7 +1551,6 @@ fn parser_blocking_pending_late_preload_starts_parser_discovered_source_load() {
 
         let decision = prepare_main_parser_blocking_source_load(
             &mut page_vm,
-            loader,
             &mut state.buffered_document_preloads,
             &mut script,
         );

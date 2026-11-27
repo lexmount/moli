@@ -32,8 +32,8 @@ struct InsertAdjacentElementArgs<'s> {
 struct InsertAdjacentTextArgs {
     #[webidl(required)]
     position: String,
-    #[webidl(required)]
-    data: String,
+    #[webidl(required, converter = "raw")]
+    data: webidl::DomString16,
 }
 
 #[derive(webidl::WebIdlArgs)]
@@ -177,14 +177,9 @@ pub(in crate::native_bridge) fn node_insert_adjacent_text_callback<'s>(
         throw_dom_exception(scope, "HierarchyRequestError", 3, "Hierarchy Error");
         return;
     }
-    let handle = match unsafe { &*runtime_ptr }
-        .dom_host()
-        .owner_document_handle(target)
-    {
-        Some(document_handle) => unsafe { &mut *runtime_ptr }
-            .create_text_node_for_document(document_handle, &parsed.data),
-        None => unsafe { &mut *runtime_ptr }.create_text_node(&parsed.data),
-    };
+    let runtime = unsafe { &mut *runtime_ptr };
+    let document = runtime.dom_host().owner_document_handle(target);
+    let handle = runtime.create_text_node_with_utf16(document, parsed.data.0);
     if !insert_adjacent_handle(scope, runtime_ptr, target, position, handle) {
         throw_dom_exception(scope, "HierarchyRequestError", 3, "Hierarchy Error");
         return;

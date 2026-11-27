@@ -121,7 +121,8 @@ test(function () {
   const p1 = document.getElementById("p1");
 
   assert_throws_name("SyntaxError", () => document.querySelector(""));
-  assert_throws_name("SyntaxError", () => document.querySelector("[data-state"));
+  assert_equals(document.querySelector("[data-state"), document.getElementById("article"));
+  assert_throws_name("SyntaxError", () => document.querySelector("[data-state="));
   assert_throws_name("SyntaxError", () => root.querySelectorAll(""));
   assert_throws_name("SyntaxError", () => p1.matches(""));
   assert_throws_name("SyntaxError", () => p1.closest(""));

@@ -80,15 +80,19 @@ fn standalone_bitmap_metrics_and_gradient_bindings_need_no_pixel_host() {
     with_canvas_values(|scope| {
         let bitmap = image_bitmap::build_image_bitmap_object(scope, 3, 4).unwrap();
         publish(scope, "bitmap", bitmap);
-        let metrics = text_metrics::CanvasTextMetricsDeclaration { width: 12.5 }
-            .bind(scope)
-            .unwrap();
+        let metrics = text_metrics::CanvasTextMetricsDeclaration {
+            width: 12.5,
+            actual_bounding_box_ascent: 8.0,
+            actual_bounding_box_descent: 2.0,
+        }
+        .bind(scope)
+        .unwrap();
         publish(scope, "metrics", metrics);
         let gradient = canvas_gradient::build(scope);
         publish(scope, "gradient", gradient);
         eval(
             scope,
-            "if(bitmap.width!==3 || bitmap.height!==4 || metrics.width!==12.5) throw 'value'; bitmap.close();bitmap.close();if(bitmap.width!==0 || bitmap.height!==0) throw 'close'; gradient.addColorStop(0.5,'red'); try{gradient.addColorStop(2,'red');throw 'offset accepted'}catch(e){if(e.name!=='IndexSizeError')throw e;}",
+            "if(bitmap.width!==3 || bitmap.height!==4 || metrics.width!==12.5 || metrics.actualBoundingBoxAscent!==8 || metrics.actualBoundingBoxDescent!==2) throw 'value'; bitmap.close();bitmap.close();if(bitmap.width!==0 || bitmap.height!==0) throw 'close'; gradient.addColorStop(0.5,'red'); try{gradient.addColorStop(2,'red');throw 'offset accepted'}catch(e){if(e.name!=='IndexSizeError')throw e;}",
         );
     });
 }

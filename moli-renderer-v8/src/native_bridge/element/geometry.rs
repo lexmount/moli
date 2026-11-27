@@ -50,8 +50,9 @@ pub(in crate::native_bridge) use rects::{
 pub(crate) use scroll::queue_scroll_observable_effects;
 #[cfg(feature = "devtools")]
 pub(crate) use scroll::{
-    apply_scroll_observable_effects, perform_scrollbar_scroll_default_action,
-    perform_wheel_scroll_default_action,
+    WheelScrollTarget, apply_scroll_observable_effects,
+    perform_latched_wheel_scroll_default_action, perform_scrollbar_scroll_default_action,
+    perform_wheel_scroll_default_action, select_wheel_scroll_target,
 };
 #[cfg(feature = "devtools")]
 pub(crate) use scroll_into_view::scroll_node_into_view_at_center;

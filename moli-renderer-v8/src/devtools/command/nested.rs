@@ -131,6 +131,7 @@ impl RendererDevToolsPageCommand {
             Self::DomDebuggerConfigureEventListenerBreakpoint { .. }
             | Self::DomDebuggerConfigureXhrBreakpoint { .. }
             | Self::DomDebuggerConfigureDomBreakpoint { .. }
+            | Self::ValidateSyntheticWheelAnchor { .. }
             | Self::ComputedStyleProperties { .. }
             | Self::ClientRectForBackendNodeId { .. }
             | Self::DocumentGeometryForNode { .. }
@@ -180,6 +181,7 @@ impl RendererDevToolsPageCommand {
             Self::WebMcp { .. }
             | Self::DispatchPreparedElementClick(..)
             | Self::DispatchMouseEventAtPoint { .. }
+            | Self::DispatchSyntheticWheel { .. }
             | Self::DispatchTouchEvent { .. }
             | Self::DispatchDragEventAtPoint { .. }
             | Self::CancelDragging

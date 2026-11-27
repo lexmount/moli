@@ -159,14 +159,42 @@ fn rendered_text_elements_use_chromium_user_agent_defaults() {
     let result = vm
         .eval(
             r#"
-['pre', 'hr', 'optgroup']
-  .map(id => getComputedStyle(document.getElementById(id)).display)
-  .join('|')
+(() => {
+  const style = id => getComputedStyle(document.getElementById(id));
+  const rule = style('hr');
+  return [style('pre').display, rule.display, style('optgroup').display,
+    rule.borderTopStyle, rule.borderTopWidth, rule.marginBlockStart, rule.overflow].join('|');
+})()
 "#,
         )
         .expect("rendered-text user-agent defaults should evaluate");
 
-    assert_eq!(result, "block|block|block");
+    assert_eq!(result, "block|block|block|inset|1px|8px|hidden");
+}
+
+#[test]
+fn form_group_uses_user_agent_box_and_label_defaults() {
+    let mut vm = new_parsed_test_vm(
+        "https://fieldset-user-agent-defaults.test/",
+        "<!doctype html><fieldset id=group><legend id=title>Group</legend><label id=label>Name <input></label></fieldset>",
+    );
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const group = getComputedStyle(document.getElementById('group'));
+  const title = getComputedStyle(document.getElementById('title'));
+  const label = getComputedStyle(document.getElementById('label'));
+  return [group.borderTopStyle, group.borderTopWidth, group.marginInlineStart,
+    group.paddingInlineStart, group.paddingBlockEnd, group.minInlineSize,
+    title.paddingInlineStart, label.cursor].join('|');
+})()
+"#,
+        )
+        .expect("form-group user-agent defaults should evaluate");
+
+    assert_eq!(result, "groove|2px|2px|12px|10px|min-content|2px|default");
 }
 
 #[test]
@@ -264,7 +292,8 @@ fn list_items_and_first_details_summary_use_user_agent_display_defaults() {
         .eval(
             r#"
 (() => {
-  const display = id => getComputedStyle(document.getElementById(id)).display;
+  const style = id => getComputedStyle(document.getElementById(id));
+  const display = id => style(id).display;
   const values = [
     display('item'),
     display('overridden'),
@@ -274,6 +303,10 @@ fn list_items_and_first_details_summary_use_user_agent_display_defaults() {
     display('second')
   ];
   const details = document.getElementById('details');
+  const summary = style('first');
+  values.push(summary.listStyleType, summary.listStylePosition, summary.counterIncrement);
+  details.open = true;
+  values.push(summary.listStyleType);
   details.insertBefore(document.getElementById('second'), document.getElementById('first'));
   values.push(display('first'), display('second'));
   return values.join('|');
@@ -284,12 +317,13 @@ fn list_items_and_first_details_summary_use_user_agent_display_defaults() {
 
     assert_eq!(
         result,
-        "list-item|inline|block|block|list-item|block|block|list-item"
+        "list-item|inline|block|block|list-item|block|\
+         disclosure-closed|inside|list-item 0|disclosure-open|block|list-item"
     );
 }
 
 #[test]
-fn table_elements_use_table_user_agent_display_defaults() {
+fn table_elements_use_user_agent_display_and_caption_alignment() {
     let mut vm = new_parsed_test_vm(
         "https://table-user-agent-display.test/",
         r#"<!doctype html>
@@ -299,16 +333,20 @@ fn table_elements_use_table_user_agent_display_defaults() {
     let result = vm
         .eval(
             r#"
-['table', 'caption', 'colgroup', 'col', 'head', 'body', 'foot', 'row', 'cell']
-  .map(id => getComputedStyle(document.getElementById(id)).display)
-  .join('|')
+(() => {
+  const style = id => getComputedStyle(document.getElementById(id));
+  const displays = ['table', 'caption', 'colgroup', 'col', 'head', 'body', 'foot', 'row', 'cell']
+    .map(id => style(id).display);
+  return [...displays, style('caption').textAlign].join('|');
+})()
 "#,
         )
-        .expect("table user-agent displays should evaluate");
+        .expect("table user-agent defaults should evaluate");
 
     assert_eq!(
         result,
-        "table|table-caption|table-column-group|table-column|table-header-group|table-row-group|table-footer-group|table-row|table-cell"
+        "table|table-caption|table-column-group|table-column|table-header-group|\
+         table-row-group|table-footer-group|table-row|table-cell|-moz-center"
     );
 }
 
@@ -365,6 +403,80 @@ fn embedded_svg_user_agent_overflow_clips_to_its_viewport() {
         result,
         "hidden content-box|hidden content-box|visible content-box|visible 0px"
     );
+}
+
+#[test]
+fn embedded_html_elements_use_user_agent_clipping_and_iframe_borders() {
+    let mut vm = new_parsed_test_vm(
+        "https://embedded-html-user-agent-defaults.test/",
+        r#"<!doctype html>
+<iframe id="frame" style="overflow: visible !important"></iframe>
+<embed id="embed"><object id="object"></object>
+<video id="video"></video><canvas id="canvas"></canvas><img id="image">
+<img id="authored" style="overflow: visible; overflow-clip-margin: 4px">"#,
+    );
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const get = id => document.getElementById(id);
+  const clip = ['frame', 'embed', 'object', 'video', 'canvas', 'image', 'authored'].map(id => {
+    const style = getComputedStyle(get(id));
+    return `${style.overflow} ${style.getPropertyValue('overflow-clip-margin')}`;
+  });
+  const frame = get('frame');
+  const style = getComputedStyle(frame);
+  const border = [style.borderTopStyle, style.borderTopWidth];
+  frame.frameBorder = ' 0 ';
+  border.push(style.borderTopWidth);
+  frame.frameBorder = '1';
+  border.push(style.borderTopWidth);
+  frame.frameBorder = 'no';
+  border.push(style.borderTopWidth);
+  frame.style.borderWidth = '4px';
+  border.push(style.borderTopWidth);
+  return JSON.stringify({clip, border});
+})()
+"#,
+        )
+        .expect("embedded HTML user-agent defaults should evaluate");
+
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&result).unwrap(),
+        serde_json::json!({
+            "clip": ["clip content-box", "clip content-box", "clip content-box",
+                "clip content-box", "clip content-box", "clip content-box", "visible 4px"],
+            "border": ["inset", "2px", "0px", "2px", "0px", "4px"],
+        })
+    );
+}
+
+#[test]
+fn focus_visible_uses_user_agent_outline_and_allows_author_styles() {
+    let mut vm = new_parsed_test_vm(
+        "https://focus-visible-user-agent-outline.test/",
+        r#"<!doctype html><input id="control">"#,
+    );
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const control = document.getElementById('control');
+  const style = getComputedStyle(control);
+  const values = [style.outlineStyle];
+  control.focus();
+  values.push(control.matches(':focus-visible'), style.outlineStyle, style.outlineWidth);
+  control.style.outline = '2px solid red';
+  values.push(style.outlineStyle, style.outlineWidth, style.outlineColor);
+  return values.join('|');
+})()
+"#,
+        )
+        .expect("focus-visible user-agent outline should evaluate");
+
+    assert_eq!(result, "none|true|auto|1px|solid|2px|rgb(255, 0, 0)");
 }
 
 #[test]
@@ -460,7 +572,11 @@ fn modal_dialog_user_agent_visibility_overrides_inheritance() {
     let mut vm = new_parsed_test_vm(
         "https://modal-dialog-user-agent-visibility.test/",
         r#"<!doctype html>
-<div style="visibility: hidden"><dialog id="target">Dialog</dialog></div>"#,
+<style>
+span { color: rgb(1, 2, 3); }
+dialog:modal + span { color: rgb(4, 5, 6); }
+</style>
+<div style="visibility: hidden"><dialog id="target">Dialog</dialog><span></span></div>"#,
     );
 
     let result = vm
@@ -468,24 +584,32 @@ fn modal_dialog_user_agent_visibility_overrides_inheritance() {
             r#"
 (() => {
   const dialog = document.getElementById('target');
+  const sibling = dialog.nextElementSibling;
+  const read = () => getComputedStyle(dialog).visibility + ',' + getComputedStyle(sibling).color;
   dialog.show();
-  const values = [getComputedStyle(dialog).visibility];
+  const values = [read()];
   dialog.close();
 
   dialog.showModal();
-  values.push(getComputedStyle(dialog).visibility);
+  values.push(read());
   dialog.close();
+  values.push(read());
 
   dialog.style.visibility = 'hidden';
   dialog.showModal();
-  values.push(getComputedStyle(dialog).visibility);
+  values.push(read());
+  dialog.removeAttribute('open');
+  values.push(read());
   return values.join('|');
 })()
 "#,
         )
         .expect("modal dialog user-agent visibility should evaluate");
 
-    assert_eq!(result, "hidden|visible|hidden");
+    assert_eq!(
+        result,
+        "hidden,rgb(1, 2, 3)|visible,rgb(4, 5, 6)|hidden,rgb(1, 2, 3)|hidden,rgb(4, 5, 6)|hidden,rgb(1, 2, 3)"
+    );
 }
 
 #[test]
@@ -916,7 +1040,7 @@ fn style_observation_materializes_dirty_scope_once_without_a_full_snapshot() {
 }
 
 #[test]
-fn document_stylesheet_mutation_reprojects_only_the_dirty_source() {
+fn document_stylesheet_mutation_updates_the_affected_targets() {
     let mut vm = new_parsed_test_vm(
         "https://style-observation-dirty-source-id.test/",
         r#"<!doctype html>
@@ -934,7 +1058,6 @@ fn document_stylesheet_mutation_reprojects_only_the_dirty_source() {
         .expect("both stylesheet sources should initialize"),
         r#"["rgb(1, 2, 3)","rgb(4, 5, 6)"]"#
     );
-    crate::style_engine::reset_source_cascade_rebuild_count_for_test();
 
     assert_eq!(
         vm.eval(
@@ -948,11 +1071,6 @@ JSON.stringify([
         )
         .expect("the dirty stylesheet should update"),
         r#"["rgb(7, 8, 9)","rgb(4, 5, 6)"]"#
-    );
-    assert_eq!(
-        crate::style_engine::source_cascade_rebuild_count_for_test(),
-        1,
-        "a single source mutation must not rebuild unrelated source cascade data"
     );
 }
 

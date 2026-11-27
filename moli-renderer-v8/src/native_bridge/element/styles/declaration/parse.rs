@@ -11,7 +11,7 @@ use crate::{
 };
 
 use super::super::super::super::PageScriptHost;
-use super::super::super::{set_reflected_style_attribute_with_inline_base_url, style_string};
+use super::super::super::style_string;
 use super::super::STYLE_DECLARATION_BASE_URL_SLOT;
 use super::properties::{
     all_shorthand_applies_to, animation_shorthand_longhands, box_shorthand_components,
@@ -39,12 +39,12 @@ mod entry_conversion;
 mod inline_state;
 mod pdb_compat;
 mod property_access;
+pub(in crate::native_bridge::element::styles) use cssom_mutation::{
+    InlineStylePropertyWrite, parse_style_property_entries_for_cssom_fallback_write,
+    set_inline_style_css_text_with_pdb_storage, set_inline_style_property_with_pdb_storage,
+};
 pub(crate) use cssom_mutation::{
     parse_inline_css_text_with_base, parse_style_property_entries_for_cssom_write,
-};
-pub(in crate::native_bridge::element::styles) use cssom_mutation::{
-    parse_style_property_entries_for_cssom_fallback_write,
-    set_inline_style_css_text_with_pdb_storage, set_inline_style_property_with_pdb_storage,
 };
 pub(crate) use declaration_parser::{
     cssom_style_entry_requires_structured_parser, parse_style_property_entries_with_base,

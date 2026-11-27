@@ -1,3 +1,5 @@
+use dom::ElementState as StyloElementState;
+
 use crate::{
     document_runtime::DomHandle,
     page_task_queue::{
@@ -259,9 +261,17 @@ fn dialog_set_open_state_for_handle(
 ) {
     set_reflected_boolean_attribute(scope, runtime_ptr, handle, "open", open);
     let runtime = unsafe { &mut *runtime_ptr };
-    let _ = runtime
+    let old_state = runtime.retained_current_element_state(handle);
+    if runtime
         .dom_host_mut()
-        .set_dialog_modal(handle, open && modal);
+        .set_dialog_modal(handle, open && modal)
+    {
+        runtime.note_element_state_style_activity_with_old_state(
+            handle,
+            StyloElementState::MODAL,
+            old_state,
+        );
+    }
 }
 
 fn dialog_is_modal(runtime: &PageScriptHost, handle: DomHandle) -> bool {
@@ -457,9 +467,8 @@ pub(in crate::native_bridge::element) fn close_dialog_element(
         return false;
     }
 
-    set_reflected_boolean_attribute(scope, runtime_ptr, handle, "open", false);
+    dialog_set_open_state_for_handle(scope, runtime_ptr, handle, false, false);
     let runtime = unsafe { &mut *runtime_ptr };
-    let _ = runtime.dom_host_mut().set_dialog_modal(handle, false);
     if let Some(return_value) = return_value {
         let _ = runtime
             .dom_host_mut()

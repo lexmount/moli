@@ -4,7 +4,9 @@ use crate::{document_runtime::DomHandle, dom::native::Node, native_bridge::PageS
 mod input;
 #[cfg(feature = "devtools")]
 pub(crate) use input::{
+    WheelScrollTarget, perform_latched_wheel_scroll_default_action,
     perform_scrollbar_scroll_default_action, perform_wheel_scroll_default_action,
+    select_wheel_scroll_target,
 };
 
 use super::super::{queue_revealed_lazy_image_loads, queue_revealed_lazy_media_loads};
@@ -55,7 +57,7 @@ pub(super) fn set_node_scroll_position(
     if changed {
         // Freshness must be visible even while ActionBatch defers events and
         // observer work until its checkpoint.
-        unsafe { &*runtime_ptr }.note_realtime_scroll_change();
+        unsafe { &*runtime_ptr }.note_realtime_scroll_change(Some(handle));
     }
     if changed && queue_observable_effects {
         // Admission only: ActionBatch still owns its checkpoints and the

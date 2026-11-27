@@ -14,7 +14,7 @@ use std::{
 use moli_css_parse::{
     FontSelectionCapabilities as WebFontCapabilities, FontSelectionRange, font_family_name_key,
 };
-use moli_system_fonts::SystemFontFamilyResolver;
+use moli_system_fonts::{SystemFontFamilyResolver, font_collection};
 use parley::{
     FontContext, FontFamily, FontFamilyName, LayoutContext, TextStyle,
     fontique::{
@@ -877,6 +877,16 @@ struct RegisteredWebFont {
     membership: WebFontMembership,
 }
 
+impl PartialEq for RegisteredWebFont {
+    fn eq(&self, other: &Self) -> bool {
+        self.face == other.face
+            && self.source_key == other.source_key
+            && self.membership == other.membership
+            && (self.sfnt_bytes.id() == other.sfnt_bytes.id()
+                || self.sfnt_bytes.as_ref() == other.sfnt_bytes.as_ref())
+    }
+}
+
 impl RegisteredWebFont {
     fn priority(&self, slot: &str, order: &WebFontOrder) -> WebFontPriority {
         order.get(slot).copied().unwrap_or_else(|| {
@@ -887,6 +897,16 @@ impl RegisteredWebFont {
             }
         })
     }
+}
+
+/// Exact resource inputs for a retained text result. Font bytes remain shared
+/// with their registrations; neither hash equality nor a family name alone
+/// identifies a font replacement or a temporary stylesheet-font selection.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct LayoutFontInputs {
+    system_font_policy: SystemFontPolicy,
+    web_fonts: BTreeMap<String, RegisteredWebFont>,
+    web_font_order: WebFontOrder,
 }
 
 /// Lazily initialized text resources reused by successive layout demands for
@@ -935,6 +955,14 @@ impl Default for DocumentLayoutServices {
 }
 
 impl DocumentLayoutServices {
+    pub(crate) fn font_inputs(&self) -> LayoutFontInputs {
+        LayoutFontInputs {
+            system_font_policy: self.system_font_policy,
+            web_fonts: self.web_fonts.clone(),
+            web_font_order: self.web_font_order.clone(),
+        }
+    }
+
     /// Creates an uninitialized document sidecar.
     pub const fn new() -> Self {
         Self {
@@ -1377,10 +1405,7 @@ fn build_parley_services(
     web_fonts: &BTreeMap<String, RegisteredWebFont>,
     web_font_order: &WebFontOrder,
 ) -> ParleyDocumentServices {
-    let mut collection = Collection::new(CollectionOptions {
-        shared: false,
-        system_fonts: system_font_policy.is_enabled(),
-    });
+    let mut collection = font_collection(system_font_policy.is_enabled());
     let system_font_family_resolver = system_font_policy
         .is_enabled()
         .then(|| SystemFontFamilyResolver::new(&mut collection));

@@ -11,6 +11,7 @@ pub(crate) use runtime_state::{
 };
 mod broadcast_channel;
 mod canvas;
+pub(crate) use canvas::CanvasPixels;
 mod chrome_runtime;
 mod constructors;
 mod crypto;
@@ -80,6 +81,12 @@ mod media_cues;
 pub(crate) use media_cues::new_media_error_value;
 mod media_file_template;
 mod media_queries;
+#[cfg(all(
+    feature = "media-ext",
+    any(target_os = "linux", target_os = "macos"),
+    target_pointer_width = "64"
+))]
+pub(crate) mod media_source_playback;
 use moli_webapi::media_source;
 mod message_ports;
 mod microtask_checkpoint;
@@ -303,7 +310,8 @@ pub(crate) use self::canvas::try_append_canvas_path_rect_for_test;
 pub(crate) use self::canvas::{
     CanvasContextKind, attach_canvas_like_context_object, build_canvas_rendering_context_2d_object,
     build_offscreen_canvas_object, build_webgl_context_object, build_webgl2_context_object,
-    canvas_like_to_data_url, reset_html_canvas_backing_store_for_dimension_assignment,
+    canvas_like_to_blob, canvas_like_to_data_url,
+    reset_html_canvas_backing_store_for_dimension_assignment,
 };
 use self::constructors::illegal_constructor_callback;
 pub(crate) use self::constructors::{
@@ -380,8 +388,8 @@ pub(crate) use self::file_api::{
 pub(crate) use self::file_api::{
     FileReaderReadMode, FileReadingTask, build_file_list_object, build_file_object,
     build_file_object_unpublished, file_clone_metadata, file_list_files_from_object,
-    finish_file_reader_read, flush_one_pending_file_reading_task, is_file_list_object,
-    queue_file_reading_task, selected_file_from_object, set_file_relative_path,
+    finish_file_reader_read, flush_one_pending_file_reading_task, queue_file_reading_task,
+    selected_file_from_object, set_file_relative_path,
 };
 pub(crate) use self::form_data_runtime::form_data_request_body;
 pub(crate) use self::geometry_clone::{
@@ -439,15 +447,13 @@ pub(crate) use self::media_queries::SimpleObjectEventListenerInspectorSnapshot;
 #[cfg(feature = "devtools")]
 pub(crate) use self::media_queries::simple_event_target_inspector_listener_snapshots;
 pub(crate) use self::media_queries::{
-    ResolvedSimpleEventTarget, dispatch_media_query_list_change_events,
-    dispatch_realtime_media_query_event, dispatch_simple_event_target_event,
+    ResolvedSimpleEventTarget, dispatch_media_query_events, dispatch_simple_event_target_event,
     dispatch_simple_event_target_event_collecting_errors,
     dispatch_simple_event_target_event_with_ancestors,
     dispatch_simple_event_target_event_with_checkpoint, initialize_simple_event_target,
     install_simple_event_target_handlers, simple_event_target_handler_getter_callback,
     simple_event_target_handler_setter_callback, simple_object_event_listeners_snapshot,
     simple_object_event_set_handler, simple_object_has_event_listeners,
-    take_realtime_media_query_events,
 };
 use self::message_ports::schedule_scope_callback;
 pub(crate) use self::message_ports::{
@@ -569,8 +575,7 @@ pub(crate) use self::time_ranges::new_time_ranges_value;
 pub(crate) use self::trusted_types::trusted_types_lazy_state_materialized;
 pub(crate) use self::trusted_types::{
     TrustedTypesCodeGenerationCheck, check_javascript_url_trusted_types,
-    install_trusted_types_eval_runtime_state, install_trusted_types_runtime_state,
-    trusted_html_string_or_throw, trusted_html_value_string,
+    install_trusted_types_runtime_state, trusted_html_string_or_throw, trusted_html_value_string,
     trusted_script_string_for_script_element_execution, trusted_script_string_or_type_error,
     trusted_script_url_string_or_throw, trusted_types_code_generation_check,
 };

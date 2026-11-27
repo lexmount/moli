@@ -1,6 +1,6 @@
 use super::*;
 
-async fn ready_background_snapshot(
+async fn ready_css_image_snapshot(
     pixels: moli_image::RgbaImage,
     css: &'static str,
     markup: &'static str,
@@ -21,7 +21,7 @@ async fn ready_background_snapshot(
             Url::parse("https://example.com/raster-background-repeat.html")?,
         );
         page.vm_mut()
-            .set_layout_policy(moli_page_types::LayoutPolicy::OnDemand);
+            .set_layout_policy(moli_page_types::LayoutPolicy::Lazy);
         let executor = page.local_executor.clone();
         executor
             .run(async move {
@@ -34,7 +34,7 @@ async fn ready_background_snapshot(
                 page.vm_mut().sync_live_document_style_sources();
                 let viewport = moli_layout::PaintViewport::new(96, 80, 1.0);
                 // Establish readiness independently of the projection assertion.
-                // This is an ordinary OnDemand screen paint, with no Print job.
+                // This is an ordinary Lazy screen paint, with no Print job.
                 page.vm_mut()
                     .screenshot_layout_snapshot(viewport)?
                     .expect("image fixture has a layout root");
@@ -73,7 +73,10 @@ fn assert_one_repeat_image(snapshot: &moli_layout::PaintSnapshot) {
         snapshot
             .fragments
             .iter()
-            .filter(|fragment| matches!(fragment, moli_layout::PaintFragment::Image(_)))
+            .filter(
+                |fragment| matches!(fragment, moli_layout::PaintFragment::Tiles(tiles)
+                if matches!(tiles.source, moli_layout::PaintTileSource::Image(..)))
+            )
             .count(),
         1,
         "continuous raster repetition must have bounded paint work",
@@ -86,7 +89,7 @@ fn assert_one_repeat_image(snapshot: &moli_layout::PaintSnapshot) {
 
 #[tokio::test]
 async fn raster_url_background_repeats_beyond_the_explicit_tile_budget() {
-    let (snapshot, geometry) = ready_background_snapshot(
+    let (snapshot, geometry) = ready_css_image_snapshot(
         moli_image::RgbaImage::try_new(1, 1, vec![17, 85, 221, 255]).unwrap(),
         r#"
 html,body{margin:0;padding:0;background:white;scrollbar-width:none}
@@ -112,7 +115,7 @@ background:magenta url("__IMAGE_URL__")}
 
 #[tokio::test]
 async fn raster_url_background_repeat_preserves_pattern_position_transform_clip_and_alpha() {
-    let (snapshot, geometry) = ready_background_snapshot(
+    let (snapshot, geometry) = ready_css_image_snapshot(
         moli_image::RgbaImage::try_new(
             2,
             2,
@@ -147,4 +150,94 @@ background-position:1px 1px;image-rendering:pixelated}
         assert_eq!(image_pixel(&image, x, y), [255; 4], "clip at ({x},{y})");
     }
     assert_one_repeat_image(&snapshot);
+}
+
+#[tokio::test]
+async fn raster_url_background_spaces_tiles_along_one_axis() {
+    let (snapshot, _) = ready_css_image_snapshot(
+        moli_image::RgbaImage::try_new(1, 1, vec![0, 0, 255, 255]).unwrap(),
+        r#"
+html,body{margin:0;background:white;scrollbar-width:none}
+#asset{position:absolute;left:8px;top:8px;width:14px;height:12px;
+background: url('__IMAGE_URL__') 0 2px / 4px 2px space no-repeat}
+"#,
+        "<div id=asset></div>",
+    )
+    .await
+    .expect("spaced background fixture");
+    let result = moli_paint::raster_snapshot(&snapshot).unwrap();
+    for x in 8..22 {
+        let expected = if [12, 17].contains(&x) {
+            [255; 4]
+        } else {
+            [0, 0, 255, 255]
+        };
+        assert_eq!(
+            image_pixel(&result, x, 10),
+            expected,
+            "background tile at {x}"
+        );
+    }
+    assert_eq!(image_pixel(&result, 9, 9), [255; 4]);
+    assert_eq!(image_pixel(&result, 9, 12), [255; 4]);
+    assert_one_repeat_image(&snapshot);
+}
+
+#[tokio::test]
+async fn dense_border_image_repeats_keep_the_original_raster_and_one_grid_per_slice() {
+    use moli_layout::{PaintFragment, PaintTileSource};
+
+    let scanline = [[255, 0, 0, 255], [0, 0, 255, 255], [255, 0, 0, 255]];
+    let pixels = moli_image::RgbaImage::try_new(
+        3,
+        129,
+        scanline
+            .into_iter()
+            .flatten()
+            .cycle()
+            .take(3 * 129 * 4)
+            .collect(),
+    )
+    .unwrap();
+    let (snapshot, _) = ready_css_image_snapshot(
+        pixels,
+        r#"
+html,body{margin:0;background:white;scrollbar-width:none}
+#asset{position:absolute;left:8px;top:8px;width:80px;height:20px;
+border:1px solid lime; border-image:url('__IMAGE_URL__') 64 1 / 1px repeat}
+"#,
+        "<div id=asset></div>",
+    )
+    .await
+    .expect("dense border image fixture");
+    assert_eq!(
+        snapshot.images.len(),
+        1,
+        "all slices reference the original resource"
+    );
+    assert_eq!(
+        (
+            snapshot.images[0].image.width,
+            snapshot.images[0].image.height
+        ),
+        (3, 129)
+    );
+    let grids: Vec<_> = snapshot
+        .fragments
+        .iter()
+        .filter_map(|fragment| match fragment {
+            PaintFragment::Tiles(tiles) if matches!(tiles.source, PaintTileSource::Image(..)) => {
+                Some(tiles.grid)
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(grids.len(), 8);
+    assert!(grids.iter().any(|grid| grid.x.count > 4096));
+    let result = moli_paint::raster_snapshot(&snapshot).unwrap();
+    for x in 9..89 {
+        assert_eq!(image_pixel(&result, x, 8), [0, 0, 255, 255]);
+    }
+    assert_eq!(image_pixel(&result, 8, 8), [255, 0, 0, 255]);
+    assert_eq!(image_pixel(&result, 40, 9), [255; 4]);
 }

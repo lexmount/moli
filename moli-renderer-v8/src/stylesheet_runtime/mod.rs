@@ -20,6 +20,7 @@ mod link_state;
 mod linked_import_graph;
 mod load;
 mod owner_state;
+mod publication;
 mod settlement;
 mod source_install;
 #[cfg(test)]
@@ -32,7 +33,7 @@ pub(crate) use completion::{
     ConnectedLoadCompletion, LiveStylesheetImportLoadCompletion,
     StylesheetImportCompletionAuthority,
 };
-pub(crate) use connected::{ConnectedStyleLoadPrimeResult, PreparedConnectedStyleLoad};
+pub(crate) use connected::ConnectedStyleLoadPrimeResult;
 pub(super) use import_graph::{ConnectedStyleImportReadiness, connected_style_import_readiness};
 pub(crate) use import_graph::{
     fetch_complete_stylesheet_import_graph, fetch_complete_stylesheet_import_graph_from_root,

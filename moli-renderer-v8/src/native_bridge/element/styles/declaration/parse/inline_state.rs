@@ -1,10 +1,11 @@
-use super::cssom_mutation::parse_inline_css_text_with_base;
+use super::cssom_mutation::{parse_inline_css_text_with_base, parse_inline_declaration_entries};
 use super::declaration_parser::parse_style_property_entries_with_base;
 use super::pdb_compat::{
     css_value_uses_unresolved_cssom_storage, cssom_empty_specified_placeholder_property,
     cssom_style_property_query_uses_pdb, cssom_style_property_write_can_use_pdb_storage,
-    inline_style_entry_is_pdb_storage_candidate, parse_style_property_entries_with_pdb,
-    pdb_block_from_style_entries, style_entry_affects_property_query, style_entry_is_pdb_safe,
+    inline_style_entry_is_pdb_storage_candidate, parse_pdb_style_property,
+    parse_style_property_entries_with_pdb, pdb_block_from_native_style_entries,
+    style_entry_affects_property_query, style_entry_is_pdb_safe,
     style_entry_is_pdb_supplemental_side_entry, style_property_affected_names_with_pdb,
 };
 use super::property_access::{
@@ -19,57 +20,53 @@ pub(super) fn inline_style_declaration_state_from_entries(
     entries: &[StyleEntry],
 ) -> CssInlineStyleDeclarationState {
     crate::style_engine::ensure_stylo_browser_compat_prefs();
-    let mut state = CssInlineStyleDeclarationState {
-        entries: entries.to_vec(),
-        ..Default::default()
-    };
+    let mut side_entries = Vec::new();
     let mut pdb_entries = Vec::new();
     for entry in entries {
         if style_entry_is_pdb_supplemental_side_entry(entry) {
-            state.side_entries.push(entry.clone());
+            side_entries.push(entry.clone());
             continue;
         }
         if style_entry_is_pdb_safe(entry) {
-            pdb_entries.push(entry.clone());
+            pdb_entries.push(entry);
             continue;
         }
-        state.side_entries.push(entry.clone());
+        side_entries.push(entry.clone());
     }
-    if !pdb_entries.is_empty() {
-        state.block = pdb_block_from_style_entries(&pdb_entries).unwrap_or_default();
+    let block = pdb_block_from_native_style_entries(&pdb_entries).unwrap_or_default();
+    let compatibility = (!entries.is_empty()).then(|| {
+        Box::new(crate::css_style::InlineStyleCompatibility {
+            entries: entries.to_vec(),
+            side_entries,
+        })
+    });
+    CssInlineStyleDeclarationState {
+        block,
+        compatibility,
+        ..Default::default()
     }
-    state
 }
 
 pub(super) fn inline_style_declaration_state_from_serialized_entries(
-    entries: &[StyleEntry],
+    mut state: CssInlineStyleDeclarationState,
     css_text: &str,
     base_url: Option<&url::Url>,
 ) -> CssInlineStyleDeclarationState {
-    if !inline_serialized_entries_can_seed_pdb_state_without_css_text_reparse(entries) {
+    if !inline_serialized_entries_can_seed_pdb_state_without_css_text_reparse(&state) {
         return inline_style_declaration_state_from_css_text(css_text, base_url);
     }
-    let mut state = inline_style_declaration_state_from_entries(entries);
     state.refresh_pdb_entries();
     state
 }
 
 pub(super) fn inline_serialized_entries_can_seed_pdb_state_without_css_text_reparse(
-    entries: &[StyleEntry],
+    state: &CssInlineStyleDeclarationState,
 ) -> bool {
-    let mut has_pdb_entry = false;
-    for entry in entries {
-        if style_entry_is_pdb_safe(entry) && !style_entry_is_pdb_supplemental_side_entry(entry) {
-            has_pdb_entry = true;
-            continue;
-        }
-        if !style_entry_is_pdb_supplemental_side_entry(entry)
-            && !inline_serialized_side_entry_can_seed_without_css_text_reparse(entry)
-        {
-            return false;
-        }
-    }
-    has_pdb_entry
+    state.source_entries().len() > state.side_entries().len()
+        && state.side_entries().iter().all(|entry| {
+            style_entry_is_pdb_supplemental_side_entry(entry)
+                || inline_serialized_side_entry_can_seed_without_css_text_reparse(entry)
+        })
 }
 
 pub(super) fn inline_serialized_side_entry_can_seed_without_css_text_reparse(
@@ -102,99 +99,76 @@ pub(super) fn inline_style_declaration_state_from_css_text(
     inline_style_declaration_state_from_entries(&entries)
 }
 
-pub(super) fn inline_style_declaration_state_for_handle(
-    runtime: &PageScriptHost,
-    handle: DomHandle,
-    base_url: Option<&url::Url>,
-) -> CssInlineStyleDeclarationState {
-    if runtime.element_inline_style_csp_state(handle)
-        == crate::style_engine::InlineStyleCspState::BlockedAttribute
-    {
-        return CssInlineStyleDeclarationState::default();
-    }
-    runtime
-        .element_inline_style_declaration_state(handle)
-        .cloned()
-        .unwrap_or_else(|| {
-            inline_style_declaration_state_from_css_text(&style_string(runtime, handle), base_url)
-        })
-}
-
 pub(super) fn inline_css_text_pdb_storage_state(
     css_text: &str,
+    declarations: &[StyleEntry],
+    source_preserved: bool,
 ) -> Option<CssInlineStyleDeclarationState> {
-    if let Some(entries) = inline_css_text_all_adapter_entries(css_text) {
-        let mut state = inline_style_declaration_state_from_entries(&entries);
-        state.refresh_pdb_entries();
-        return Some(state);
-    }
-    if !inline_css_text_can_seed_plain_pdb_block(css_text) {
-        return None;
-    }
-    let entries = parse_inline_css_text_with_base(css_text, None);
-    if entries
+    if declarations
         .iter()
-        .any(style_entry_is_pdb_supplemental_side_entry)
-        || inline_css_text_requires_entry_projection(css_text)
+        .any(|declaration| declaration.name.eq_ignore_ascii_case("all"))
     {
+        let entries = inline_css_text_all_adapter_entries(declarations)?;
         let mut state = inline_style_declaration_state_from_entries(&entries);
         state.refresh_pdb_entries();
         return Some(state);
     }
+    let mut block = style::properties::PropertyDeclarationBlock::new();
+    // Escapes and compatibility normalization can change the token stream.
+    let mut use_original_text = !source_preserved || css_text.contains('\\');
+    let mut project_entries = false;
+    for declaration in declarations {
+        let name = canonical_style_property_name(declaration.name.trim());
+        let value = &declaration.value;
+        if name.is_empty() {
+            continue;
+        }
+        if value.is_empty() && moli_css_parse::is_cssom_custom_property_name(&name) {
+            use_original_text = true;
+            continue;
+        }
+        if name == "all"
+            || (value.is_empty() && cssom_empty_specified_placeholder_property(&name))
+            || (css_value_uses_unresolved_cssom_storage(value)
+                && unresolved_box_shorthand_longhands(&name).is_some())
+            || !cssom_style_property_write_can_use_pdb_storage(&name, value)
+        {
+            return None;
+        }
+        let (parsed, native) = parse_pdb_style_property(&name, value, declaration.priority)?;
+        project_entries |= name == "animation"
+            || !name.eq_ignore_ascii_case(declaration.name.trim())
+            || parsed
+                .entries
+                .iter()
+                .any(style_entry_is_pdb_supplemental_side_entry);
+        if let Some(native) = native {
+            if !use_original_text && !project_entries {
+                native.append_to_declaration_list(&mut block);
+            }
+        } else {
+            use_original_text = true;
+        }
+    }
+    if project_entries {
+        let entries = parse_inline_declaration_entries(declarations, None);
+        return Some(inline_style_declaration_state_from_entries(&entries));
+    }
+    let block = if use_original_text {
+        moli_css_parse::parse_declaration_block(css_text)
+    } else {
+        moli_css_parse::CssDeclarationBlock::new(block)
+    };
     Some(CssInlineStyleDeclarationState {
-        block: moli_css_parse::parse_declaration_block(css_text),
+        block,
         ..Default::default()
     })
 }
 
-fn inline_css_text_requires_entry_projection(css_text: &str) -> bool {
-    parse_css_declaration_list(css_text)
-        .into_iter()
-        .any(|declaration| {
-            let name = canonical_style_property_name(&declaration.name.to_ascii_lowercase());
-            // CSSOM's compatibility aliases are normalized by the entry parser;
-            // feeding the original name directly to Stylo can drop declarations.
-            name == "animation" || !name.eq_ignore_ascii_case(declaration.name.trim())
-        })
-}
-
-pub(super) fn inline_css_text_can_seed_plain_pdb_block(css_text: &str) -> bool {
-    parse_css_declaration_list(css_text)
-        .into_iter()
-        .all(|declaration| {
-            let name = canonical_style_property_name(declaration.name.trim());
-            if name.is_empty() {
-                return true;
-            }
-            if declaration.value.is_empty() && cssom_empty_specified_placeholder_property(&name) {
-                return false;
-            }
-            if declaration.value.is_empty() && moli_css_parse::is_cssom_custom_property_name(&name)
-            {
-                return true;
-            }
-            if name == "all" {
-                return false;
-            }
-            if css_value_uses_unresolved_cssom_storage(&declaration.value)
-                && unresolved_box_shorthand_longhands(&name).is_some()
-            {
-                return false;
-            }
-            cssom_style_property_write_can_use_pdb_storage(&name, &declaration.value)
-                && parse_style_property_entries_with_pdb(
-                    &name,
-                    &declaration.value,
-                    declaration.priority,
-                )
-                .is_some()
-        })
-}
-
-pub(super) fn inline_css_text_all_adapter_entries(css_text: &str) -> Option<Vec<StyleEntry>> {
+fn inline_css_text_all_adapter_entries(declarations: &[StyleEntry]) -> Option<Vec<StyleEntry>> {
     let mut entries = Vec::new();
     let mut has_all = false;
-    for declaration in parse_css_declaration_list(css_text) {
+    for declaration in declarations {
         let name = canonical_style_property_name(declaration.name.trim());
         if name.is_empty() {
             continue;
@@ -235,7 +209,7 @@ pub(super) fn inline_state_has_unpreservable_side_entries_for_property(
     property: &str,
     affected_names: &[String],
 ) -> bool {
-    state.side_entries.iter().any(|entry| {
+    state.side_entries().iter().any(|entry| {
         style_entry_affects_property_query(entry, property, affected_names)
             && !style_entry_is_replaceable_by_pdb_property(entry, property, affected_names)
             && !style_entry_is_preservable_for_pdb_property(entry, property)
@@ -248,7 +222,7 @@ pub(super) fn inline_state_has_replaceable_side_entries_for_property(
     affected_names: &[String],
 ) -> bool {
     state
-        .side_entries
+        .side_entries()
         .iter()
         .any(|entry| style_entry_is_replaceable_by_pdb_property(entry, property, affected_names))
 }
@@ -258,7 +232,7 @@ pub(crate) fn inline_state_property_value_with_pdb(
     property: &str,
 ) -> Option<String> {
     let overflow_supplemental_query =
-        overflow_property_query_uses_pdb_supplemental_side_entries(property, &state.side_entries);
+        overflow_property_query_uses_pdb_supplemental_side_entries(property, state.side_entries());
     if !cssom_style_property_query_uses_pdb(property) && !overflow_supplemental_query {
         return None;
     }
@@ -267,26 +241,26 @@ pub(crate) fn inline_state_property_value_with_pdb(
         return pdb_property_value_for_cssom_query_with_side_entries(
             &state.block,
             property,
-            &state.side_entries,
+            state.side_entries(),
         );
     }
     let text_decoration_supplemental_query =
         text_decoration_property_query_uses_pdb_supplemental_side_entries(
             property,
-            &state.side_entries,
+            state.side_entries(),
         );
     if text_decoration_supplemental_query {
         return pdb_property_value_for_cssom_query_with_side_entries(
             &state.block,
             property,
-            &state.side_entries,
+            state.side_entries(),
         );
     }
     if overflow_supplemental_query {
         return pdb_property_value_for_cssom_query_with_side_entries(
             &state.block,
             property,
-            &state.side_entries,
+            state.side_entries(),
         );
     }
     let query = inline_state_pdb_property_query_candidate(state, property, &affected_names)?;
@@ -294,13 +268,13 @@ pub(crate) fn inline_state_property_value_with_pdb(
         InlineStatePdbQueryCandidate::Pdb => pdb_property_value_for_cssom_query_with_side_entries(
             &state.block,
             property,
-            &state.side_entries,
+            state.side_entries(),
         ),
         InlineStatePdbQueryCandidate::SupplementalSide if text_decoration_supplemental_query => {
             pdb_property_value_for_cssom_query_with_side_entries(
                 &state.block,
                 property,
-                &state.side_entries,
+                state.side_entries(),
             )
         }
         InlineStatePdbQueryCandidate::SupplementalSide => inline_state_pdb_supplemental_side_entry(
@@ -319,7 +293,7 @@ pub(crate) fn inline_state_property_priority_with_pdb(
     property: &str,
 ) -> Option<bool> {
     let overflow_supplemental_query =
-        overflow_property_query_uses_pdb_supplemental_side_entries(property, &state.side_entries);
+        overflow_property_query_uses_pdb_supplemental_side_entries(property, state.side_entries());
     if !cssom_style_property_query_uses_pdb(property) && !overflow_supplemental_query {
         return None;
     }
@@ -328,26 +302,26 @@ pub(crate) fn inline_state_property_priority_with_pdb(
         return pdb_property_priority_for_cssom_query_with_side_entries(
             &state.block,
             property,
-            &state.side_entries,
+            state.side_entries(),
         );
     }
     let text_decoration_supplemental_query =
         text_decoration_property_query_uses_pdb_supplemental_side_entries(
             property,
-            &state.side_entries,
+            state.side_entries(),
         );
     if text_decoration_supplemental_query {
         return pdb_property_priority_for_cssom_query_with_side_entries(
             &state.block,
             property,
-            &state.side_entries,
+            state.side_entries(),
         );
     }
     if overflow_supplemental_query {
         return pdb_property_priority_for_cssom_query_with_side_entries(
             &state.block,
             property,
-            &state.side_entries,
+            state.side_entries(),
         );
     }
     let query = inline_state_pdb_property_query_candidate(state, property, &affected_names)?;
@@ -356,14 +330,14 @@ pub(crate) fn inline_state_property_priority_with_pdb(
             pdb_property_priority_for_cssom_query_with_side_entries(
                 &state.block,
                 property,
-                &state.side_entries,
+                state.side_entries(),
             )
         }
         InlineStatePdbQueryCandidate::SupplementalSide if text_decoration_supplemental_query => {
             pdb_property_priority_for_cssom_query_with_side_entries(
                 &state.block,
                 property,
-                &state.side_entries,
+                state.side_entries(),
             )
         }
         InlineStatePdbQueryCandidate::SupplementalSide => inline_state_pdb_supplemental_side_entry(
@@ -382,9 +356,12 @@ pub(super) fn inline_state_pdb_property_query_candidate(
     property: &str,
     affected_names: &[String],
 ) -> Option<InlineStatePdbQueryResult> {
-    if state.side_entries.is_empty()
-        && !state.entries.iter().any(|entry| entry.name == "all")
-        && !state.entries.iter().any(|entry| {
+    if state.side_entries().is_empty()
+        && !state
+            .source_entries()
+            .iter()
+            .any(|entry| entry.name == "all")
+        && !state.source_entries().iter().any(|entry| {
             entry.value.is_empty() || css_value_uses_unresolved_cssom_storage(&entry.value)
         })
     {
@@ -394,10 +371,10 @@ pub(super) fn inline_state_pdb_property_query_candidate(
         });
     }
 
-    let mut remaining_side_entries = state.side_entries.clone();
+    let mut remaining_side_entries = state.side_entries().to_vec();
     let mut normal = None;
     let mut important = None;
-    for entry in &state.entries {
+    for entry in state.source_entries() {
         let is_side_entry = remaining_side_entries
             .iter()
             .position(|side| style_entries_equal(side, entry))
@@ -506,7 +483,7 @@ pub(super) fn inline_state_pdb_supplemental_side_entry(
     priority: PdbQueryPriority,
 ) -> Option<StyleEntry> {
     state
-        .side_entries
+        .side_entries()
         .iter()
         .rev()
         .find(|entry| {
@@ -603,20 +580,20 @@ pub(super) fn refresh_inline_state_entries_after_pdb_mutation(
 ) {
     let new_entries = new_entries.into_iter().collect::<Vec<_>>();
     let new_side_entries = new_side_entries.into_iter().collect::<Vec<_>>();
-    let has_renderer_order_projection =
-        state.entries.iter().chain(new_entries.iter()).any(|entry| {
+    let has_renderer_order_projection = state
+        .source_entries()
+        .iter()
+        .chain(new_entries.iter())
+        .any(|entry| {
             entry.name.starts_with("--")
                 || entry.value.is_empty()
                 || css_value_uses_unresolved_cssom_storage(&entry.value)
         });
-    let has_all_entry = state.entries.iter().any(|entry| entry.name == "all");
-    if state.entries.is_empty()
-        && !state.block.is_empty()
-        && (!new_side_entries.is_empty() || has_renderer_order_projection)
-    {
-        state.entries = inline_state_block_entries(state);
-    }
-    if state.side_entries.is_empty()
+    let has_all_entry = state
+        .source_entries()
+        .iter()
+        .any(|entry| entry.name == "all");
+    if state.side_entries().is_empty()
         && new_side_entries.is_empty()
         && property != "all"
         && !has_all_entry
@@ -627,7 +604,7 @@ pub(super) fn refresh_inline_state_entries_after_pdb_mutation(
     }
     let block_entries = inline_state_block_entries(state);
     let mut retained_affecting_side_entries = state
-        .side_entries
+        .side_entries()
         .iter()
         .filter(|entry| {
             style_entry_affects_property_query(entry, property, affected_names)
@@ -636,12 +613,19 @@ pub(super) fn refresh_inline_state_entries_after_pdb_mutation(
         })
         .cloned()
         .collect::<Vec<_>>();
-    state.side_entries.retain(|entry| {
+    let compatibility = state.compatibility.get_or_insert_with(Box::default);
+    compatibility.side_entries.retain(|entry| {
         !block_entries_contains_entry(&block_entries, entry)
             && (!style_entry_affects_property_query(entry, property, affected_names)
                 || !style_entry_is_replaceable_by_pdb_property(entry, property, affected_names))
     });
-    state.entries.retain(|entry| {
+    if compatibility.entries.is_empty()
+        && !state.block.is_empty()
+        && (!new_side_entries.is_empty() || has_renderer_order_projection)
+    {
+        compatibility.entries = block_entries;
+    }
+    compatibility.entries.retain(|entry| {
         if entry.name == "all" {
             return property != "all";
         }
@@ -663,12 +647,15 @@ pub(super) fn refresh_inline_state_entries_after_pdb_mutation(
         false
     });
     expand_unresolved_box_shorthand_projection_after_mutation(
-        &mut state.entries,
+        &mut compatibility.entries,
         &mut state.block,
         affected_names,
     );
-    state.entries.extend(new_entries);
-    state.side_entries.extend(new_side_entries);
+    compatibility.entries.extend(new_entries);
+    compatibility.side_entries.extend(new_side_entries);
+    if compatibility.entries.is_empty() && compatibility.side_entries.is_empty() {
+        state.compatibility = None;
+    }
 }
 
 pub(super) fn expand_unresolved_box_shorthand_projection_after_mutation(

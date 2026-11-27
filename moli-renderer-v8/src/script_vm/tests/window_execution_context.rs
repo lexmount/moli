@@ -711,7 +711,7 @@ fn borrowed_fetch_uses_receiver_realm_and_keeps_reaction_realm_independent() {
 async fn window_event_callbacks_project_same_window_realms_in_all_layout_modes() {
     for policy in [
         moli_page_types::LayoutPolicy::Mock,
-        moli_page_types::LayoutPolicy::OnDemand,
+        moli_page_types::LayoutPolicy::Lazy,
         moli_page_types::LayoutPolicy::Realtime,
     ] {
         let mut vm = new_storage_test_vm("https://window-event-realms.test/");
@@ -815,7 +815,7 @@ async fn window_event_callbacks_project_same_window_realms_in_all_layout_modes()
 async fn borrowed_default_world_window_callback_keeps_target_window_and_event_identity() {
     for policy in [
         moli_page_types::LayoutPolicy::Mock,
-        moli_page_types::LayoutPolicy::OnDemand,
+        moli_page_types::LayoutPolicy::Lazy,
         moli_page_types::LayoutPolicy::Realtime,
     ] {
         let mut vm = new_storage_test_vm("https://borrowed-window-event.test/");
@@ -872,7 +872,7 @@ async fn borrowed_default_world_window_callback_keeps_target_window_and_event_id
 async fn native_window_error_events_preserve_type_and_onerror_arguments_in_isolated_worlds() {
     for policy in [
         moli_page_types::LayoutPolicy::Mock,
-        moli_page_types::LayoutPolicy::OnDemand,
+        moli_page_types::LayoutPolicy::Lazy,
     ] {
         let mut vm = new_storage_test_vm("https://window-error-event-realms.test/");
         vm.set_layout_policy(policy);
@@ -1014,7 +1014,7 @@ fn isolated_window_world_for_test(
 async fn isolated_window_world_ids_reuse_names_across_frames_but_separate_isolates() {
     for policy in [
         moli_page_types::LayoutPolicy::Mock,
-        moli_page_types::LayoutPolicy::OnDemand,
+        moli_page_types::LayoutPolicy::Lazy,
         moli_page_types::LayoutPolicy::Realtime,
     ] {
         let mut vm = new_storage_test_vm("https://window-world-identity.test/");
@@ -1092,7 +1092,7 @@ async fn isolated_window_world_ids_reuse_names_across_frames_but_separate_isolat
 async fn isolated_window_world_reuse_does_not_revive_retired_realm_authority() {
     for policy in [
         moli_page_types::LayoutPolicy::Mock,
-        moli_page_types::LayoutPolicy::OnDemand,
+        moli_page_types::LayoutPolicy::Lazy,
         moli_page_types::LayoutPolicy::Realtime,
     ] {
         let mut vm = new_storage_test_vm("https://window-world-rewrite.test/");
@@ -1183,7 +1183,7 @@ fn inherited_isolated_world_identity_does_not_authorize_an_unregistered_context(
 async fn foreign_window_callbacks_use_the_target_context_in_the_listener_world() {
     for policy in [
         moli_page_types::LayoutPolicy::Mock,
-        moli_page_types::LayoutPolicy::OnDemand,
+        moli_page_types::LayoutPolicy::Lazy,
         moli_page_types::LayoutPolicy::Realtime,
     ] {
         let mut vm = new_storage_test_vm("https://foreign-window-world.test/");
@@ -1294,7 +1294,7 @@ async fn foreign_window_callbacks_use_the_target_context_in_the_listener_world()
 async fn implicit_window_world_members_retire_independently_and_release_the_host() {
     for policy in [
         moli_page_types::LayoutPolicy::Mock,
-        moli_page_types::LayoutPolicy::OnDemand,
+        moli_page_types::LayoutPolicy::Lazy,
         moli_page_types::LayoutPolicy::Realtime,
     ] {
         let mut vm = new_storage_test_vm("https://window-world-members.test/");
@@ -1436,7 +1436,7 @@ fn failed_target_window_world_bootstrap_does_not_publish_a_partial_realm() {
 async fn isolated_window_proxies_follow_child_navigation_in_surviving_worlds() {
     for policy in [
         moli_page_types::LayoutPolicy::Mock,
-        moli_page_types::LayoutPolicy::OnDemand,
+        moli_page_types::LayoutPolicy::Lazy,
         moli_page_types::LayoutPolicy::Realtime,
     ] {
         let mut vm = new_storage_test_vm("https://isolated-proxy-navigation.test/");
@@ -1577,7 +1577,7 @@ async fn isolated_window_proxies_follow_child_navigation_in_surviving_worlds() {
 async fn isolated_proxy_navigation_rechecks_origin_and_universal_access() {
     for policy in [
         moli_page_types::LayoutPolicy::Mock,
-        moli_page_types::LayoutPolicy::OnDemand,
+        moli_page_types::LayoutPolicy::Lazy,
         moli_page_types::LayoutPolicy::Realtime,
     ] {
         let mut vm = new_storage_test_vm("https://isolated-proxy-origin.test/");
@@ -1737,7 +1737,7 @@ fn reused_isolated_proxy_recovers_after_bootstrap_fails_after_attachment() {
 async fn named_inspector_world_promotes_implicit_members_within_its_session() {
     for policy in [
         moli_page_types::LayoutPolicy::Mock,
-        moli_page_types::LayoutPolicy::OnDemand,
+        moli_page_types::LayoutPolicy::Lazy,
     ] {
         let mut vm = new_storage_test_vm("https://named-inspector-world.test/");
         vm.set_layout_policy(policy);

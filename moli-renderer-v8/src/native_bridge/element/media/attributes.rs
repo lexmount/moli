@@ -222,6 +222,15 @@ fn queue_media_load(
         .dom_host()
         .node(handle)
         .and_then(crate::dom::native::Node::owner_document);
+    #[cfg(all(
+        feature = "media-ext",
+        any(target_os = "linux", target_os = "macos"),
+        target_pointer_width = "64"
+    ))]
+    if runtime.reset_adopted_video(scope, handle) {
+        let _ = runtime.set_media_ready_state(handle, 0);
+        let _ = runtime.set_media_network_state(handle, 0);
+    }
     if runtime
         .pending_media_load_sequence(handle)
         .is_some_and(|pending| current_owner_document != Some(pending.owner_document_handle()))
@@ -288,6 +297,12 @@ pub(crate) fn queue_media_load_if_source_or_loading_change(
     };
     if attribute_name.eq_ignore_ascii_case("src") {
         let runtime = unsafe { &mut *runtime_ptr };
+        #[cfg(all(
+            feature = "media-ext",
+            any(target_os = "linux", target_os = "macos"),
+            target_pointer_width = "64"
+        ))]
+        runtime.reset_video_playback(scope, target);
         let _ = runtime.cancel_pending_media_load_sequence(target);
         let _ = runtime.set_media_ready_state(target, 0);
         let _ = runtime.set_media_network_state(target, 0);
@@ -453,6 +468,12 @@ fn start_media_load(
     let Some(pending) = pending else {
         return;
     };
+    #[cfg(all(
+        feature = "media-ext",
+        any(target_os = "linux", target_os = "macos"),
+        target_pointer_width = "64"
+    ))]
+    unsafe { &mut *runtime_ptr }.register_video_load(handle, pending.id());
     super::apply_default_text_track_modes_for_media(scope, runtime_ptr, handle);
     super::queue_media_selection_text_track_loads(scope, runtime_ptr, handle, pending.id());
     let _ = unsafe { &mut *runtime_ptr }.set_media_error_code(handle, None);
@@ -504,6 +525,12 @@ fn start_media_load(
     match start {
         Ok(crate::network_host::MediaElementResourceFetchStart::Pending) => {}
         Ok(crate::network_host::MediaElementResourceFetchStart::PolicySkipped) => {
+            #[cfg(all(
+                feature = "media-ext",
+                any(target_os = "linux", target_os = "macos"),
+                target_pointer_width = "64"
+            ))]
+            unsafe { &mut *runtime_ptr }.reset_video_playback(scope, handle);
             let followup = unsafe { &mut *runtime_ptr }
                 .complete_pending_media_load_local_resource_if_matches(handle, pending.id(), true);
             queue_media_load_terminal_followup_if_ready(
@@ -620,6 +647,12 @@ pub(crate) fn dispatch_media_load_event_phase(
             let _ = unsafe { &mut *runtime_ptr }.set_media_network_state(handle, 1);
         }
         MediaLoadEventPhase::Error => {
+            #[cfg(all(
+                feature = "media-ext",
+                any(target_os = "linux", target_os = "macos"),
+                target_pointer_width = "64"
+            ))]
+            unsafe { &mut *runtime_ptr }.fail_video_load(scope, handle);
             let _ = unsafe { &mut *runtime_ptr }.set_media_error_code(handle, Some(4));
             let _ = unsafe { &mut *runtime_ptr }.set_media_ready_state(handle, 0);
             let _ = unsafe { &mut *runtime_ptr }.set_media_network_state(handle, 3);
@@ -653,6 +686,12 @@ pub(crate) fn dispatch_media_load_event_phase(
     }
     if phase == MediaLoadEventPhase::CanPlay {
         dispatch_media_autoplay_if_needed(scope, runtime_ptr, handle);
+        #[cfg(all(
+            feature = "media-ext",
+            any(target_os = "linux", target_os = "macos"),
+            target_pointer_width = "64"
+        ))]
+        crate::native_bridge::start_video_if_playing(scope, runtime_ptr, handle);
     }
     if phase == MediaLoadEventPhase::LoadedData
         && unsafe { &mut *runtime_ptr }
@@ -745,6 +784,14 @@ fn dispatch_media_autoplay_if_needed(
     }
     if let Some(event) = construct_simple_event(scope, "play", false, false, false) {
         let _ = dispatch_public_event(scope, runtime_ptr, handle, event);
+    }
+    #[cfg(all(
+        feature = "media-ext",
+        any(target_os = "linux", target_os = "macos"),
+        target_pointer_width = "64"
+    ))]
+    if unsafe { &*runtime_ptr }.manages_video(handle) {
+        return;
     }
     if let Some(event) = construct_simple_event(scope, "playing", false, false, false) {
         let _ = dispatch_public_event(scope, runtime_ptr, handle, event);

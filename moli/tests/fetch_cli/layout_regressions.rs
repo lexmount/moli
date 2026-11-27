@@ -1,8 +1,160 @@
-use super::{clean_output, subprocess::run_command_with_process_timeout};
+use super::{
+    clean_output,
+    subprocess::{PROCESS_WATCHDOG, run_command_with_process_timeout},
+    timing::TIMEOUT_MS,
+};
 use anyhow::{Context, Result, ensure};
+use axum::{Router, http::StatusCode, response::Html, routing::get};
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use serde_json::Value;
 use std::{process::Command, time::Duration};
+use tokio::net::TcpListener;
+
+const VISUAL_EXPORT_STYLE: &str = "<!doctype html><style>body{margin:0;background:white} \
+    .tile{display:block;width:12px;height:12px}</style>";
+
+fn run_visual_export(url: &str, dump: &str) -> Result<Vec<u8>> {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_moli"));
+    command.args([
+        "fetch",
+        "--http-no-proxy",
+        "*",
+        "--layout",
+        "--image",
+        "--wait",
+        "load",
+        "--timeout",
+        "60000",
+        "--http-timeout",
+        "60000",
+        "--dump",
+        dump,
+        url,
+    ]);
+    let output = run_command_with_process_timeout(command, Duration::from_secs(15))
+        .with_context(|| format!("{dump} failed to complete for {url}"))?;
+    ensure!(
+        output.status.success(),
+        "{dump} failed: {}",
+        clean_output(&output.stderr),
+    );
+    Ok(output.stdout)
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn cli_visual_exports_complete_with_pending_css_images() -> Result<()> {
+    let app = Router::new()
+        .route(
+            "/",
+            get(|| async {
+                Html(format!(
+                    r#"{VISUAL_EXPORT_STYLE}<div class="tile" style="background:lime url('/pending.svg')"></div><img class="tile" src="/ready.svg" alt="">"#
+                ))
+            }),
+        )
+        .route(
+            "/control",
+            get(|| async {
+                Html(format!(
+                    r#"{VISUAL_EXPORT_STYLE}<div class="tile" style="background:lime"></div><div class="tile" style="background:red"></div>"#
+                ))
+            }),
+        )
+        .route(
+            "/ready.svg",
+            get(|| async {
+                (
+                    [("content-type", "image/svg+xml")],
+                    r#"<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12"><rect width="12" height="12" fill="red"/></svg>"#,
+                )
+            }),
+        )
+        // Hold the CSS image response open throughout the exports.
+        .route("/pending.svg", get(std::future::pending::<StatusCode>));
+    let listener = TcpListener::bind("127.0.0.1:0").await?;
+    let base_url = format!("http://{}", listener.local_addr()?);
+    let server = tokio::spawn(async move { axum::serve(listener, app).await });
+
+    for dump in ["screenshot", "screenshot_full"] {
+        let actual = run_visual_export(&format!("{base_url}/"), dump)?;
+        let control = run_visual_export(&format!("{base_url}/control"), dump)?;
+        assert!(
+            actual == control,
+            "{dump} should paint the loaded <img> and the pending CSS image's fallback color"
+        );
+    }
+    assert_eq!(
+        lopdf::Document::load_mem(&run_visual_export(&format!("{base_url}/"), "pdf")?)?
+            .get_pages()
+            .len(),
+        1
+    );
+    server.abort();
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn cli_visual_exports_paint_shared_ready_css_images_on_first_capture() -> Result<()> {
+    let red_png = STANDARD.decode(
+        "iVBORw0KGgoAAAANSUhEUgAAAAwAAAAMCAIAAADZF8uwAAAAFUlEQVR4nGP4z8BAEBFWMapoABQBAPuQj3FCf3VbAAAAAElFTkSuQmCC",
+    )?;
+    let app = Router::new()
+        .route(
+            "/",
+            get(|| async {
+                Html(format!(
+                    r#"{VISUAL_EXPORT_STYLE}<div class="tile" style="background:lime url('/ready.png')"></div><img class="tile" src="/ready.png" alt="">"#
+                ))
+            }),
+        )
+        .route(
+            "/control",
+            get(|| async {
+                Html(format!(
+                    r#"{VISUAL_EXPORT_STYLE}<div class="tile" style="background:red"></div><div class="tile" style="background:red"></div>"#
+                ))
+            }),
+        )
+        .route(
+            "/ready.png",
+            get(move || async move { ([("content-type", "image/png")], red_png) }),
+        );
+    let listener = TcpListener::bind("127.0.0.1:0").await?;
+    let base_url = format!("http://{}", listener.local_addr()?);
+    let server = tokio::spawn(async move { axum::serve(listener, app).await });
+
+    for dump in ["screenshot", "screenshot_full"] {
+        let actual = run_visual_export(&format!("{base_url}/"), dump)?;
+        let control = run_visual_export(&format!("{base_url}/control"), dump)?;
+        assert!(
+            actual == control,
+            "{dump} should paint the same decoded PNG as a CSS background and an <img>"
+        );
+    }
+    let pdf = lopdf::Document::load_mem(&run_visual_export(&format!("{base_url}/"), "pdf")?)?;
+    let page = pdf.get_pages()[&1];
+    let resources = pdf.get_dict_in_dict(pdf.get_dictionary(page)?, b"Resources")?;
+    let xobjects = pdf.get_dict_in_dict(resources, b"XObject")?;
+    let content = lopdf::content::Content::decode(&pdf.get_page_content(page))?;
+    let mut image_draws = 0;
+    for operation in content.operations.iter().filter(|op| op.operator == "Do") {
+        let name = operation.operands[0].as_name()?;
+        let stream = pdf.dereference(xobjects.get(name)?)?.1.as_stream()?;
+        assert_eq!(stream.dict.get(b"Subtype")?.as_name()?, b"Image");
+        let pixels = stream.decompressed_content()?;
+        assert!(
+            !pixels.is_empty() && pixels.chunks(3).all(|pixel| pixel == [255, 0, 0]),
+            "PDF image should contain red pixels"
+        );
+        image_draws += 1;
+    }
+    assert_eq!(
+        image_draws, 2,
+        "PDF should draw both the background and <img>"
+    );
+    server.abort();
+    Ok(())
+}
 
 fn run_layout(html: &str, expression: &str, fonts: bool) -> Result<Value> {
     let url = format!("data:text/html;base64,{}", STANDARD.encode(html));
@@ -15,7 +167,7 @@ fn run_layout(html: &str, expression: &str, fonts: bool) -> Result<Value> {
         "*",
         "--layout",
         "--timeout",
-        "2000",
+        TIMEOUT_MS,
         "--eval",
         expression,
     ]);
@@ -23,7 +175,7 @@ fn run_layout(html: &str, expression: &str, fonts: bool) -> Result<Value> {
         command.arg("--font");
     }
     command.arg(url);
-    let output = run_command_with_process_timeout(command, Duration::from_secs(10))
+    let output = run_command_with_process_timeout(command, PROCESS_WATCHDOG)
         .context("layout probe process failed")?;
     ensure!(
         output.status.success(),

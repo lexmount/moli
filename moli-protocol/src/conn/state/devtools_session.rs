@@ -40,8 +40,8 @@ enum DevToolsSessionRegistration {
 #[derive(Clone, Debug, Default)]
 pub(crate) struct DevToolsSessionLifecycle {
     registration: Rc<Cell<DevToolsSessionRegistration>>,
-    pub(crate) main_admission: crate::conn::session_command_admission::SessionCommandAdmissionQueue,
-    pub(crate) io_admission: crate::conn::session_command_admission::SessionCommandAdmissionQueue,
+    pub(crate) main_admission: crate::conn::command_admission::CommandAdmissionQueue,
+    pub(crate) io_admission: crate::conn::command_admission::CommandAdmissionQueue,
 }
 
 // Admission queues are execution ownership, not configuration snapshots.

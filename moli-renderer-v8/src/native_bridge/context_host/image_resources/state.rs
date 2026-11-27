@@ -61,12 +61,19 @@ pub(super) struct ReadyImageResource {
 /// one document-owned slot still retains it.
 #[derive(Clone, Default)]
 pub(super) struct ReadyImageResourceIndex {
-    inner: Arc<Mutex<HashMap<ImageRequestKey, Weak<ReadyImageResource>>>>,
+    inner: Arc<Mutex<ReadyImageResourceSnapshot>>,
 }
 
-impl ReadyImageResourceIndex {
-    pub(super) fn get(&self, request: &ImageRequestKey) -> Option<Arc<ReadyImageResource>> {
-        self.inner.lock().get(request).and_then(Weak::upgrade)
+/// Freezes the exact requests available to a paint without keeping their
+/// decoded content alive after the owning slots are retired.
+#[derive(Clone, Default)]
+pub(super) struct ReadyImageResourceSnapshot(
+    Arc<HashMap<ImageRequestKey, Weak<ReadyImageResource>>>,
+);
+
+impl ReadyImageResourceSnapshot {
+    fn get(&self, request: &ImageRequestKey) -> Option<Arc<ReadyImageResource>> {
+        self.0.get(request).and_then(Weak::upgrade)
     }
 
     /// CSS paint may only reuse content that has actually been decoded.
@@ -77,22 +84,35 @@ impl ReadyImageResourceIndex {
         self.get(request)
             .filter(|resource| resource.pixels.is_some() || resource.svg.is_some())
     }
+}
+
+impl ReadyImageResourceIndex {
+    pub(super) fn snapshot(&self) -> ReadyImageResourceSnapshot {
+        self.inner.lock().clone()
+    }
+
+    pub(super) fn get(&self, request: &ImageRequestKey) -> Option<Arc<ReadyImageResource>> {
+        self.inner.lock().get(request)
+    }
+
+    pub(super) fn get_decoded(&self, request: &ImageRequestKey) -> Option<Arc<ReadyImageResource>> {
+        self.inner.lock().get_decoded(request)
+    }
 
     pub(super) fn insert(&self, request: ImageRequestKey, resource: &Arc<ReadyImageResource>) {
-        self.inner.lock().insert(request, Arc::downgrade(resource));
+        Arc::make_mut(&mut self.inner.lock().0).insert(request, Arc::downgrade(resource));
     }
 
     pub(super) fn contains_live(&self, request: &ImageRequestKey) -> bool {
         self.inner
             .lock()
+            .0
             .get(request)
             .is_some_and(|resource| resource.strong_count() > 0)
     }
 
     pub(super) fn prune_dead(&self) {
-        self.inner
-            .lock()
-            .retain(|_, resource| resource.strong_count() > 0);
+        Arc::make_mut(&mut self.inner.lock().0).retain(|_, resource| resource.strong_count() > 0);
     }
 }
 
@@ -111,7 +131,11 @@ impl ImageResourceStore {
         Self {
             slots: HashMap::new(),
             css: CssImageResourceStore::new(ready_by_request.clone(), visual_generation.clone()),
-            scanned: ScannedImagePreloadStore::new(ready_by_request.clone(), decode.clone()),
+            scanned: ScannedImagePreloadStore::new(
+                ready_by_request.clone(),
+                decode.clone(),
+                visual_generation.clone(),
+            ),
             ready_by_request,
             decode,
             visual_generation,
@@ -283,6 +307,28 @@ impl ImageResourceStore {
         })
     }
 
+    pub(super) fn canvas_image_for_draw(
+        &self,
+        element: DomHandle,
+        origin: &moli_url::WebOrigin,
+    ) -> Option<(Arc<moli_image::RgbaImage>, f64, bool)> {
+        let slot = self.slots.get(&element)?;
+        let ImageResourceState::Ready(resource) = &slot.state else {
+            return None;
+        };
+        let url = url::Url::parse(slot.identity.request_key.url()).ok()?;
+        let readable = resource.descriptor.readable_from_request_origin;
+        if url.scheme() != "file" && (!readable || !origin.same_origin_url(&url)) {
+            return None;
+        }
+        let density = if resource.density > 0.0 {
+            resource.density
+        } else {
+            1.0
+        };
+        Some((resource.pixels.clone()?, density, readable))
+    }
+
     pub(super) fn is_ready(&self, element: DomHandle) -> bool {
         self.slots
             .get(&element)
@@ -342,6 +388,15 @@ impl ImageResourceStore {
     #[cfg(feature = "devtools")]
     pub(super) fn visual_generation(&self) -> u64 {
         self.visual_generation.current()
+    }
+
+    #[cfg(all(
+        feature = "media-ext",
+        any(target_os = "linux", target_os = "macos"),
+        target_pointer_width = "64"
+    ))]
+    pub(in crate::native_bridge::context_host) fn bump_visual_generation(&self) {
+        self.visual_generation.bump();
     }
 
     #[cfg(feature = "molio")]

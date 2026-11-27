@@ -47,6 +47,7 @@ fn retained_stylo_invalidator_narrows_focus_sibling_cache_invalidation() {
     );
 
     let media = crate::protocol_types::EmulatedMediaOverrides::default();
+    host.set_active_element_handle(Some(source));
     engine.invalidate_for_focus_change(&host, None, Some(source), &media);
     engine.drain_pending_style_invalidations_for_document_for_test(&host, document);
 
@@ -107,11 +108,13 @@ fn retained_stylo_invalidator_narrows_checked_sibling_cache_invalidation() {
     );
 
     let media = crate::protocol_types::EmulatedMediaOverrides::default();
+    let old_state = engine.retained_current_element_state(&host, source);
+    assert!(host.set_checked_state(source, true));
     engine.invalidate_for_element_state_change_with_old_state(
         &host,
         source,
         StyloElementState::CHECKED,
-        None,
+        old_state,
         &media,
     );
     engine.drain_pending_style_invalidations_for_document_for_test(&host, document);
@@ -806,6 +809,7 @@ fn retained_stylo_invalidator_uses_snapshots_for_mixed_attribute_state_batches()
         &host,
         &[StyleMutationEffect::Attribute {
             element: attr_source,
+            namespace: None,
             name: "class".into(),
             old_value: None,
             new_value: Some("marker".into()),
@@ -900,6 +904,7 @@ fn retained_stylo_invalidator_accepts_inactive_media_dependency_as_exact_empty()
         &host,
         &[StyleMutationEffect::Attribute {
             element: source,
+            namespace: None,
             name: "class".into(),
             old_value: None,
             new_value: Some("probe".into()),
@@ -971,6 +976,7 @@ fn retained_stylo_invalidator_narrows_target_sibling_cache_invalidation() {
     );
 
     let media = crate::protocol_types::EmulatedMediaOverrides::default();
+    assert!(host.set_document_target_element(document, Some(source)));
     engine.invalidate_for_target_change(&host, None, Some(source), &media);
     engine.drain_pending_style_invalidations_for_document_for_test(&host, document);
 
@@ -1087,12 +1093,14 @@ fn retained_stylo_invalidator_uses_snapshots_for_mixed_attribute_focus_batches()
         &[
             StyleMutationEffect::Attribute {
                 element: attr_scoped_marker,
+                namespace: None,
                 name: "class".to_owned(),
                 old_value: Some("marker".to_owned()),
                 new_value: Some("other".to_owned()),
             },
             StyleMutationEffect::Attribute {
                 element: attr_loose_marker,
+                namespace: None,
                 name: "class".to_owned(),
                 old_value: Some("marker".to_owned()),
                 new_value: Some("other".to_owned()),
@@ -1240,12 +1248,14 @@ fn retained_stylo_invalidator_uses_snapshots_for_mixed_attribute_target_batches(
         &[
             StyleMutationEffect::Attribute {
                 element: attr_scoped_marker,
+                namespace: None,
                 name: "class".to_owned(),
                 old_value: Some("marker".to_owned()),
                 new_value: Some("other".to_owned()),
             },
             StyleMutationEffect::Attribute {
                 element: attr_loose_marker,
+                namespace: None,
                 name: "class".to_owned(),
                 old_value: Some("marker".to_owned()),
                 new_value: Some("other".to_owned()),

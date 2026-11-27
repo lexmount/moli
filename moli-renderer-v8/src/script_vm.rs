@@ -653,7 +653,7 @@ mod indexed_db_task_body;
 #[cfg(feature = "devtools")]
 mod input_dispatch;
 #[cfg(feature = "devtools")]
-pub(crate) use input_dispatch::MouseDispatchCompletion;
+pub(crate) use input_dispatch::{MouseDispatchCompletion, WheelDispatchOptions};
 mod input_helpers;
 mod inspector;
 mod main_world;
@@ -800,6 +800,7 @@ pub(crate) use post_parse::{
 fn input_dispatch_outcome(handled: bool) -> RendererInputDispatchOutcome {
     RendererInputDispatchOutcome {
         handled,
+        wheel: None,
         triggered_top_level_navigation: false,
         pending_download: None,
         pending_file_chooser: None,
@@ -957,6 +958,8 @@ pub(super) struct ScriptVm {
     script_execution_memory: script_execution_memory::ScriptExecutionMemoryCounters,
     runtime_observable_source_queue: RendererRuntimeObservableSourceQueue,
     page_context_cancel_tx: RendererPageContextCancelSender,
+    #[cfg(feature = "devtools")]
+    pub(crate) wheel_input: Rc<RefCell<crate::wheel_input::WheelInputController>>,
     pressed_mouse_buttons: i32,
     hovered_mouse_handle: Option<DomHandle>,
     #[cfg(feature = "devtools")]
@@ -2163,6 +2166,12 @@ impl ScriptVmPageRealmBootstrap {
                 context_host.document_base_url_for_handle(document_handle),
                 initial_origin,
             )
+            .with_sandboxed_origin(
+                context_host
+                    .document_policy_container()
+                    .sandbox
+                    .forces_opaque_origin,
+            )
         };
         let initial_document_loader =
             initial_document_loader_bootstrap.commit(initial_document_context);
@@ -2483,6 +2492,8 @@ impl ScriptVmDefaultWorldBootstrap {
             script_execution_memory:
                 script_execution_memory::ScriptExecutionMemoryCounters::default(),
             runtime_observable_source_queue: RendererRuntimeObservableSourceQueue::default(),
+            #[cfg(feature = "devtools")]
+            wheel_input: Default::default(),
             pressed_mouse_buttons: 0,
             hovered_mouse_handle: None,
             #[cfg(feature = "devtools")]

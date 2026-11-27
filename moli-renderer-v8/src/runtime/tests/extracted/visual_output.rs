@@ -1,6 +1,353 @@
 use super::*;
 
 #[tokio::test(flavor = "multi_thread")]
+async fn capture_screenshot_paints_gradient_border_images() {
+    let runtime = initialize_layout_test_runtime();
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default())
+        .expect("default resource request client");
+    let page = create_test_html_page(
+        &runtime,
+        &loader,
+        url::Url::parse("https://example.test/gradient-border-image").unwrap(),
+        r#"<!doctype html>
+        <style>
+            body { margin: 0; background: white }
+            div { width: 60px; height: 48px; border: 6px solid lime }
+            .red { border-image: linear-gradient(red, red) 1; border-radius: 20px }
+            .transparent { border-image: linear-gradient(transparent, transparent) 1 }
+            p { margin: 0; font: 20px/30px sans-serif }
+            span { border: 6px solid lime; border-image: linear-gradient(blue, blue) 1 }
+        </style>
+        <div class="red"></div><div class="transparent"></div><p><span>Inline</span></p>"#,
+    )
+    .await;
+    let screenshot = capture_screenshot_with_request(
+        &page,
+        super::RendererCaptureScreenshotRequest {
+            region: super::RendererScreenshotRegion::PageClip(super::RendererScreenshotClip {
+                x: 0.0,
+                y: 0.0,
+                width: 80.0,
+                height: 155.0,
+                scale: 1.0,
+            }),
+            ..super::RendererCaptureScreenshotRequest::viewport_png()
+        },
+    )
+    .await;
+    assert_eq!(decoded_png_pixel(&screenshot.bytes, 0, 0), [255, 0, 0, 255]);
+    assert_eq!(
+        decoded_png_pixel(&screenshot.bytes, 30, 5),
+        [255, 0, 0, 255]
+    );
+    assert_eq!(decoded_png_pixel(&screenshot.bytes, 30, 6), [255; 4]);
+    assert_eq!(decoded_png_pixel(&screenshot.bytes, 30, 62), [255; 4]);
+    assert_eq!(
+        decoded_png_pixel(&screenshot.bytes, 2, 135),
+        [0, 0, 255, 255]
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn capture_screenshot_continues_border_image_across_inline_breaks() {
+    let runtime = initialize_layout_test_runtime();
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default())
+        .expect("default resource request client");
+    let page = create_test_html_page(
+        &runtime,
+        &loader,
+        url::Url::parse("https://example.test/inline-border-image").unwrap(),
+        r#"<!doctype html>
+        <style>
+            body { margin: 0; background: white }
+            p { margin: 20px; width: 160px; font: 20px/40px monospace }
+            span {
+                color: transparent;
+                border: 6px solid lime;
+                border-image: linear-gradient(90deg, red 50%, blue 50%) 1 / 6px / 2px 4px
+            }
+        </style>
+        <p><span>AAAA<br>BBBB<br>CCCC<br>DDDD</span></p>
+        <p dir="rtl"><span>AAAA<br>BBBB<br>CCCC<br>DDDD</span></p>"#,
+    )
+    .await;
+    let screenshot = capture_screenshot_with_request(
+        &page,
+        super::RendererCaptureScreenshotRequest {
+            region: super::RendererScreenshotRegion::PageClip(super::RendererScreenshotClip {
+                x: 0.0,
+                y: 0.0,
+                width: 200.0,
+                height: 390.0,
+                scale: 1.0,
+            }),
+            ..super::RendererCaptureScreenshotRequest::viewport_png()
+        },
+    )
+    .await;
+    let (reply, _) = page
+        .run_async_command(RendererPageCommand::EvaluateExpression {
+            expression: r#"JSON.stringify(Array.from(document.querySelectorAll('span'), span =>
+                Array.from(span.getClientRects(), ({x, y, width, height}) =>
+                    [x, y, width, height])))"#
+                .to_owned(),
+            await_promise: false,
+        })
+        .await
+        .unwrap();
+    let value = renderer_json_value(reply).unwrap();
+    let rects: [Vec<[f32; 4]>; 2] = serde_json::from_str(value.as_str().unwrap()).unwrap();
+    let red = [255, 0, 0, 255];
+    let blue = [0, 0, 255, 255];
+    let white = [255; 4];
+    for (rtl, fragments) in [false, true].into_iter().zip(rects) {
+        assert_eq!(fragments.len(), 4);
+        for (line, [x, y, width, height]) in fragments.into_iter().enumerate() {
+            let left = if line == if rtl { 3 } else { 0 } {
+                red
+            } else {
+                white
+            };
+            let right = if line == if rtl { 0 } else { 3 } {
+                blue
+            } else {
+                white
+            };
+            let mid_y = (y + height / 2.0).round() as u32;
+            let pixel = |x: f32, y| decoded_png_pixel(&screenshot.bytes, x.round() as u32, y);
+            assert_eq!(
+                pixel(x - 2.0, mid_y),
+                left,
+                "left outset of line {line}, rtl={rtl}"
+            );
+            assert_eq!(
+                pixel(x + 1.0, mid_y),
+                left,
+                "left edge of line {line}, rtl={rtl}"
+            );
+            assert_eq!(
+                pixel(x + width - 2.0, mid_y),
+                right,
+                "right edge of line {line}, rtl={rtl}"
+            );
+            assert_eq!(
+                pixel(x + width + 2.0, mid_y),
+                right,
+                "right outset of line {line}, rtl={rtl}"
+            );
+
+            // The middle of the top edge follows the unbroken gradient. It
+            // falls in different color bands on the first and last lines.
+            let top = if (line < 2) != rtl { red } else { blue };
+            assert_eq!(
+                pixel(x + width / 2.0, y.round() as u32),
+                top,
+                "top edge of line {line}, rtl={rtl}"
+            );
+        }
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn capture_screenshot_scales_numeric_gradient_border_image_slices_with_zoom() {
+    let runtime = initialize_layout_test_runtime();
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default())
+        .expect("default resource request client");
+    let page = create_test_html_page(
+        &runtime,
+        &loader,
+        url::Url::parse("https://example.test/zoomed-border-image").unwrap(),
+        r#"<!doctype html>
+        <style>
+            body { margin: 0; background: white }
+            div {
+                float: left; width: 60px; height: 60px; border: 20px solid lime; zoom: 2;
+                border-image: linear-gradient(red 10%, blue 10%) 20 / 20px
+            }
+            .percent { border-image-slice: 20% }
+        </style>
+        <div></div><div class="percent"></div>"#,
+    )
+    .await;
+    let screenshot = capture_screenshot_with_request(
+        &page,
+        super::RendererCaptureScreenshotRequest {
+            region: super::RendererScreenshotRegion::PageClip(super::RendererScreenshotClip {
+                x: 0.0,
+                y: 0.0,
+                width: 400.0,
+                height: 50.0,
+                scale: 1.0,
+            }),
+            ..super::RendererCaptureScreenshotRequest::viewport_png()
+        },
+    )
+    .await;
+    for x in [100, 300] {
+        assert_eq!(
+            decoded_png_pixel(&screenshot.bytes, x, 10),
+            [255, 0, 0, 255]
+        );
+        assert_eq!(
+            decoded_png_pixel(&screenshot.bytes, x, 30),
+            [0, 0, 255, 255]
+        );
+        assert_eq!(decoded_png_pixel(&screenshot.bytes, x, 40), [255; 4]);
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn capture_screenshot_paints_sliced_border_images_after_resource_load() {
+    let runtime = initialize_layout_test_runtime();
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default())
+        .expect("default resource request client");
+    loader.set_image_fetch_enabled(true);
+    let svg = br#"<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12">
+        <rect width="12" height="12" fill="red"/>
+        <path d="M2 0h4v2H2zm0 10h4v2H2z" fill="blue"/>
+        <path d="M6 0h4v2H6zm0 10h4v2H6z" fill="cyan"/>
+        <path d="M0 2h2v8H0zm10 0h2v8h-2z" fill="magenta"/>
+        <rect x="2" y="2" width="8" height="8" fill="yellow"/>
+    </svg>"#;
+    let (base_url, request_seen, release_response, server) =
+        spawn_owner_wake_gated_binary_server_with_content_type(
+            "/border.svg",
+            svg.to_vec(),
+            "image/svg+xml",
+        )
+        .await;
+    let data_svg = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, svg);
+    let top = [[255, 0, 0, 255], [0, 0, 255, 255], [255, 0, 0, 255]];
+    let middle = [[255, 0, 255, 255], [255, 255, 0, 255], [255, 0, 255, 255]];
+    let raster = moli_image::RgbaImage::try_new(
+        3,
+        3,
+        [top, middle, top].into_iter().flatten().flatten().collect(),
+    )
+    .unwrap();
+    let png = moli_image::encode_png(&raster).unwrap();
+    let data_png = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, png.bytes);
+    let page = create_test_html_page_at_document_commit(
+        &runtime,
+        &loader,
+        url::Url::parse(&format!("{base_url}/page.html")).unwrap(),
+        &r#"<!doctype html>
+        <style>
+            body { margin: 0; background: white }
+            div {
+                position: absolute; left: 8px; width: 36px; height: 20px;
+                border: 6px solid lime;
+                border-image: url(/border.svg) 2 fill / 4px / 8px space stretch
+            }
+            .space { top: 8px }
+            .round { top: 60px; border-image-repeat: round }
+            .repeat { top: 112px; border-image-repeat: repeat }
+            .data {
+                top: 164px;
+                border-image-source: url("data:image/svg+xml;base64,SVG_SOURCE");
+                border-image-slice: 16.666667% fill
+            }
+            .raster { top: 216px; border-image: url("data:image/png;base64,PNG_SOURCE") 1 fill / 4px }
+            .zoom { left: 45px; top: 108px; zoom: 2 }
+            /* Valid dimensions with corrupt compressed pixel data. */
+            .broken {
+                left: 65px; top: 8px;
+                border-image-source: url("data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAABklEQVRicm9rZW5jnxQXAAAAAElFTkSuQmCC")
+            }
+        </style>
+        <div class="space"></div><div class="round"></div><div class="repeat"></div>
+        <div class="data"></div><div class="raster"></div><div class="raster zoom"></div>
+        <div class="broken"></div>"#
+            .replace("SVG_SOURCE", &data_svg)
+            .replace("PNG_SOURCE", &data_png),
+    )
+    .await;
+    let request = super::RendererCaptureScreenshotRequest {
+        region: super::RendererScreenshotRegion::PageClip(super::RendererScreenshotClip {
+            x: 0.0,
+            y: 0.0,
+            width: 170.0,
+            height: 250.0,
+            scale: 1.0,
+        }),
+        ..super::RendererCaptureScreenshotRequest::viewport_png()
+    };
+    let unrequested = capture_screenshot_with_request(&page, request.clone()).await;
+    assert_eq!(
+        decoded_png_pixel(&unrequested.bytes, 30, 10),
+        [0, 255, 0, 255]
+    );
+    tokio::time::timeout(Duration::from_secs(2), request_seen)
+        .await
+        .expect("border image should be discovered by layout")
+        .expect("border image request signal should remain open");
+    let pending = capture_screenshot_with_request(&page, request.clone()).await;
+    assert_eq!(decoded_png_pixel(&pending.bytes, 30, 10), [255; 4]);
+    release_response.send(()).expect("release the border image");
+    server
+        .await
+        .expect("border image fixture server should finish");
+    let painted = tokio::time::timeout(Duration::from_secs(3), async {
+        loop {
+            let screenshot = capture_screenshot_with_request(&page, request.clone()).await;
+            if decoded_png_pixel(&screenshot.bytes, 1, 1) == [255, 0, 0, 255]
+                && decoded_png_pixel(&screenshot.bytes, 1, 157) == [255, 0, 0, 255]
+                && decoded_png_pixel(&screenshot.bytes, 11, 219) == [255, 0, 0, 255]
+                && decoded_png_pixel(&screenshot.bytes, 72, 10) == [0, 255, 0, 255]
+            {
+                break screenshot;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("ordinary captures should paint the decoded border images");
+    for (x, y, color) in [
+        (1, 1, [255, 0, 0, 255]),     // outset corner
+        (5, 1, [255, 255, 255, 255]), // space before the first tile
+        (9, 1, [0, 0, 255, 255]),     // top edge
+        (17, 1, [0, 255, 255, 255]),
+        (1, 20, [255, 0, 255, 255]), // left edge
+        (9, 20, [255, 255, 0, 255]), // fill
+        (5, 53, [0, 0, 255, 255]),   // round starts at the edge
+        (12, 53, [0, 255, 255, 255]),
+        (5, 105, [0, 255, 255, 255]), // repeat clips a centered tile
+        (9, 105, [0, 0, 255, 255]),
+        (1, 157, [255, 0, 0, 255]), // SVG data URL with percentage slices
+        (17, 157, [0, 255, 255, 255]),
+        (11, 219, [255, 0, 0, 255]), // raster corner at the cut
+        (12, 219, [0, 0, 255, 255]),
+        (12, 220, [255, 255, 0, 255]),
+        (100, 221, [0, 0, 255, 255]), // zoom leaves numeric raster slices in source pixels
+        (72, 10, [0, 255, 0, 255]),   // failed decode restores the ordinary border
+    ] {
+        assert_eq!(
+            decoded_png_pixel(&painted.bytes, x, y),
+            color,
+            "pixel ({x}, {y})"
+        );
+    }
+    let outset_only = capture_screenshot_with_request(
+        &page,
+        super::RendererCaptureScreenshotRequest {
+            region: super::RendererScreenshotRegion::PageClip(super::RendererScreenshotClip {
+                x: 0.0,
+                y: 0.0,
+                width: 2.0,
+                height: 2.0,
+                scale: 1.0,
+            }),
+            ..request
+        },
+    )
+    .await;
+    assert_eq!(
+        decoded_png_pixel(&outset_only.bytes, 1, 1),
+        [255, 0, 0, 255]
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn capture_screenshot_uses_current_root_computed_background_and_viewport() {
     let runtime = initialize_layout_test_runtime();
     let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default())

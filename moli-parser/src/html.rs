@@ -100,6 +100,14 @@ pub struct DocumentStream {
     input: RefCell<HtmlParserInputStream>,
 }
 
+impl std::fmt::Debug for DocumentStream {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("DocumentStream")
+            .finish_non_exhaustive()
+    }
+}
+
 #[derive(Debug, Default)]
 struct HtmlParserInputStream {
     end_segments: VecDeque<String>,
@@ -1010,7 +1018,7 @@ impl DocumentStream {
         self.finish_with_runtime_dom_sinks(sinks)
     }
 
-    fn finish_with_runtime_dom_consumer_without_element_creation<T>(
+    pub fn finish_with_runtime_dom_consumer_without_element_creation<T>(
         self,
         consumer: &mut T,
     ) -> ParserFinishDiscoverySignals

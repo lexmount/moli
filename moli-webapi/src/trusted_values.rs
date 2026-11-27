@@ -17,7 +17,7 @@ pub const TRUSTED_TYPES_CREATE_SCRIPT_SLOT: &str = "__moliTrustedTypesCreateScri
 pub const TRUSTED_TYPES_CREATE_SCRIPT_URL_SLOT: &str = "__moliTrustedTypesCreateScriptURL";
 #[derive(WebApiObject)]
 #[webapi(plain)]
-struct TrustedTypeObjectDeclaration<'scope> {
+pub struct TrustedTypeObjectDeclaration<'scope> {
     #[webapi(slot = TRUSTED_TYPE_VALUE_SLOT)]
     value: v8::Local<'scope, v8::String>,
 }
@@ -112,6 +112,14 @@ pub fn trusted_type_string<'s>(
     value: v8::Local<'s, v8::Value>,
     kind: TrustedTypeKind,
 ) -> Option<String> {
+    trusted_type_string16(scope, value, kind).map(|units| String::from_utf16_lossy(&units))
+}
+
+pub fn trusted_type_string16<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    value: v8::Local<'s, v8::Value>,
+    kind: TrustedTypeKind,
+) -> Option<Vec<u16>> {
     let object = v8::Local::<v8::Object>::try_from(value).ok()?;
     if !kind.interface().is_instance(scope, object) {
         return None;
@@ -119,8 +127,9 @@ pub fn trusted_type_string<'s>(
     let value = get_private_value(scope, object, TRUSTED_TYPE_VALUE_SLOT)?;
     value
         .to_string(scope)
-        .map(|value| value.to_rust_string_lossy(scope))
+        .map(|value| moli_v8_util::v8_string_to_u16_string(scope, value).into_vec())
 }
+
 pub fn build_trusted_type_constructor<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     kind: TrustedTypeKind,

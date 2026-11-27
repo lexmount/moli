@@ -6,13 +6,11 @@ use std::{
     },
 };
 
-use moli_crypto::Sha256Context;
-use moli_selector::StyloSourceDependencySummary;
 use style_traits::ToCss;
 
 use super::super::{
-    source_id::{StyleScopeId, StyleSourceId, StyleSourceKind},
-    source_key::{StyleSourceKey, StyleSourceSetKey},
+    source_id::{StyleSourceId, StyleSourceKind},
+    source_key::StyleSourceKey,
 };
 use super::shared_cache::{SharedStyleSourceContents, shared_style_source_contents};
 use crate::{
@@ -72,11 +70,6 @@ enum StyloStylesheetSourceContents {
 pub(in crate::style_engine) enum LiveStylesheetCascadeUpdate {
     Full,
     Rules(Vec<crate::live_stylesheet::LiveStylesheetRuleMutation>),
-}
-
-#[derive(Clone, Debug, Default, PartialEq, Eq, Hash)]
-pub(in crate::style_engine) struct StyleSourceMetadata {
-    pub(in crate::style_engine) dependency_summary: StyloSourceDependencySummary,
 }
 
 /// Immutable stylesheet source produced by processing an inline `<style>` owner.
@@ -382,32 +375,6 @@ impl StyloStylesheetSource {
         self.origin_clean
     }
 
-    pub(in crate::style_engine) fn cache_key(&self) -> StyleSourceKey {
-        self.cache_key
-    }
-
-    pub(in crate::style_engine) fn source_dependency_summary(
-        &self,
-    ) -> StdArc<StyloSourceDependencySummary> {
-        match &self.contents {
-            StyloStylesheetSourceContents::Text { shared } => shared.source_dependency_summary(),
-            StyloStylesheetSourceContents::Live {
-                stylesheet,
-                contents_revision,
-                cascade_generation,
-                derived_state,
-                ..
-            } => derived_state.source_dependency_summary(
-                *contents_revision,
-                *cascade_generation,
-                || {
-                    super::super::stylesheet::style_source_metadata_for_stylesheet(stylesheet)
-                        .dependency_summary
-                },
-            ),
-        }
-    }
-
     pub(crate) fn font_faces(&self) -> StdArc<[StylesheetFontFaceDescriptor]> {
         match &self.contents {
             StyloStylesheetSourceContents::Text { shared } => shared.font_faces(),
@@ -448,10 +415,6 @@ impl StyloStylesheetSource {
 
     pub(in crate::style_engine) fn media_text(&self) -> &str {
         self.media_text.as_ref()
-    }
-
-    pub(in crate::style_engine) fn has_authoritative_runtime_media(&self) -> bool {
-        matches!(&self.contents, StyloStylesheetSourceContents::Live { .. })
     }
 
     pub(in crate::style_engine) fn has_same_installation_identity(&self, other: &Self) -> bool {
@@ -618,74 +581,6 @@ impl OwnerStyleSheetSource {
 
     pub(crate) fn owner(&self) -> DomHandle {
         self.owner
-    }
-}
-
-pub(in crate::style_engine) fn stylesheet_sources_cache_key(
-    sources: &[StyloStylesheetSource],
-) -> StyleSourceSetKey {
-    let mut hasher = Sha256Context::new();
-    hasher.update(sources.len().to_le_bytes());
-    for source in sources {
-        hasher.update(source.cache_key().fingerprint);
-        let media_text = source.media_text().as_bytes();
-        hasher.update(media_text.len().to_le_bytes());
-        hasher.update(media_text);
-        update_style_source_identity_hash(&mut hasher, source.source_id());
-        match source.adopted_client_id() {
-            Some(client_id) => {
-                hasher.update([1]);
-                hasher.update(client_id.to_le_bytes());
-            }
-            None => hasher.update([0]),
-        }
-    }
-    StyleSourceSetKey {
-        len: sources.len(),
-        fingerprint: hasher.finish(),
-    }
-}
-
-fn update_style_source_identity_hash(
-    hasher: &mut Sha256Context,
-    source_id: Option<&StyleSourceId>,
-) {
-    let Some(source_id) = source_id else {
-        hasher.update([0]);
-        return;
-    };
-    hasher.update([1]);
-    update_style_scope_identity_hash(hasher, source_id.scope_id);
-    match &source_id.kind {
-        StyleSourceKind::OwnerStyleSheet { owner } => {
-            hasher.update([0]);
-            hasher.update(owner.index().to_le_bytes());
-        }
-        StyleSourceKind::LinkedStyleSheet { owner } => {
-            hasher.update([1]);
-            hasher.update(owner.index().to_le_bytes());
-        }
-        StyleSourceKind::DocumentAdoptedStyleSheet { client_id } => {
-            hasher.update([2]);
-            hasher.update(client_id.to_le_bytes());
-        }
-        StyleSourceKind::ShadowRootAdoptedStyleSheet { client_id } => {
-            hasher.update([3]);
-            hasher.update(client_id.to_le_bytes());
-        }
-    }
-}
-
-fn update_style_scope_identity_hash(hasher: &mut Sha256Context, scope_id: StyleScopeId) {
-    match scope_id {
-        StyleScopeId::Document(document) => {
-            hasher.update([0]);
-            hasher.update(document.index().to_le_bytes());
-        }
-        StyleScopeId::ShadowRoot(root) => {
-            hasher.update([1]);
-            hasher.update(root.index().to_le_bytes());
-        }
     }
 }
 

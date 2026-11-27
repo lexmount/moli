@@ -1044,7 +1044,7 @@ fn live_inline_css_text_reset_builds_pdb_storage_for_plain_properties() {
 
     assert_eq!(
         result,
-        "block||collapse|0.5|opacity,visibility|opacity: 0.5; visibility: collapse;|opacity: 0.5; visibility: collapse;/value|block|0.25|--token: value; display: block; opacity: 0.25;/one|two|center start|center|start|--before: one; place-content: center start; --after: two;|--before: one; place-content: center start; --after: two;"
+        "block||collapse|0.5|visibility,opacity|visibility: collapse; opacity: 0.5;|visibility: collapse; opacity: 0.5;/value|block|0.25|--token: value; display: block; opacity: 0.25;/one|two|center start|center|start|--before: one; place-content: center start; --after: two;|--before: one; place-content: center start; --after: two;"
     );
 }
 #[test]
@@ -1504,7 +1504,7 @@ fn live_inline_pdb_storage_directly_mutates_plain_properties() {
 
     assert_eq!(
         result,
-        "block||collapse|0.5|2|opacity,visibility|opacity: 0.5; visibility: collapse;|opacity: 0.5; visibility: collapse;"
+        "block||collapse|0.5|2|visibility,opacity|visibility: collapse; opacity: 0.5;|visibility: collapse; opacity: 0.5;"
     );
 }
 #[test]

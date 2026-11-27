@@ -189,7 +189,7 @@ pub(crate) fn accept_parser_owned_import_map_handoff(
             }
         }
         PreparedImportMapSource::ExternalUnsupported => {
-            let _ = vm.document_runtime.enqueue_script_event_lifecycle_work(
+            vm.document_runtime.enqueue_script_event_lifecycle_work(
                 crate::host::ScriptEventKind::Error,
                 &host_script_handle,
             );

@@ -15,6 +15,7 @@ struct RendererNavigationInitiatorData {
     url: url::Url,
     origin: String,
     referrer_policy: String,
+    allows_local_files: bool,
 }
 
 impl RendererNavigationInitiator {
@@ -22,6 +23,7 @@ impl RendererNavigationInitiator {
         url: url::Url,
         origin: moli_url::WebOrigin,
         referrer_policy: Option<String>,
+        allows_local_files: bool,
     ) -> Self {
         Self {
             data: Arc::new(RendererNavigationInitiatorData {
@@ -33,6 +35,7 @@ impl RendererNavigationInitiator {
                         .unwrap_or_else(|| moli_fetch::DEFAULT_REFERRER_POLICY.to_owned())
                 },
                 origin: origin.ascii_serialization().to_owned(),
+                allows_local_files,
             }),
         }
     }
@@ -43,6 +46,23 @@ impl RendererNavigationInitiator {
 
     pub fn origin(&self) -> moli_url::WebOrigin {
         moli_url::WebOrigin::from_serialized(&self.data.origin)
+    }
+
+    pub fn allows_local_file_navigation(&self) -> bool {
+        self.data.allows_local_files
+    }
+
+    pub(crate) fn authorize_file_navigation(
+        &self,
+        request: moli_fetch::Request,
+    ) -> moli_fetch::Request {
+        if request.url.scheme() == "file" && self.allows_local_file_navigation() {
+            request.with_local_file_navigation_access(
+                moli_fetch::LocalFileNavigationAccess::BrowserGranted,
+            )
+        } else {
+            request
+        }
     }
 
     pub fn request_metadata(&self) -> moli_fetch::SubresourceRequestMetadata {

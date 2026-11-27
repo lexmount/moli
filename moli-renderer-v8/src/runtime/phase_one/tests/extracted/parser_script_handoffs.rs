@@ -357,6 +357,7 @@ fn external_async_handoff_marks_parser_stream_already_started_on_live_backend() 
                     layout_configuration: moli_page_types::LayoutConfiguration {
                         policy: moli_page_types::LayoutPolicy::default(),
                         scrollbars_hidden: false,
+                        ..Default::default()
                     },
                     wpt_extensions_enabled: false,
                 navigation_bootstrap_entry: None,
@@ -480,6 +481,7 @@ fn blocking_classic_handoff_registers_parser_owned_handle_on_live_backend() {
                     layout_configuration: moli_page_types::LayoutConfiguration {
                         policy: moli_page_types::LayoutPolicy::default(),
                         scrollbars_hidden: false,
+                        ..Default::default()
                     },
                     wpt_extensions_enabled: false,
                 navigation_bootstrap_entry: None,
@@ -613,6 +615,7 @@ fn non_async_post_parse_handoff_registers_pending_before_source_and_seals_withou
                     layout_configuration: moli_page_types::LayoutConfiguration {
                         policy: moli_page_types::LayoutPolicy::default(),
                         scrollbars_hidden: false,
+                        ..Default::default()
                     },
                     wpt_extensions_enabled: false,
                 navigation_bootstrap_entry: None,
@@ -781,6 +784,7 @@ fn parser_owned_external_module_handoff_starts_pending_script_tree_root_fetch() 
                     layout_configuration: moli_page_types::LayoutConfiguration {
                         policy: moli_page_types::LayoutPolicy::default(),
                         scrollbars_hidden: false,
+                        ..Default::default()
                     },
                     wpt_extensions_enabled: false,
                 navigation_bootstrap_entry: None,
@@ -1095,6 +1099,7 @@ fn parser_owned_inline_importmap_handoff_registers_parser_owned_handle_on_live_b
                     layout_configuration: moli_page_types::LayoutConfiguration {
                         policy: moli_page_types::LayoutPolicy::default(),
                         scrollbars_hidden: false,
+                        ..Default::default()
                     },
                     wpt_extensions_enabled: false,
                 navigation_bootstrap_entry: None,
@@ -1259,6 +1264,7 @@ fn parser_owner_style_import_handoff_is_stylesheet_gated_on_live_page_vm() {
                     layout_configuration: moli_page_types::LayoutConfiguration {
                         policy: moli_page_types::LayoutPolicy::default(),
                         scrollbars_hidden: false,
+                        ..Default::default()
                     },
                     wpt_extensions_enabled: false,
                 navigation_bootstrap_entry: None,
@@ -1279,18 +1285,32 @@ fn parser_owner_style_import_handoff_is_stylesheet_gated_on_live_page_vm() {
                 input_closed: &state.input_closed,
             };
 
-            let outcome = driver
-                .advance_parser_step(
-                    &mut page_vm,
-                    "<!doctype html><html><head><style>@import url('/style.css');</style><script>window.afterStyle = true;</script></head></html>",
-                    None,
-                )
-                .await
-                .expect("parser step should complete");
+        let outcome = driver
+            .advance_parser_step(
+                &mut page_vm,
+                "<!doctype html><html><head><style id='blocking-style'>@import url('/style.css');</style><script>window.afterStyle = true;</script></head></html>",
+                None,
+            )
+            .await
+            .expect("parser step should complete");
 
-            assert!(
-                matches!(outcome, ParserStepAdvanceOutcome::BlockedOnStylesheet(_)),
-                "parser-created style import should gate parser-blocking script on live PageVm"
-            );
-        }));
+        assert!(
+            matches!(outcome, ParserStepAdvanceOutcome::BlockedOnStylesheet(_)),
+            "parser-created style import should gate parser-blocking script on live PageVm"
+        );
+        let style = page_vm
+            .vm()
+            .document_runtime
+            .dom_host()
+            .element_handle_by_id("blocking-style")
+            .expect("parser-created style owner");
+        assert_eq!(
+            page_vm
+                .vm()
+                .document_runtime
+                .pending_style_import_binding_for_test(style),
+            Some((1, true)),
+            "the parser-discovered import must bind its live stylesheet root before the script gate is released"
+        );
+    }));
 }

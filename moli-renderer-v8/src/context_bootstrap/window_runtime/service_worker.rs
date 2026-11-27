@@ -385,6 +385,15 @@ pub(in crate::context_bootstrap) fn navigator_service_worker_register_callback<'
             return;
         }
     };
+    if script_url.scheme() == "file" || scope_url.scheme() == "file" {
+        reject_service_worker_promise_with_type_error(
+            scope,
+            resolver,
+            "The ServiceWorker script and scope URLs must use HTTP or HTTPS.",
+        );
+        rv.set(promise.into());
+        return;
+    }
     let host = unsafe { &mut *host_ptr };
     let Some(request_client) = host
         .document_resource_loader_for_window_owner(request_context.owner().window_document_owner())

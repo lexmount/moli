@@ -21,7 +21,6 @@ from __future__ import annotations
 
 import json
 import multiprocessing
-import os
 import subprocess
 import sys
 import time
@@ -29,13 +28,13 @@ from concurrent.futures import Future, ProcessPoolExecutor, as_completed
 from dataclasses import dataclass
 from html.parser import HTMLParser
 from pathlib import Path
+from urllib.parse import urlsplit
 
-from ..config import clear_proxy_env
 from ..versions import sha256_file
-from .engine import EngineDriver, build_driver
+from .engine import EngineDriver, build_driver, fixture_browser_environment
 from .runner import CaseResult, EngineRunResult, classify_payload
 from .runner import FINAL_PAYLOAD_SOURCES
-from .server import WptFixtureServer
+from .server import WPT_MIXED_CONTENT_HOSTNAME, WptFixtureServer
 
 CaseRun = tuple[str, str] | tuple[str, str, float] | tuple[str, str, float, float]
 MAX_RECORDED_STDERR_CHARS = 2000
@@ -77,6 +76,7 @@ class _CliCaseWorkerInput:
     process_timeout_margin_seconds: float
     payload_grace_seconds: float
     successful_process_payload_grace_seconds: float
+    mixed_content: bool = False
 
 
 def _run_cli_subprocess(
@@ -312,7 +312,11 @@ def _run_cli_case_worker(job: _CliCaseWorkerInput) -> CaseResult:
             {job.case_path: job.harness_timeout_multiplier},
             default_multiplier=job.harness_timeout_multiplier,
         )
-        url = server.url_for_case(job.case_path, external=job.external)
+        if job.mixed_content:
+            driver = driver.with_http_host_resolutions(server.loopback_host_resolutions())
+            url = server.url_for_case(job.case_path, mixed_content=True)
+        else:
+            url = server.url_for_case(job.case_path, external=job.external)
         bridge_key = _bridge_key_for_case(job.case_path)
         server.results.clear(bridge_key)
         argv = driver.cli_fetch_command(binary, url, job.timeout_seconds)
@@ -392,7 +396,7 @@ def run_engine_on_cases_cli(
     )
     result.shutdown_info = {"mode": "cli", "cases_run": 0, "scheduler": "process-pool"}
 
-    env = clear_proxy_env(os.environ)
+    env = fixture_browser_environment()
     env.update(driver.extra_env)
     # Belt-and-braces NO_PROXY for the local fixture endpoints created by each
     # worker process.
@@ -436,6 +440,7 @@ def run_engine_on_cases_cli(
                 wpt_root=str(fixture_server.wpt_root),
                 case_path=case_path,
                 external=external,
+                mixed_content=urlsplit(case[1]).hostname == WPT_MIXED_CONTENT_HOSTNAME,
                 timeout_seconds=timeout_seconds,
                 harness_timeout_multiplier=harness_timeout_multiplier,
                 env=env,

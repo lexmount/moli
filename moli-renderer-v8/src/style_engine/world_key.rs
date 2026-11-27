@@ -174,27 +174,6 @@ impl StyleWorldKey {
     pub(super) fn requires_replacement_for_observation(&self, quirks_mode: QuirksMode) -> bool {
         self.quirks_mode != quirks_mode
     }
-
-    pub(super) fn device_differs_from_observation(
-        &self,
-        viewport: StyleViewport,
-        environment: StyloStyleEnvironment,
-    ) -> bool {
-        let viewport_width_bits = style_dimension_bits(viewport.width, DEFAULT_VIEWPORT_WIDTH);
-        let viewport_height_bits = style_dimension_bits(viewport.height, DEFAULT_VIEWPORT_HEIGHT);
-        self.viewport_width_bits != viewport_width_bits
-            || self.viewport_height_bits != viewport_height_bits
-            || self.screen_width_bits
-                != style_dimension_bits(viewport.screen_width, f32::from_bits(viewport_width_bits))
-            || self.screen_height_bits
-                != style_dimension_bits(
-                    viewport.screen_height,
-                    f32::from_bits(viewport_height_bits),
-                )
-            || self.device_pixel_ratio_bits
-                != style_dimension_bits(viewport.device_pixel_ratio, 1.0)
-            || self.environment != environment
-    }
 }
 
 impl StyleWorldKeyMismatchTrace {

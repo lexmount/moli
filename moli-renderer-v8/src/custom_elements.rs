@@ -79,7 +79,8 @@ mod html_constructor_prototype;
 mod lifecycle;
 pub(crate) use adopted_lifecycle::enqueue_adopted_callbacks;
 pub(crate) use attribute_lifecycle::{
-    dispatch_attribute_changed_callback, enqueue_attribute_changed_callback,
+    dispatch_attribute_changed_callback, dispatch_unchanged_attribute_changed_callback,
+    enqueue_attribute_changed_callback, observes_attribute_change,
 };
 pub(crate) use connected_lifecycle::{
     enqueue_connected_callback, enqueue_connected_move_callback, enqueue_disconnected_callback,

@@ -1,8 +1,13 @@
 //! The retained layout tree and its memory-retention boundary.
 
-use std::{fmt::Debug, hash::Hash, ops::Deref};
+use std::{
+    collections::{HashMap, HashSet},
+    fmt::Debug,
+    hash::Hash,
+    ops::Deref,
+};
 
-use crate::LayoutError;
+use crate::{LayoutDisplay, LayoutError, LayoutListMarkerPosition};
 
 use super::model::{
     FrozenCoordinateSpace, LayoutBoxGeometry, LayoutClipNode, LayoutCoordinateSpaceId,
@@ -23,6 +28,17 @@ pub struct LayoutObjectGeometry<N> {
     pub source: N,
     pub owner: LayoutOutputBoxId,
     pub quad: LayoutQuad,
+}
+
+impl<N> LayoutObjectGeometry<N> {
+    pub(crate) fn place_in_box(&mut self, geometry: &LayoutBoxGeometry) {
+        let content = geometry.content_box;
+        let zoom = geometry.effective_zoom;
+        self.quad.points = self
+            .quad
+            .points
+            .map(|point| LayoutPoint::new(content.x + point.x * zoom, content.y + point.y * zoom));
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -47,9 +63,15 @@ pub(crate) struct CssSizing {
 /// element without manufacturing CSSOM rects for that element.
 #[derive(Clone, Debug, PartialEq)]
 pub struct FrozenLayoutBox<N> {
+    /// Computed display used to construct this box.
+    pub display: LayoutDisplay,
+    /// Marker placement used when constructing the layout box.
+    pub list_marker_position: LayoutListMarkerPosition,
     pub geometry: LayoutBoxGeometry,
     pub scroll_extent: LayoutScrollExtent,
-    pub coordinate_space: FrozenCoordinateSpace,
+    /// Base mapping at the last geometry publication. Use the tree's
+    /// coordinate query to include subsequent scrolling.
+    pub(crate) coordinate_space: FrozenCoordinateSpace,
     pub geometry_source: Option<N>,
     pub principal_source: Option<N>,
     pub hit_source: Option<N>,
@@ -116,6 +138,65 @@ pub enum ScrollProjectionRefresh {
     Changed,
 }
 
+/// Inputs retained by a frozen snapshot until a descendant requests geometry.
+pub(crate) struct FrozenInlineSvgInputs<N> {
+    inputs: HashMap<N, crate::InlineSvgInput<N>>,
+    owners: HashMap<N, N>,
+    payload_bytes: usize,
+}
+
+impl<N: Copy + Eq + Hash> FrozenInlineSvgInputs<N> {
+    pub(crate) fn new() -> Self {
+        Self {
+            inputs: HashMap::new(),
+            owners: HashMap::new(),
+            payload_bytes: 0,
+        }
+    }
+
+    pub(crate) fn insert(&mut self, root: N, input: crate::InlineSvgInput<N>) {
+        for element in input.elements.iter().copied().skip(1) {
+            self.owners.insert(element, root);
+        }
+        self.payload_bytes = self.payload_bytes.saturating_add(input.estimated_bytes());
+        let previous = self.inputs.insert(root, input);
+        debug_assert!(
+            previous.is_none(),
+            "each frozen scene has one measured owner"
+        );
+    }
+
+    pub(crate) fn input(&self, root: N) -> Option<&crate::InlineSvgInput<N>> {
+        self.inputs.get(&root)
+    }
+
+    fn remove(&mut self, root: N) {
+        if let Some(input) = self.inputs.remove(&root) {
+            self.payload_bytes -= input.estimated_bytes();
+            for element in input.elements.into_iter().skip(1) {
+                if self.owners.get(&element) == Some(&root) {
+                    self.owners.remove(&element);
+                }
+            }
+        }
+    }
+
+    fn estimated_bytes(&self) -> usize {
+        let keys = self
+            .inputs
+            .capacity()
+            .saturating_mul(std::mem::size_of::<(N, crate::InlineSvgInput<N>)>());
+        let owners = self
+            .owners
+            .capacity()
+            .saturating_mul(std::mem::size_of::<(N, N)>());
+        std::mem::size_of::<Self>()
+            .saturating_add(keys)
+            .saturating_add(owners)
+            .saturating_add(self.payload_bytes)
+    }
+}
+
 /// DOM-independent layout tree produced by one complete pass.
 ///
 /// The box tree is stored densely through parent IDs. Text/inline fragments,
@@ -123,8 +204,8 @@ pub enum ScrollProjectionRefresh {
 /// they preserve results that cannot be reconstructed after the working tree,
 /// Taffy caches, Parley state, and computed styles are dropped. Source and
 /// hit-test indexes are derived from the box provenance and fragments.
-/// A scroll refresh updates derived geometry in place while retaining the
-/// box structure, local sizes, and fragments.
+/// A scroll refresh updates the coordinate mappings and scroll extents for
+/// the existing box structure, local sizes, and fragments.
 pub struct FrozenLayoutTree<N>
 where
     N: Copy + Debug + Eq + Hash,
@@ -140,6 +221,8 @@ where
     /// principal box but can still nominate rendered descendants for scroll.
     pub scroll_proxy_links: Vec<(N, LayoutOutputBoxId)>,
     pub object_geometry: Vec<LayoutObjectGeometry<N>>,
+    pub(crate) svg_viewports: HashMap<N, crate::pass::InlineSvgViewport>,
+    pub(crate) frozen_inline_svg: Option<Box<FrozenInlineSvgInputs<N>>>,
     viewport_coordinate_space: FrozenCoordinateSpace,
     pub clip_chain: Vec<LayoutClipNode>,
     embedded_frames: Vec<FrozenEmbeddedFrame<N>>,
@@ -150,6 +233,177 @@ impl<N> FrozenLayoutTree<N>
 where
     N: Copy + Debug + Eq + Hash,
 {
+    /// The measured viewport of an inline SVG whose object quads are needed
+    /// for the first time in this publication.
+    pub fn pending_svg_viewport(&self, source: N) -> Option<LayoutSize> {
+        self.svg_viewports
+            .get(&source)
+            .filter(|svg| !svg.prepared)
+            .map(|svg| svg.size)
+    }
+
+    pub fn pending_svg_viewports(&self) -> impl Iterator<Item = (N, LayoutSize)> + '_ {
+        self.svg_viewports
+            .iter()
+            .filter_map(|(&source, svg)| (!svg.prepared).then_some((source, svg.size)))
+    }
+
+    pub fn has_svg_viewports(&self) -> bool {
+        !self.svg_viewports.is_empty()
+    }
+
+    /// Locate a scene by the descendant identity from the sampled DOM.
+    pub fn pending_frozen_svg_input(
+        &self,
+        element: N,
+    ) -> Option<(N, LayoutSize, &crate::InlineSvgInput<N>)> {
+        let frozen = self.frozen_inline_svg.as_ref()?;
+        let root = *frozen.owners.get(&element)?;
+        Some((root, self.pending_svg_viewport(root)?, frozen.input(root)?))
+    }
+
+    /// Publish object quads in the exact layout member that measured the SVG.
+    /// Each input quad is local to its SVG viewport in unzoomed CSS pixels.
+    pub fn append_svg_geometry(
+        &mut self,
+        root: N,
+        scenes: Vec<(N, Vec<(N, LayoutQuad)>)>,
+    ) -> Result<(), LayoutError> {
+        let mut metrics = self.retention_metrics();
+        self.append_svg_geometry_with_metrics(root, scenes, &mut metrics)
+    }
+
+    /// Updates the caller's retained metrics for this exact tree on success.
+    /// The metrics must include all embedded members and outstanding inputs.
+    pub fn append_svg_geometry_with_metrics(
+        &mut self,
+        root: N,
+        mut scenes: Vec<(N, Vec<(N, LayoutQuad)>)>,
+        metrics: &mut LayoutTreeRetentionMetrics,
+    ) -> Result<(), LayoutError> {
+        let member = self
+            .tree_for_root_mut(root)
+            .ok_or(LayoutError::NoLayoutSnapshot)?;
+        member.retain_pending_svg_scenes(&mut scenes);
+        if scenes.is_empty() {
+            return Ok(());
+        }
+
+        let additional = scenes
+            .iter()
+            .map(|(_, objects)| objects.len())
+            .sum::<usize>();
+        let capacity = member.object_geometry.capacity();
+        let growth = member
+            .object_geometry
+            .len()
+            .saturating_add(additional)
+            .saturating_sub(capacity);
+        let frozen_before = member
+            .frozen_inline_svg
+            .as_ref()
+            .map_or(0, |frozen| frozen.estimated_bytes());
+        let released = member.frozen_inline_svg.as_ref().map_or(0, |frozen| {
+            let mut count = 0;
+            let mut bytes = 0usize;
+            for (source, _) in &scenes {
+                if let Some(input) = frozen.input(*source) {
+                    count += 1;
+                    bytes = bytes.saturating_add(input.estimated_bytes());
+                }
+            }
+            if count == frozen.inputs.len() {
+                frozen_before
+            } else {
+                bytes
+            }
+        });
+        let geometry_size = std::mem::size_of::<LayoutObjectGeometry<N>>();
+        let fragment_count = metrics.fragment_count.saturating_add(additional);
+        validate_retention_metrics(LayoutTreeRetentionMetrics {
+            fragment_count,
+            estimated_geometry_bytes: metrics
+                .estimated_geometry_bytes
+                .saturating_sub(released)
+                .saturating_add(growth.saturating_mul(geometry_size)),
+            ..*metrics
+        })?;
+
+        member.apply_svg_geometry(scenes, additional);
+        let frozen_after = member
+            .frozen_inline_svg
+            .as_ref()
+            .map_or(0, |frozen| frozen.estimated_bytes());
+        let growth = member.object_geometry.capacity() - capacity;
+        metrics.fragment_count = fragment_count;
+        metrics.estimated_geometry_bytes = metrics
+            .estimated_geometry_bytes
+            .saturating_sub(frozen_before)
+            .saturating_add(frozen_after)
+            .saturating_add(growth.saturating_mul(geometry_size));
+        Ok(())
+    }
+
+    fn retain_pending_svg_scenes(&self, scenes: &mut Vec<(N, Vec<(N, LayoutQuad)>)>) {
+        let multiple = scenes.len() > 1;
+        let mut seen = HashSet::new();
+        scenes.retain(|(root, _)| {
+            self.pending_svg_viewport(*root).is_some() && (!multiple || seen.insert(*root))
+        });
+    }
+
+    /// Pass-local geometry is validated once after all frame members are built.
+    pub(crate) fn record_painted_svg_geometry(
+        &mut self,
+        mut scenes: Vec<(N, Vec<(N, LayoutQuad)>)>,
+    ) {
+        self.retain_pending_svg_scenes(&mut scenes);
+        let additional = scenes.iter().map(|(_, objects)| objects.len()).sum();
+        self.apply_svg_geometry(scenes, additional);
+    }
+
+    fn apply_svg_geometry(&mut self, scenes: Vec<(N, Vec<(N, LayoutQuad)>)>, additional: usize) {
+        self.object_geometry.reserve_exact(additional);
+        for (source, objects) in scenes {
+            let svg = self
+                .svg_viewports
+                .get_mut(&source)
+                .expect("pending measured scene");
+            svg.prepared = true;
+            if let Some(frozen) = &mut self.frozen_inline_svg {
+                frozen.remove(source);
+                if frozen.inputs.is_empty() {
+                    self.frozen_inline_svg = None;
+                }
+            }
+            let owner = svg.owner;
+            let geometry = &self.boxes[owner.index()].geometry;
+            self.object_geometry
+                .extend(objects.into_iter().map(|(source, quad)| {
+                    let mut object = LayoutObjectGeometry {
+                        source,
+                        owner,
+                        quad,
+                    };
+                    object.place_in_box(geometry);
+                    object
+                }));
+        }
+    }
+
+    /// Invalidate sampled SVG content after a style-only publication update.
+    pub fn clear_inline_svg_geometry(&mut self) {
+        if !self.svg_viewports.is_empty() {
+            self.object_geometry.clear();
+            for svg in self.svg_viewports.values_mut() {
+                svg.prepared = false;
+            }
+        }
+        for frame in &mut self.embedded_frames {
+            frame.tree.clear_inline_svg_geometry();
+        }
+    }
+
     /// Source root whose complete layout projection this member tree owns.
     pub const fn source_root(&self) -> N {
         self.source_root
@@ -165,6 +419,15 @@ where
         self.embedded_frames
             .iter()
             .find_map(|frame| frame.tree.tree_for_root(source_root))
+    }
+
+    fn tree_for_root_mut(&mut self, source_root: N) -> Option<&mut Self> {
+        if self.source_root == source_root {
+            return Some(self);
+        }
+        self.embedded_frames
+            .iter_mut()
+            .find_map(|frame| frame.tree.tree_for_root_mut(source_root))
     }
 
     pub fn retention_metrics(&self) -> LayoutTreeRetentionMetrics {
@@ -212,6 +475,14 @@ where
             .saturating_add(allocation::<LayoutObjectGeometry<N>>(
                 self.object_geometry.capacity(),
             ))
+            .saturating_add(allocation::<(N, crate::pass::InlineSvgViewport)>(
+                self.svg_viewports.capacity(),
+            ))
+            .saturating_add(
+                self.frozen_inline_svg
+                    .as_ref()
+                    .map_or(0, |frozen| frozen.estimated_bytes()),
+            )
             .saturating_add(allocation::<(N, LayoutOutputBoxId)>(
                 self.scroll_proxy_links.capacity(),
             ))
@@ -256,6 +527,46 @@ where
         validate_retention_metrics(self.retention_metrics())
     }
 
+    /// Prefer lazy inputs. If they would exceed the existing snapshot byte
+    /// budget, materialize their quads before admitting the publication.
+    pub fn validate_retention_budget_with_svg_fallback(
+        &mut self,
+        mut decode: impl FnMut(N, &crate::InlineSvgInput<N>, LayoutSize) -> Vec<(N, LayoutQuad)>,
+    ) -> Result<(), LayoutError> {
+        let mut metrics = self.retention_metrics();
+        if metrics.estimated_geometry_bytes > MAX_RETAINED_LAYOUT_TREE_BYTES
+            && metrics.box_count <= MAX_RETAINED_LAYOUT_BOXES
+            && metrics.fragment_count <= MAX_RETAINED_LAYOUT_FRAGMENTS
+            && self.materialize_frozen_svg_geometry(&mut decode)
+        {
+            metrics = self.retention_metrics();
+        }
+        validate_retention_metrics(metrics)
+    }
+
+    fn materialize_frozen_svg_geometry(
+        &mut self,
+        decode: &mut impl FnMut(N, &crate::InlineSvgInput<N>, LayoutSize) -> Vec<(N, LayoutQuad)>,
+    ) -> bool {
+        let mut materialized = false;
+        if let Some(frozen) = self.frozen_inline_svg.take() {
+            let scenes = frozen
+                .inputs
+                .into_iter()
+                .filter_map(|(root, input)| {
+                    let size = self.pending_svg_viewport(root)?;
+                    Some((root, decode(root, &input, size)))
+                })
+                .collect();
+            self.record_painted_svg_geometry(scenes);
+            materialized = true;
+        }
+        for frame in &mut self.embedded_frames {
+            materialized |= frame.tree.materialize_frozen_svg_geometry(decode);
+        }
+        materialized
+    }
+
     pub fn box_geometry(&self, id: LayoutOutputBoxId) -> Option<&LayoutBoxGeometry> {
         self.boxes
             .get(id.index())
@@ -278,14 +589,43 @@ where
         self.fragments.get(id.index())
     }
 
-    pub fn coordinate_space(&self, id: LayoutCoordinateSpaceId) -> Option<&FrozenCoordinateSpace> {
-        match id.index() {
-            0 => Some(&self.viewport_coordinate_space),
-            index => self
-                .boxes
-                .get(index - 1)
-                .map(|layout_box| &layout_box.coordinate_space),
+    pub fn coordinate_space(&self, id: LayoutCoordinateSpaceId) -> Option<FrozenCoordinateSpace> {
+        let Some(index) = id.index().checked_sub(1) else {
+            return Some(self.viewport_coordinate_space);
+        };
+        let mut space = self.boxes.get(index)?.coordinate_space;
+        if let Some(offset) = self.local_scroll_translation(index) {
+            space.local_to_viewport = space
+                .local_to_viewport
+                .translated_in_viewport(offset.visual);
+            space.local_to_viewport_ignoring_css_transforms = space
+                .local_to_viewport_ignoring_css_transforms
+                .translated_in_viewport(offset.untransformed);
         }
+        Some(space)
+    }
+
+    #[inline]
+    fn local_scroll_translation(
+        &self,
+        index: usize,
+    ) -> Option<&crate::projection::ScrollTranslation> {
+        self.scroll_projection.as_ref()?.local_translation(index)
+    }
+
+    #[inline]
+    pub(super) fn local_to_viewport(
+        &self,
+        id: LayoutCoordinateSpaceId,
+    ) -> Option<LayoutTransform2D> {
+        let Some(index) = id.index().checked_sub(1) else {
+            return Some(self.viewport_coordinate_space.local_to_viewport);
+        };
+        let base = self.boxes.get(index)?.coordinate_space.local_to_viewport;
+        Some(
+            self.local_scroll_translation(index)
+                .map_or(base, |offset| base.translated_in_viewport(offset.visual)),
+        )
     }
 
     pub fn scroll_extent(&self, id: LayoutOutputBoxId) -> Option<&LayoutScrollExtent> {
@@ -338,7 +678,7 @@ where
     ) -> Result<bool, LayoutError> {
         let projection = self
             .scroll_projection
-            .as_ref()
+            .as_mut()
             .expect("validated scroll inputs");
         let mut changed = projection.refresh(&mut self.boxes, &mut self.viewport_scroll, offset)?;
         for child in &mut self.embedded_frames {
@@ -361,7 +701,6 @@ where
         boxes: Vec<FrozenLayoutBox<N>>,
         fragments: Vec<LayoutFragment>,
         scroll_proxy_links: Vec<(N, LayoutOutputBoxId)>,
-        object_geometry: Vec<LayoutObjectGeometry<N>>,
         viewport_coordinate_space: FrozenCoordinateSpace,
         clip_chain: Vec<LayoutClipNode>,
         embedded_frames: Vec<FrozenEmbeddedFrame<N>>,
@@ -375,7 +714,9 @@ where
             boxes,
             fragments,
             scroll_proxy_links,
-            object_geometry,
+            object_geometry: Vec::new(),
+            svg_viewports: HashMap::new(),
+            frozen_inline_svg: None,
             viewport_coordinate_space,
             clip_chain,
             embedded_frames,

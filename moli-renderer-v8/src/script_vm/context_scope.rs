@@ -131,6 +131,7 @@ impl ScriptVm {
         self.with_document_context_scope_by_ptr(context_ptr, op)
     }
 
+    #[cfg(test)]
     pub(super) fn with_current_main_world_document_scope<T>(
         &mut self,
         op: impl FnOnce(

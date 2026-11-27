@@ -8,21 +8,26 @@ use moli_layout::{
     LayoutPassResult, LayoutQuery, LayoutQueryAnswer, LayoutQueryBatch, LayoutRect, LayoutViewport,
     ScrollProjectionRefresh,
 };
+use moli_page_types::LayoutPolicy;
 use moli_selector::QueryContainerSizes;
+use style::servo::restyle_damage::ServoRestyleDamage;
 
-use super::PageScriptHost;
 #[cfg(feature = "devtools")]
 use super::layout_snapshot::PublishedFrameGeometry;
 use super::layout_state::InferredFrameStyleViewportCacheKey;
+use super::{LayoutPublicationRequest, PageScriptHost};
 use crate::{
     css_resource_urls::{
         CompletedStylesheetWebFont, StylesheetLoadBlockingResource, StylesheetSubresourceRequest,
     },
     document_runtime::DomHandle,
-    layout_renderer::{ContainerSizeFeedback, layout_viewport_for_surface},
-    native_bridge::element::iframe_handle_viewport,
+    layout_renderer::{
+        FrameOwnerStyles, LayoutPassFeedback, layout_viewport_for_surface,
+        screen_targets_allow_layout_reuse,
+    },
+    native_bridge::element::{ComputedStyleRead, iframe_handle_viewport},
     script_vm::web_fonts::DocumentWebFontCompletion,
-    style_engine::{StyleViewport, StyloStyleEnvironment},
+    style_engine::{StyleViewport, StyloStyleEnvironment, layout_damage_for_style_change},
 };
 
 /// Invalidation required by a changed native input. Publication is a separate
@@ -33,6 +38,13 @@ pub(crate) enum LayoutInputChange {
     StyleEnvironment,
     /// Scrollbar policy and interactions change future geometry/paint output.
     UsedGeometry,
+}
+
+/// Selects the layout input that a geometry consumer may sample.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum LayoutQueryMode {
+    Observable,
+    Published,
 }
 
 struct FrameLayoutPublication {
@@ -160,9 +172,15 @@ impl PageScriptHost {
             "layout policy can change only at an idle realtime boundary"
         );
         if !policy.uses_real_layout() {
-            self.document_layout_state.get_mut().clear_latest_layout();
+            self.document_layout_state
+                .borrow_mut()
+                .clear_latest_layout();
         }
         if self.layout_policy != policy {
+            let mut state = self.document_layout_state.borrow_mut();
+            drop(state.take_retained_layout());
+            state.lazy_frames = Default::default();
+            self.dom_host().track_layout_changes(None);
             self.realtime_layout_state = policy.is_realtime().then(Box::default);
         }
         self.layout_policy = policy;
@@ -280,14 +298,120 @@ impl PageScriptHost {
             .frame_viewport(frame)
     }
 
-    pub(crate) fn invalidate_published_frame_viewports(
+    pub(crate) fn observed_frame_viewport(&self, frame: DomHandle) -> Option<LayoutViewport> {
+        let (viewport, needs_validation) = {
+            let state = self.document_layout_state.try_borrow().ok()?;
+            let changes = &state.lazy_frames;
+            (
+                state.frame_viewport(frame)?,
+                changes.needs_layout || !changes.changed_owners.is_empty(),
+            )
+        };
+        if needs_validation && !self.layout_pass_active.get() {
+            // Keep the last exact viewport until a new screen pass publishes
+            // the frame's used content box.
+            let _ = self.ensure_initial_layout();
+            return self.frame_viewport(frame);
+        }
+        Some(viewport)
+    }
+
+    pub(super) fn note_lazy_frame_style_change(&self, frame: DomHandle) {
+        let host = self.dom_host();
+        if self.layout_policy != LayoutPolicy::Lazy
+            || !host.is_html_element_named(frame, "iframe")
+            || !host.is_connected(frame)
+        {
+            return;
+        }
+        let mut state = self.document_layout_state.borrow_mut();
+        if state.lazy_frames.needs_layout
+            || (state.frame_viewport(frame).is_none()
+                && state.latest_layout(self.document_handle()).is_none())
+        {
+            return;
+        }
+        state.lazy_frames.changed_owners.insert(frame);
+    }
+
+    fn validate_lazy_frame_layout(&self) {
+        if self.layout_policy != LayoutPolicy::Lazy || self.layout_pass_active.get() {
+            return;
+        }
+        let changed_owners = std::mem::take(
+            &mut self
+                .document_layout_state
+                .borrow_mut()
+                .lazy_frames
+                .changed_owners,
+        );
+        let host = self.dom_host();
+        let mut owner_documents = HashSet::new();
+        let owner_needs_layout = changed_owners.into_iter().any(|frame| {
+            let Some(document) = host
+                .owner_document_handle(frame)
+                .filter(|_| host.is_connected(frame))
+            else {
+                return true;
+            };
+            owner_documents.insert(document);
+            let previous = self.document_layout_state.borrow().frame_owner_style(frame);
+            let current = ComputedStyleRead::new(self, frame).computed_values();
+            previous.zip(current).is_none_or(|(previous, current)| {
+                let damage = ServoRestyleDamage::compute_style_difference::<
+                    moli_selector::StyloElement<'_>,
+                >(&previous, &current)
+                .damage
+                    | layout_damage_for_style_change(Some(&previous), Some(&current));
+                !ServoRestyleDamage::REPAINT.contains(damage)
+            })
+        });
+        if owner_needs_layout
+            || owner_documents
+                .iter()
+                .any(|&document| !self.lazy_restyles_allow_layout_reuse(document))
+        {
+            // Snapshot readers can still use the published projection until
+            // the replacement pass succeeds.
+            self.document_layout_state
+                .borrow_mut()
+                .lazy_frames
+                .needs_layout = true;
+        } else {
+            for document in owner_documents {
+                self.style_engine.consume_screen_style_work(document);
+            }
+        }
+    }
+
+    fn lazy_restyles_allow_layout_reuse(&self, document: DomHandle) -> bool {
+        // An owner's attribute can restyle its containing block or siblings
+        // without changing the owner's computed dimensions.
+        let repaint = ServoRestyleDamage::REPAINT;
+        let Some(restyles) =
+            self.style_engine
+                .screen_restyle_targets(self.dom_host(), document, repaint)
+        else {
+            return false;
+        };
+        (restyles.targets.is_empty()
+            || screen_targets_allow_layout_reuse(
+                self,
+                document,
+                restyles.targets,
+                restyles.after,
+                repaint,
+            ))
+            && self
+                .style_engine
+                .screen_style_damage_is_within(document, repaint)
+    }
+
+    pub(crate) fn invalidate_mock_frame_viewports(
         &self,
         frames: impl IntoIterator<Item = DomHandle>,
     ) {
-        // Realtime source invalidation already makes the screen layout stale.
-        // Preserve the last used viewport for a connected, hidden child until
-        // its next layout publishes a replacement.
-        if self.layout_policy().is_realtime() {
+        if self.layout_policy != LayoutPolicy::Mock {
             return;
         }
         let frames = frames.into_iter().collect::<Vec<_>>();
@@ -296,8 +420,10 @@ impl PageScriptHost {
         }
         let changed = {
             let mut state = self.document_layout_state.borrow_mut();
-            let changed =
-                state.update_frame_viewports(frames.into_iter().map(|frame| (frame, None)));
+            let changed = state.update_frame_viewports(
+                frames.into_iter().map(|frame| (frame, None)),
+                FrameOwnerStyles::new(),
+            );
             state.clear_latest_layout();
             changed
         };
@@ -380,7 +506,7 @@ impl PageScriptHost {
             .inferred_frame_style_viewport_cache_observability()
     }
 
-    /// Lazily publishes the first screen layout for this main Document.
+    /// Lazily publishes a missing screen layout for this main Document.
     ///
     /// Every consumer shares the same recursive tree. Missing nodes or newly
     /// navigated frames in an existing tree must not refresh the whole page.
@@ -391,24 +517,32 @@ impl PageScriptHost {
         if self.layout_pass_active.get() {
             return Err(LayoutError::ReentrantLayoutPass);
         }
+        self.validate_lazy_frame_layout();
         let document = self.document_handle();
-        if self
-            .document_layout_state
-            .borrow()
-            .latest_layout(document)
-            .is_some()
         {
-            return Ok(());
+            let state = self.document_layout_state.borrow();
+            if state.latest_layout(document).is_some() && !state.lazy_frames.needs_layout {
+                return Ok(());
+            }
         }
         let request = LayoutPassRequest::new(
             self.layout_viewport_for_document(document),
             moli_layout::LayoutFlushReason::SynchronousGeometry,
         );
-        let pass = self
-            .build_layout_pass_for_document(document, request)?
+        let publication = self.prepare_layout_publication(
+            document,
+            request.viewport,
+            LayoutPublicationRequest::Screen,
+        )?;
+        let (pass, feedback) = self
+            .build_layout_pass_for_document_in_environment(
+                document,
+                publication.layout_request(request),
+                None,
+                publication.input_retention(self.layout_policy),
+            )?
             .ok_or(LayoutError::NoLayoutRoot)?;
-        self.publish_layout_pass_for_document(document, pass);
-        Ok(())
+        self.finish_layout_publication(publication, pass, feedback)
     }
 
     /// FontFace and Canvas use the document's font service without requesting a
@@ -453,13 +587,25 @@ impl PageScriptHost {
             .replace_layout_container_sizes(self.dom_host(), document, sizes)
     }
 
+    #[cfg(test)]
     pub(crate) fn build_layout_pass_for_document(
         &self,
         document: DomHandle,
         request: LayoutPassRequest,
     ) -> Result<Option<LayoutPassResult<DomHandle>>, LayoutError> {
-        self.build_layout_pass_for_document_in_environment(document, request, None)
+        use crate::layout_renderer::LayoutInputRetention;
+        let inputs = if self.layout_policy == moli_page_types::LayoutPolicy::Lazy {
+            LayoutInputRetention::Frozen
+        } else {
+            LayoutInputRetention::Transient
+        };
+        self.build_layout_pass_for_document_in_environment(document, request, None, inputs)
             .map(|pass| pass.map(|(layout, _)| layout))
+    }
+
+    #[cfg(test)]
+    pub(crate) fn has_retained_layout_for_test(&self) -> bool {
+        self.document_layout_state.borrow().has_reusable_layout()
     }
 
     pub(crate) fn build_layout_pass_for_document_in_environment(
@@ -467,7 +613,8 @@ impl PageScriptHost {
         document: DomHandle,
         request: LayoutPassRequest,
         environment_override: Option<StyloStyleEnvironment>,
-    ) -> Result<Option<(LayoutPassResult<DomHandle>, ContainerSizeFeedback<'_>)>, LayoutError> {
+        inputs: crate::layout_renderer::LayoutInputRetention,
+    ) -> Result<Option<(LayoutPassResult<DomHandle>, LayoutPassFeedback<'_>)>, LayoutError> {
         let Some(root) = self
             .dom_host()
             .dom()
@@ -476,8 +623,22 @@ impl PageScriptHost {
             return Ok(None);
         };
         let _active = ActiveLayoutPass::enter(&self.layout_pass_active)?;
-        let (pass, feedback) = {
+        let realtime_screen = inputs == crate::layout_renderer::LayoutInputRetention::Realtime
+            && self.layout_policy.is_realtime()
+            && document == self.document_handle()
+            && environment_override.is_none();
+        let request = if realtime_screen {
+            request.with_retained_layout_world()
+        } else {
+            request
+        };
+        let (mut pass, feedback) = {
             let mut state = self.document_layout_state.borrow_mut();
+            let retained = if realtime_screen {
+                state.take_retained_layout()
+            } else {
+                None
+            };
             state.retain_live_embedded_document_services(|candidate| {
                 self.child_browsing_context_host_for_document_handle(candidate)
                     .is_some()
@@ -493,6 +654,8 @@ impl PageScriptHost {
                         embedded_document_services,
                         request,
                         environment_override,
+                        inputs,
+                        retained,
                     )
                 },
             )?
@@ -528,6 +691,13 @@ impl PageScriptHost {
                 numeric_feedback_overflow_recomputed_node_count = metrics
                     .numeric_feedback_overflow_recomputed_node_count,
                 box_count = metrics.box_count,
+                retained_box_count = metrics.retained_box_count,
+                pruned_source_count = metrics.pruned_source_count,
+                retained_embedded_box_count = metrics.retained_embedded_box_count,
+                retained_numeric_layout_hits = metrics.retained_numeric_layout_hits,
+                retained_numeric_tree = metrics.retained_numeric_tree,
+                reused_inline_contexts = metrics.reused_inline_contexts,
+                reused_overflow_projection = metrics.reused_overflow_projection,
                 fragment_count = metrics.fragment_count,
                 paint_event_count = metrics.paint_event_count,
                 paint_culled_event_count = metrics.paint_culled_event_count,
@@ -537,14 +707,18 @@ impl PageScriptHost {
                 fallback_count = metrics.fallback_count,
             );
         }
-        pass.validate_retention_budget()?;
+        pass.tree.validate_retention_budget_with_svg_fallback(
+            crate::layout_renderer::decode_frozen_svg_geometry,
+        )?;
         Ok(Some((pass, feedback)))
     }
 
-    pub(crate) fn publish_layout_pass_for_document(
+    pub(super) fn publish_layout_pass_for_document(
         &self,
         document: DomHandle,
-        pass: LayoutPassResult<DomHandle>,
+        mut pass: LayoutPassResult<DomHandle>,
+        retain_paint: bool,
+        frame_owner_styles: FrameOwnerStyles,
     ) {
         if let Some(state) = &self.realtime_layout_state {
             state.clear_publication();
@@ -601,11 +775,17 @@ impl PageScriptHost {
         } else {
             Vec::new()
         };
+        let retained = pass.take_retained_layout();
         let tree = pass.into_tree();
+        #[cfg(feature = "devtools")]
+        self.note_wheel_scroll_target_layout(document, &tree);
         let frame_viewports_changed = {
             let mut state = self.document_layout_state.borrow_mut();
+            if document == self.document_handle() {
+                state.lazy_frames = Default::default();
+            }
             state.retain_live_frame_viewports(|frame| self.child_browsing_context_is_live(frame));
-            state.update_frame_viewports(frame_viewports)
+            state.update_frame_viewports(frame_viewports, frame_owner_styles)
         };
         if frame_viewports_changed {
             self.style_viewport_generation
@@ -616,6 +796,8 @@ impl PageScriptHost {
             .publish_latest_layout(
                 document,
                 tree,
+                retained,
+                retain_paint,
                 #[cfg(feature = "devtools")]
                 frames.geometry,
             );
@@ -708,8 +890,9 @@ impl PageScriptHost {
         &self,
         document: DomHandle,
         queries: &LayoutQueryBatch<DomHandle>,
+        mode: LayoutQueryMode,
     ) -> Result<LayoutAnswers<DomHandle>, LayoutError> {
-        self.with_published_layout_for_document(document, |tree, metrics| {
+        self.with_layout_answers(document, &queries.queries, mode, |tree, metrics| {
             tree.answer_queries_with(queries, metrics, |query| {
                 self.specialize_layout_query(tree, query)
             })
@@ -720,17 +903,30 @@ impl PageScriptHost {
         &self,
         document: DomHandle,
         query: &LayoutQuery<DomHandle>,
+        mode: LayoutQueryMode,
     ) -> Result<LayoutQueryAnswer<DomHandle>, LayoutError> {
-        self.with_published_layout_for_document(document, |tree, _| {
+        self.with_layout_answers(document, std::slice::from_ref(query), mode, |tree, _| {
             self.answer_layout_query(tree, query)
         })
     }
 
-    fn with_published_layout_for_document<T>(
+    fn with_layout_answers<T>(
         &self,
         document: DomHandle,
+        queries: &[LayoutQuery<DomHandle>],
+        mode: LayoutQueryMode,
         inspect: impl FnOnce(&FrozenLayoutTree<DomHandle>, moli_layout::LayoutPassMetrics) -> T,
     ) -> Result<T, LayoutError> {
+        if mode == LayoutQueryMode::Observable {
+            self.ensure_observable_layout()?;
+        }
+        // A snapshot-only reader can hydrate frozen inputs even when the live
+        // DOM has changed. Realtime sampling requires a current publication.
+        if self.layout_policy.uses_real_layout()
+            && (!self.layout_policy.is_realtime() || mode == LayoutQueryMode::Observable)
+        {
+            self.prepare_svg_query_geometry(document, queries)?;
+        }
         let value = self
             .with_latest_layout_tree_for_document(document, |tree| {
                 self.last_layout_pass_metrics
@@ -771,6 +967,67 @@ impl PageScriptHost {
             .or_else(|| root.and_then(|root| state.latest_layout_for_root(root)))
             .filter(|tree| Some(tree.source_root()) == root)
             .map(inspect)
+    }
+
+    fn prepare_svg_query_geometry(
+        &self,
+        document: DomHandle,
+        queries: &[LayoutQuery<DomHandle>],
+    ) -> Result<(), LayoutError> {
+        let mut sources = queries
+            .iter()
+            .filter_map(|query| match *query {
+                LayoutQuery::ClientRects { source }
+                | LayoutQuery::ContentQuads { source }
+                | LayoutQuery::ScrollIntoViewGeometry { source } => Some(source),
+                LayoutQuery::IntersectionGeometry { target, .. } => Some(target),
+                _ => None,
+            })
+            .peekable();
+        if sources.peek().is_none() {
+            return Ok(());
+        }
+
+        let prepared = if self.layout_policy.is_realtime() {
+            let Some((root, viewport, pending)) = self
+                .with_latest_layout_tree_for_document(document, |tree| {
+                    let pending = crate::layout_renderer::pending_svg_geometry(self, tree, sources);
+                    (!pending.is_empty()).then_some((tree.source_root(), tree.viewport, pending))
+                })
+                .flatten()
+            else {
+                return Ok(());
+            };
+            // Live style sampling runs outside the layout-state borrow.
+            Some((
+                root,
+                crate::layout_renderer::prepare_svg_geometry(self, document, viewport, pending),
+            ))
+        } else {
+            self.with_latest_layout_tree_for_document(document, |tree| {
+                let mut seen = std::collections::HashSet::new();
+                let geometry = sources
+                    .filter_map(|source| tree.pending_frozen_svg_input(source))
+                    .filter(|(root, _, _)| seen.insert(*root))
+                    .map(|(root, size, input)| {
+                        (
+                            root,
+                            crate::layout_renderer::decode_frozen_svg_geometry(root, input, size),
+                        )
+                    })
+                    .collect();
+                (tree.source_root(), geometry)
+            })
+        };
+        let Some((root, geometry)) = prepared else {
+            return Ok(());
+        };
+        if geometry.is_empty() {
+            return Ok(());
+        }
+        self.document_layout_state
+            .borrow_mut()
+            .append_svg_geometry(root, geometry)
     }
 
     fn answer_layout_query(
@@ -849,6 +1106,7 @@ impl PageScriptHost {
             state.reset();
         }
         self.prune_realtime_animation_frames();
+        self.prune_media_queries();
         self.prune_realtime_environment();
         self.prune_realtime_rendering_events();
         if self.layout_policy().is_realtime() {
@@ -1060,7 +1318,7 @@ impl GeometryProvider for PageScriptHost {
         queries: &LayoutQueryBatch<Self::NodeId>,
     ) -> Result<LayoutAnswers<Self::NodeId>, LayoutError> {
         let document = self.document_handle();
-        self.answer_layout_for_document(document, queries)
+        self.answer_layout_for_document(document, queries, LayoutQueryMode::Published)
     }
 }
 

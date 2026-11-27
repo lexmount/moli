@@ -4,13 +4,15 @@ use crate::{
         CssStyleDeclarationSetPropertyArgs, CssStyleEntry as StyleEntry,
         canonical_style_property_name,
     },
+    document_runtime::DomHandle,
+    native_bridge::PageScriptHost,
     util::{throw_type_error, v8_string},
     webidl,
 };
 
 use super::declaration::{
-    StyleMode, all_shorthand_applies_to, cssom_style_property_affected_names_with_pdb,
-    cssom_text_decoration_line_value_is_compat,
+    InlineStylePropertyWrite, StyleMode, all_shorthand_applies_to,
+    cssom_style_property_affected_names_with_pdb, cssom_text_decoration_line_value_is_compat,
     expand_unresolved_box_shorthand_entries_for_mutation,
     parse_style_property_entries_for_cssom_fallback_write,
     parse_style_property_entries_for_cssom_write, set_inline_style_property_with_pdb_storage,
@@ -59,100 +61,96 @@ pub(crate) fn style_set_property_callback<'s>(
         return;
     }
     let priority = parsed.priority.eq_ignore_ascii_case("important");
-    if set_inline_style_property_with_pdb_storage(
+    set_live_inline_style_property(
         scope,
+        args.this(),
         runtime_ptr,
         handle,
         &name,
         &parsed.value,
         priority,
-    )
-    .is_some()
-    {
-        return;
+    );
+}
+
+pub(super) fn set_live_inline_style_property<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    style: v8::Local<'s, v8::Object>,
+    runtime_ptr: *mut PageScriptHost,
+    handle: DomHandle,
+    name: &str,
+    value: &str,
+    priority: bool,
+) {
+    if !try_write_inline_style_property(scope, style, runtime_ptr, handle, name, value, priority) {
+        crate::custom_elements::dispatch_unchanged_attribute_changed_callback(
+            scope,
+            runtime_ptr,
+            handle,
+            "style",
+        );
+    }
+}
+
+fn try_write_inline_style_property<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    style: v8::Local<'s, v8::Object>,
+    runtime_ptr: *mut PageScriptHost,
+    handle: DomHandle,
+    name: &str,
+    value: &str,
+    priority: bool,
+) -> bool {
+    match set_inline_style_property_with_pdb_storage(
+        scope,
+        runtime_ptr,
+        handle,
+        name,
+        value,
+        priority,
+    ) {
+        InlineStylePropertyWrite::AttributeWritten => return true,
+        InlineStylePropertyWrite::NoAttributeWrite => return false,
+        InlineStylePropertyWrite::NeedsCompatibilityEntries => {}
     }
     let (style_object_entries, current_base_url) = {
         let runtime = unsafe { &*runtime_ptr };
         (
-            style_entries_for_style_object(scope, args.this(), runtime, handle),
+            style_entries_for_style_object(scope, style, runtime, handle),
             style_base_url(runtime, handle),
         )
     };
     let mut entries = style_object_entries.entries;
-    let update_inline_style_base = name == "background-image" && !parsed.value.is_empty();
-    if let Some(longhands) = shorthand_longhands(&name) {
-        if parsed.value.is_empty() {
-            if !entries.iter().any(|entry| {
-                entry.name == name || longhands.iter().any(|longhand| entry.name == *longhand)
-            }) {
-                return;
-            }
-            entries.retain(|entry| {
-                entry.name != name && !longhands.iter().any(|longhand| entry.name == *longhand)
-            });
-        } else {
-            let Some(parsed_entries) = parse_style_property_entries_for_cssom_fallback_write(
-                &entries,
-                &name,
-                &parsed.value,
-                priority,
-                Some(&current_base_url),
-            ) else {
-                return;
-            };
-            expand_unresolved_box_shorthand_entries_for_mutation(
-                &mut entries,
-                &parsed_entries.affected_names,
-            );
-            retain_unaffected_style_entries(&mut entries, &name, &parsed_entries.affected_names);
-            entries.extend(parsed_entries.entries);
+    let update_inline_style_base = name == "background-image" && !value.is_empty();
+    if value.is_empty() {
+        if !remove_style_entries(&mut entries, name) {
+            return false;
         }
     } else if name == "all" {
-        if parsed.value.is_empty() {
-            if !entries
-                .iter()
-                .any(|entry| entry.name == "all" || all_shorthand_applies_to(&entry.name))
-            {
-                return;
-            }
-            entries.retain(|entry| entry.name != "all" && !all_shorthand_applies_to(&entry.name));
-        } else {
-            let Some(parsed_entries) = parse_style_property_entries_for_cssom_write(
-                &name,
-                &parsed.value,
-                priority,
-                Some(&current_base_url),
-            ) else {
-                return;
-            };
-            entries.retain(|entry| entry.name != "all");
-            entries.extend(parsed_entries.entries);
-        }
-    } else if parsed.value.is_empty() {
-        let before_len = entries.len();
-        if let Some(affected_names) = cssom_style_property_affected_names_with_pdb(&name) {
-            retain_unaffected_style_entries(&mut entries, &name, &affected_names);
-        } else {
-            entries.retain(|entry| entry.name != name);
-        }
-        if entries.len() == before_len {
-            return;
-        }
-    } else {
-        let Some(parsed_entries) = parse_style_property_entries_for_cssom_fallback_write(
-            &entries,
-            &name,
-            &parsed.value,
+        let Some(parsed_entries) = parse_style_property_entries_for_cssom_write(
+            name,
+            value,
             priority,
             Some(&current_base_url),
         ) else {
-            return;
+            return false;
+        };
+        entries.retain(|entry| entry.name != "all");
+        entries.extend(parsed_entries.entries);
+    } else {
+        let Some(parsed_entries) = parse_style_property_entries_for_cssom_fallback_write(
+            &entries,
+            name,
+            value,
+            priority,
+            Some(&current_base_url),
+        ) else {
+            return false;
         };
         expand_unresolved_box_shorthand_entries_for_mutation(
             &mut entries,
             &parsed_entries.affected_names,
         );
-        retain_unaffected_style_entries(&mut entries, &name, &parsed_entries.affected_names);
+        retain_unaffected_style_entries(&mut entries, name, &parsed_entries.affected_names);
         entries.extend(parsed_entries.entries);
     }
     if update_inline_style_base {
@@ -170,7 +168,23 @@ pub(crate) fn style_set_property_callback<'s>(
         handle,
         &entries,
         inline_base_url.as_ref(),
-    );
+    )
+}
+
+fn remove_style_entries(entries: &mut Vec<StyleEntry>, name: &str) -> bool {
+    let before = entries.len();
+    if name == "all" {
+        entries.retain(|entry| entry.name != "all" && !all_shorthand_applies_to(&entry.name));
+    } else if let Some(longhands) = shorthand_longhands(name) {
+        entries.retain(|entry| {
+            entry.name != name && !longhands.iter().any(|longhand| entry.name == *longhand)
+        });
+    } else if let Some(affected_names) = cssom_style_property_affected_names_with_pdb(name) {
+        retain_unaffected_style_entries(entries, name, &affected_names);
+    } else {
+        entries.retain(|entry| entry.name != name);
+    }
+    entries.len() != before
 }
 
 pub(super) fn retain_unaffected_style_entries(
@@ -300,69 +314,50 @@ pub(crate) fn style_remove_property_callback<'s>(
     } else {
         previous
     };
-    if name == "all" {
-        if set_inline_style_property_with_pdb_storage(scope, runtime_ptr, handle, &name, "", false)
-            .is_some()
-        {
-            if let Some(previous) = v8_string(scope, &previous) {
-                rv.set(previous.into());
-            } else {
-                rv.set_empty_string();
-            }
-            return;
+    let write =
+        set_inline_style_property_with_pdb_storage(scope, runtime_ptr, handle, &name, "", false);
+    if !matches!(write, InlineStylePropertyWrite::NeedsCompatibilityEntries) {
+        if matches!(write, InlineStylePropertyWrite::NoAttributeWrite) {
+            crate::custom_elements::dispatch_unchanged_attribute_changed_callback(
+                scope,
+                runtime_ptr,
+                handle,
+                "style",
+            );
         }
-    } else {
-        if set_inline_style_property_with_pdb_storage(scope, runtime_ptr, handle, &name, "", false)
-            .is_some()
-        {
-            if let Some(previous) = v8_string(scope, &previous) {
-                rv.set(previous.into());
-            } else {
-                rv.set_empty_string();
-            }
-            return;
+        rv.set(
+            v8_string(scope, &previous)
+                .unwrap_or_else(|| v8::String::empty(scope))
+                .into(),
+        );
+        return;
+    }
+    if name != "all" && previous.is_empty() {
+        if supported_declared_property(&name) {
+            crate::custom_elements::dispatch_unchanged_attribute_changed_callback(
+                scope,
+                runtime_ptr,
+                handle,
+                "style",
+            );
         }
-        if previous.is_empty() {
-            rv.set_empty_string();
-            return;
-        }
+        rv.set_empty_string();
+        return;
     }
     let style_object_entries =
         style_entries_for_style_object(scope, args.this(), unsafe { &*runtime_ptr }, handle);
     let mut entries = style_object_entries.entries;
     let inline_base_url = style_object_entries.base_url;
-    if name == "all" {
-        if previous.is_empty()
-            && !entries
-                .iter()
-                .any(|entry| entry.name == "all" || all_shorthand_applies_to(&entry.name))
-        {
-            rv.set_empty_string();
-            return;
-        }
-        entries.retain(|entry| entry.name != "all" && !all_shorthand_applies_to(&entry.name));
-        set_style_entries_with_inline_base_url(
+    let removed = remove_style_entries(&mut entries, &name);
+    if name == "all" && previous.is_empty() && !removed {
+        crate::custom_elements::dispatch_unchanged_attribute_changed_callback(
             scope,
             runtime_ptr,
             handle,
-            &entries,
-            inline_base_url.as_ref(),
+            "style",
         );
-        if let Some(previous) = v8_string(scope, &previous) {
-            rv.set(previous.into());
-        } else {
-            rv.set_empty_string();
-        }
+        rv.set_empty_string();
         return;
-    }
-    if let Some(longhands) = shorthand_longhands(&name) {
-        entries.retain(|entry| {
-            entry.name != name && !longhands.iter().any(|longhand| entry.name == *longhand)
-        });
-    } else if let Some(affected_names) = cssom_style_property_affected_names_with_pdb(&name) {
-        retain_unaffected_style_entries(&mut entries, &name, &affected_names);
-    } else {
-        entries.retain(|entry| entry.name != name);
     }
     set_style_entries_with_inline_base_url(
         scope,

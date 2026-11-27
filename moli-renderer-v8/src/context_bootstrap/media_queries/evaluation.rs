@@ -1,4 +1,3 @@
-use super::event::create_media_query_list_event;
 use super::{
     dispatch_media_query_list_event, initialize_simple_event_target,
     simple_object_event_set_handler,
@@ -7,11 +6,7 @@ use crate::context_bootstrap::DEFAULT_WINDOW_SURFACE_PROFILE;
 use crate::context_bootstrap::window_accessors::{
     prepare_window_viewport_read, window_current_dispatch_scope,
 };
-use crate::context_bootstrap::{
-    MEDIA_QUERY_LIST_MATCHES_SLOT, MEDIA_QUERY_LIST_MEDIA_SLOT, MEDIA_QUERY_LIST_ONCHANGE_SLOT,
-    MEDIA_QUERY_LIST_REGISTRY_SLOT,
-};
-use crate::context_bootstrap::{global_queue_array, push_object_to_global_registry};
+use crate::context_bootstrap::{MEDIA_QUERY_LIST_MEDIA_SLOT, MEDIA_QUERY_LIST_ONCHANGE_SLOT};
 use crate::native_bridge::{
     PageScriptHost, WindowDocumentTaskTarget, WindowExecutionContextBinding,
 };
@@ -74,34 +69,53 @@ fn media_query_list_attribute_getter_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let Some(slot) = callback_data_item(
+    let Some(attribute) = callback_data_item(
         scope,
         &args,
-        MEDIA_QUERY_LIST_ATTRIBUTE_SLOTS,
-        "MediaQueryList attribute slots",
+        MEDIA_QUERY_LIST_ATTRIBUTES,
+        "MediaQueryList attributes",
     ) else {
         rv.set_undefined();
         return;
     };
-    if slot == MEDIA_QUERY_LIST_MATCHES_SLOT {
+    if attribute == "matches" {
         if let Some(matches) = read_media_query_matches(scope, args.this()) {
             rv.set_bool(matches);
         }
         return;
     }
     rv.set(
-        media_query_list_slot_value(scope, args.this(), slot)
+        media_query_list_slot_value(scope, args.this(), MEDIA_QUERY_LIST_MEDIA_SLOT)
             .unwrap_or_else(|| v8::undefined(scope).into()),
     );
 }
 
-const REALTIME_MEDIA_QUERY_ID_SLOT: &str = "__moliRealtimeMediaQueryId";
+const MEDIA_QUERY_ID_SLOT: &str = "__moliMediaQueryId";
+const MEDIA_QUERY_ROOTS_SLOT: &str = "__moliMediaQueryRoots";
 
-fn realtime_media_query_id<'s>(
+fn remove_media_query_root<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    list: v8::Local<'s, v8::Object>,
+    id: u64,
+) {
+    let Some(context) = list.get_creation_context(scope) else {
+        return;
+    };
+    let scope = &mut v8::ContextScope::new(scope, context);
+    let global = context.global(scope);
+    if let Some(registry) = get_private_value(scope, global, MEDIA_QUERY_ROOTS_SLOT)
+        .and_then(|value| v8::Local::<v8::Map>::try_from(value).ok())
+    {
+        let key = v8::BigInt::new_from_u64(scope, id);
+        registry.delete(scope, key.into());
+    }
+}
+
+fn media_query_id<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     list: v8::Local<'s, v8::Object>,
 ) -> Option<u64> {
-    get_private_value(scope, list, REALTIME_MEDIA_QUERY_ID_SLOT)
+    get_private_value(scope, list, MEDIA_QUERY_ID_SLOT)
         .and_then(|value| v8::Local::<v8::BigInt>::try_from(value).ok())
         .and_then(|value| {
             let (id, lossless) = value.u64_value();
@@ -131,15 +145,10 @@ pub(in crate::context_bootstrap) fn read_media_query_matches<'s>(
     if !prepare_window_viewport_read(scope, global) {
         return None;
     }
-    if host.layout_policy().is_realtime()
-        && let Some(id) = realtime_media_query_id(scope, list)
-    {
-        return Some(host.realtime_media_query_matches(id));
-    }
     Some(host.media_query_matches_for_document(document, &media))
 }
 
-pub(in crate::context_bootstrap) fn realtime_media_query_listeners_changed<'s>(
+pub(in crate::context_bootstrap) fn media_query_listeners_changed<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     list: v8::Local<'s, v8::Object>,
     event_type: &str,
@@ -147,6 +156,9 @@ pub(in crate::context_bootstrap) fn realtime_media_query_listeners_changed<'s>(
     if event_type != "change" {
         return;
     }
+    let Some(id) = media_query_id(scope, list) else {
+        return;
+    };
     let Some(context) = list.get_creation_context(scope) else {
         return;
     };
@@ -154,45 +166,83 @@ pub(in crate::context_bootstrap) fn realtime_media_query_listeners_changed<'s>(
     let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) else {
         return;
     };
-    if !unsafe { &*host_ptr }.layout_policy().is_realtime() {
+    let host = unsafe { &*host_ptr };
+    let active = !super::simple_object_event_listeners_snapshot(scope, list, event_type).is_empty();
+    if active == host.media_query_is_listening(id) {
         return;
     }
-    let Some(id) = realtime_media_query_id(scope, list) else {
+    let global = context.global(scope);
+    if !active {
+        if !host.stop_media_query_listening(id) {
+            remove_media_query_root(scope, list, id);
+        }
+        return;
+    }
+    let Some(target) = host.current_window_document_task_target(scope) else {
         return;
     };
-    let active = !super::simple_object_event_listeners_snapshot(scope, list, event_type).is_empty();
-    unsafe { &*host_ptr }.set_realtime_media_query_listening(id, active);
+    let Some(document) = host.window_document_handle_for_dispatch_scope(target.dispatch_scope())
+    else {
+        return;
+    };
+    let Some(media) = media_query_list_media_slot(scope, list) else {
+        return;
+    };
+    let matches = host.media_query_matches_for_document(document, &media);
+    if let Err(error) = host.register_media_query(scope, id, target, media, matches, list) {
+        crate::context_bootstrap::throw_error(scope, &error.to_string());
+        return;
+    }
+    // Keep pending notifications alive even if their last listener is removed.
+    // Read-only queries use the current environment in their matches getter.
+    let registry = get_private_value(scope, global, MEDIA_QUERY_ROOTS_SLOT)
+        .and_then(|value| v8::Local::<v8::Map>::try_from(value).ok())
+        .unwrap_or_else(|| {
+            let registry = v8::Map::new(scope);
+            set_private_value(scope, global, MEDIA_QUERY_ROOTS_SLOT, registry.into());
+            registry
+        });
+    let key = v8::BigInt::new_from_u64(scope, id);
+    registry.set(scope, key.into(), list.into());
 }
 
 /// These strong roots exist only for a Document's current media phase. The
 /// persistent native query holds the list weakly; it never roots a Context.
-pub(crate) struct PreparedRealtimeMediaQueryEvent {
-    pub(crate) id: u64,
-    pub(crate) binding: WindowExecutionContextBinding,
-    pub(crate) list: v8::Global<v8::Object>,
-    pub(crate) event: v8::Global<v8::Object>,
+struct PreparedMediaQueryEvent {
+    id: u64,
+    binding: WindowExecutionContextBinding,
+    list: v8::Global<v8::Object>,
+    event: v8::Global<v8::Object>,
 }
 
-pub(crate) fn take_realtime_media_query_events(
+fn take_media_query_events(
     scope: &mut v8::PinScope<'_, '_>,
     host_ptr: *mut PageScriptHost,
     target: WindowDocumentTaskTarget,
-) -> Vec<PreparedRealtimeMediaQueryEvent> {
+) -> Vec<PreparedMediaQueryEvent> {
+    // A deferred sample can find no change after the last listener left.
+    // Release those entries and roots without manufacturing an event.
+    for (id, list) in unsafe { &*host_ptr }.retire_idle_media_queries(target) {
+        if let Some(list) = list.to_local(scope) {
+            remove_media_query_root(scope, list, id);
+        }
+    }
     // Freeze the whole Document batch once, not separately per Realm. Queries
     // queued or registered during a callback belong to the next media phase.
-    let candidates = unsafe { &*host_ptr }.take_realtime_media_query_notifications(target);
+    let candidates = unsafe { &*host_ptr }.take_media_query_notifications(target);
     let mut events = Vec::with_capacity(candidates.len());
     for candidate in candidates {
-        if !unsafe { &*host_ptr }.realtime_media_query_is_current(target, candidate.id) {
+        if !unsafe { &*host_ptr }.media_query_is_current(target, candidate.id) {
+            unsafe { &*host_ptr }.retire_media_query(candidate.id);
             continue;
         }
         // No Host/state borrow survives a weak upgrade or any V8 operation.
         let Some(list) = candidate.list.to_local(scope) else {
-            unsafe { &*host_ptr }.retire_realtime_media_query(candidate.id);
+            unsafe { &*host_ptr }.retire_media_query(candidate.id);
             continue;
         };
         let Some(context) = list.get_creation_context(scope) else {
-            unsafe { &*host_ptr }.retire_realtime_media_query(candidate.id);
+            unsafe { &*host_ptr }.retire_media_query(candidate.id);
             continue;
         };
         let identity = candidate.execution_context;
@@ -210,12 +260,12 @@ pub(crate) fn take_realtime_media_query_events(
             v8::Global::new(scope, event)
         });
         let Some(event) = event else {
-            unsafe { &*host_ptr }.retire_realtime_media_query(candidate.id);
+            unsafe { &*host_ptr }.retire_media_query(candidate.id);
             continue;
         };
         // Prepare every event before the first author callback. The existing
         // native event.matches getter deliberately continues to read its list.
-        events.push(PreparedRealtimeMediaQueryEvent {
+        events.push(PreparedMediaQueryEvent {
             id: candidate.id,
             binding,
             list,
@@ -225,16 +275,70 @@ pub(crate) fn take_realtime_media_query_events(
     events
 }
 
-pub(crate) fn dispatch_realtime_media_query_event<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    list: v8::Local<'s, v8::Object>,
-    event: v8::Local<'s, v8::Object>,
+fn finish_media_query_events(
+    scope: &mut v8::PinScope<'_, '_>,
+    host_ptr: *mut PageScriptHost,
+    events: &[PreparedMediaQueryEvent],
 ) {
-    let _ = dispatch_media_query_list_event(scope, list, event);
+    for prepared in events {
+        if unsafe { &*host_ptr }.finish_media_query_notification(prepared.id) {
+            continue;
+        }
+        let list = v8::Local::new(scope, &prepared.list);
+        remove_media_query_root(scope, list, prepared.id);
+    }
 }
 
-const MEDIA_QUERY_LIST_ATTRIBUTE_SLOTS: &[&str] =
-    &[MEDIA_QUERY_LIST_MEDIA_SLOT, MEDIA_QUERY_LIST_MATCHES_SLOT];
+/// Drivers provide their current Document authorization. Every policy shares the same frozen batch, Realm binding, event
+/// dispatch, recovery, and root cleanup.
+pub(crate) fn dispatch_media_query_events(
+    scope: &mut v8::PinScope<'_, '_>,
+    host_ptr: *mut PageScriptHost,
+    mut current_target: impl FnMut() -> Option<WindowDocumentTaskTarget>,
+) -> anyhow::Result<bool> {
+    let Some(target) = current_target() else {
+        return Ok(false);
+    };
+    let events = take_media_query_events(scope, host_ptr, target);
+    let result = (|| -> anyhow::Result<bool> {
+        let mut invoked = false;
+        for (index, prepared) in events.iter().enumerate() {
+            let Some(target) = current_target() else {
+                break;
+            };
+            // Only an explicit registry rebind can transfer this frozen query
+            // to a successor Document. Navigation and Realm retirement cannot.
+            if !unsafe { &*host_ptr }.media_query_is_current(target, prepared.id) {
+                continue;
+            }
+            let result: anyhow::Result<bool> = prepared
+                .binding
+                .with_current_scope(scope, host_ptr, |scope, _| {
+                    let list = v8::Local::new(scope, &prepared.list);
+                    let event = v8::Local::new(scope, &prepared.event);
+                    let _ = dispatch_media_query_list_event(scope, list, event);
+                    crate::script_vm::ScriptVm::environment_checkpoint(scope)?;
+                    Ok(true)
+                })
+                .unwrap_or(Ok(false));
+            if result.is_err()
+                && let Some(target) = current_target()
+            {
+                let uncalled = events[index + 1..]
+                    .iter()
+                    .map(|event| event.id)
+                    .collect::<Vec<_>>();
+                unsafe { &*host_ptr }.restore_media_query_notifications(target, &uncalled);
+            }
+            invoked |= result?;
+        }
+        Ok(invoked)
+    })();
+    finish_media_query_events(scope, host_ptr, &events);
+    result
+}
+
+const MEDIA_QUERY_LIST_ATTRIBUTES: &[&str] = &["media", "matches"];
 
 fn media_query_list_onchange_getter_callback<'s>(
     scope: &mut v8::PinScope<'s, '_>,
@@ -263,7 +367,7 @@ fn media_query_list_onchange_setter_callback<'s>(
         MEDIA_QUERY_LIST_ONCHANGE_SLOT,
         args.get(0),
     );
-    realtime_media_query_listeners_changed(scope, target, "change");
+    media_query_listeners_changed(scope, target, "change");
     rv.set_undefined();
 }
 
@@ -280,29 +384,13 @@ pub(crate) fn window_match_media_callback<'s>(
     if !prepare_window_viewport_read(scope, global) {
         return;
     }
-    let matches = if let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) {
-        let host = unsafe { &*host_ptr };
-        window_current_dispatch_scope(scope, global, host)
-            .and_then(|dispatch| host.window_document_handle_for_dispatch_scope(dispatch))
-            .is_some_and(|document| {
-                host.media_query_matches_for_document(document, &serialized_query)
-            })
-    } else {
-        evaluate_match_media_query_list(&serialized_query, None)
-    };
-    let realtime_registration = if let Some(host_ptr) = context_host_ptr_from_global_bridge(scope)
-        && unsafe { &*host_ptr }.layout_policy().is_realtime()
-        && let Some(target) = unsafe { &*host_ptr }.current_window_document_task_target(scope)
-    {
-        Some((host_ptr, target, serialized_query.clone()))
-    } else {
-        None
-    };
-    let mql = new_media_query_list(scope, serialized_query, matches);
-    if let Some((host_ptr, target, media)) = realtime_registration {
-        let id = match unsafe { &*host_ptr }
-            .register_realtime_media_query(scope, target, media, matches, mql)
-        {
+    let host = context_host_ptr_from_global_bridge(scope).map(|host| unsafe { &*host });
+    let mql = new_media_query_list(scope, serialized_query);
+    initialize_simple_event_target(scope, mql);
+    if let Some(host) = host {
+        // Media change events follow creation order, even when listeners were
+        // added later. Only subscribed lists enter the native map.
+        let id = match host.allocate_media_query_id() {
             Ok(id) => id,
             Err(error) => {
                 crate::context_bootstrap::throw_error(scope, &error.to_string());
@@ -310,71 +398,9 @@ pub(crate) fn window_match_media_callback<'s>(
             }
         };
         let value = v8::BigInt::new_from_u64(scope, id);
-        set_private_value(scope, mql, REALTIME_MEDIA_QUERY_ID_SLOT, value.into());
+        set_private_value(scope, mql, MEDIA_QUERY_ID_SLOT, value.into());
     }
-    initialize_simple_event_target(scope, mql);
-
-    if global_queue_array(scope, MEDIA_QUERY_LIST_REGISTRY_SLOT).is_none() {
-        let global = scope.get_current_context().global(scope);
-        let registry = v8::Array::new(scope, 0);
-        set_private_value(
-            scope,
-            global,
-            MEDIA_QUERY_LIST_REGISTRY_SLOT,
-            registry.into(),
-        );
-    }
-    push_object_to_global_registry(scope, MEDIA_QUERY_LIST_REGISTRY_SLOT, mql);
     rv.set(mql.into());
-}
-
-pub(crate) fn dispatch_media_query_list_change_events<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-) -> bool {
-    let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) else {
-        return false;
-    };
-    let host = unsafe { &*host_ptr };
-    let Some(target) = host.current_window_document_task_target(scope) else {
-        return false;
-    };
-    let Some(document) = host.window_document_handle_for_dispatch_scope(target.dispatch_scope())
-    else {
-        return false;
-    };
-    let Some(registry) = global_queue_array(scope, MEDIA_QUERY_LIST_REGISTRY_SLOT) else {
-        return false;
-    };
-    let mut dispatched = false;
-    for index in 0..registry.length() {
-        let Some(value) = registry.get_index(scope, index) else {
-            continue;
-        };
-        let Ok(mql) = v8::Local::<v8::Object>::try_from(value) else {
-            continue;
-        };
-        let Some(media) = media_query_list_media_slot(scope, mql) else {
-            continue;
-        };
-        let host = unsafe { &*host_ptr };
-        if !host.window_document_owner_is_current_for_dispatch_scope(
-            target.owner(),
-            target.dispatch_scope(),
-        ) {
-            break;
-        }
-        let previous_matches = get_private_value(scope, mql, MEDIA_QUERY_LIST_MATCHES_SLOT)
-            .is_some_and(|value| value.boolean_value(scope));
-        let current_matches = host.media_query_matches_for_document(document, &media);
-        set_media_query_list_bool_slot(scope, mql, MEDIA_QUERY_LIST_MATCHES_SLOT, current_matches);
-        if previous_matches == current_matches {
-            continue;
-        }
-        let event = create_media_query_list_event(scope, &media, current_matches);
-        let _ = dispatch_media_query_list_event(scope, mql, event);
-        dispatched = true;
-    }
-    dispatched
 }
 
 fn media_query_list_slot_value<'s>(
@@ -392,24 +418,6 @@ fn media_query_list_media_slot<'s>(
     media_query_list_slot_value(scope, list, MEDIA_QUERY_LIST_MEDIA_SLOT)
         .and_then(|value| value.to_string(scope))
         .map(|value| value.to_rust_string_lossy(scope))
-}
-
-fn set_media_query_list_slot_value<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    list: v8::Local<'s, v8::Object>,
-    slot: &str,
-    value: v8::Local<'s, v8::Value>,
-) {
-    set_private_value(scope, list, slot, value);
-}
-
-fn set_media_query_list_bool_slot<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    list: v8::Local<'s, v8::Object>,
-    slot: &str,
-    value: bool,
-) {
-    set_media_query_list_slot_value(scope, list, slot, v8::Boolean::new(scope, value).into());
 }
 
 fn serialize_match_media_query_list(query: &str) -> String {

@@ -257,11 +257,19 @@ impl ConnectedStyleOwnerKind {
 
 impl DocumentRuntime {
     /// Parser discovery may need an inline import before the initial scan.
-    /// Reuse connected-owner admission without visiting unrelated DOM nodes.
-    pub(crate) fn prepare_parser_style_import_loads(
+    /// Bind the live owner to its canonical operation before a completed
+    /// graph can be published. An owner queued at the DOM mutation boundary
+    /// already has a load-event admission and keeps it here.
+    pub(crate) fn accept_parser_stylesheet_inputs(
         &mut self,
+        host_ptr: *mut PageScriptHost,
         inputs: &[crate::stylesheet_blocking::DocumentOwnedStylesheetDiscoveryInput],
-    ) -> Vec<PreparedConnectedStyleLoad> {
+    ) -> ConnectedStyleLoadPrimeResult {
+        let mut result = ConnectedStyleLoadPrimeResult {
+            completed_stylesheet_clients: self
+                .note_discovered_document_owned_stylesheet_inputs(inputs.iter()),
+            ..Default::default()
+        };
         let handles = inputs
             .iter()
             .filter(|input| {
@@ -272,11 +280,49 @@ impl DocumentRuntime {
             })
             .map(|input| DomHandle::new(input.node_id().index()))
             .collect::<Vec<_>>();
-        let mut prepared = self.prepare_connected_style_load_handles(&handles, true);
-        for load in &mut prepared {
-            load.remember_before_initial_scan = !self.initial_connected_style_loads_queued;
+        if handles.is_empty() {
+            return result;
         }
-        prepared
+        for mut load in self.prepare_connected_style_load_handles(&handles, true) {
+            load.remember_before_initial_scan = !self.initial_connected_style_loads_queued;
+            result.extend(self.commit_prepared_connected_style_load(host_ptr, load));
+        }
+        let queued_loads = std::mem::take(&mut self.stylesheet_lifecycle.pending_connected_loads);
+        for load in queued_loads {
+            if handles.contains(&load.owner()) {
+                result.extend(self.prime_connected_style_load_handle(
+                    load.owner(),
+                    load.inline_source().cloned(),
+                    host_ptr,
+                    load.event_admission(),
+                ));
+            } else {
+                self.stylesheet_lifecycle
+                    .pending_connected_loads
+                    .push_back(load);
+            }
+        }
+        result
+    }
+
+    pub(crate) fn accept_parser_stylesheet_inputs_in_current_scope(
+        &mut self,
+        scope: &mut v8::PinScope<'_, '_>,
+        host_ptr: *mut PageScriptHost,
+        inputs: &[crate::stylesheet_blocking::DocumentOwnedStylesheetDiscoveryInput],
+    ) {
+        if inputs.is_empty() {
+            return;
+        }
+        let mut result = self.accept_parser_stylesheet_inputs(host_ptr, inputs);
+        self.settle_stylesheet_link_clients_in_current_scope(
+            scope,
+            host_ptr,
+            result.take_completed_stylesheet_clients(),
+        );
+        self.pending_connected_style_load_prime_result
+            .extend(result);
+        self.publish_ready_stylesheet_results_in_current_scope(scope, host_ptr);
     }
 
     pub(crate) fn prepare_initial_connected_style_loads(
@@ -458,6 +504,26 @@ impl DocumentRuntime {
             .collect()
     }
 
+    /// Complete the synchronous prepare/commit/apply transaction on the
+    /// owner thread. The host commits only the FrameOwnerStore admission.
+    pub(crate) fn commit_prepared_connected_style_load(
+        &mut self,
+        host_ptr: *mut PageScriptHost,
+        prepared: PreparedConnectedStyleLoad,
+    ) -> ConnectedStyleLoadPrimeResult {
+        let host = unsafe { &mut *host_ptr };
+        let inline_source = host.owner_style_sheet_processing_source(prepared.owner());
+        let Some(admission) = host.commit_connected_style_load_event_plan(prepared.event_plan())
+        else {
+            tracing::debug!(
+                owner = ?prepared.owner(),
+                "discarded connected-style plan rejected by the current main Document"
+            );
+            return ConnectedStyleLoadPrimeResult::default();
+        };
+        self.apply_prepared_connected_style_load(prepared, inline_source, admission, host_ptr)
+    }
+
     /// Apply one already-committed plan without consulting ContextHost for
     /// lifecycle authority.
     ///
@@ -637,6 +703,21 @@ impl DocumentRuntime {
         self.connected_style_load_is_queued(handle)
     }
 
+    #[cfg(test)]
+    pub(crate) fn pending_style_import_binding_for_test(
+        &self,
+        handle: DomHandle,
+    ) -> Option<(usize, bool)> {
+        let operation = self
+            .stylesheet_lifecycle
+            .owner_states
+            .pending_operation(handle)?;
+        let ConnectedLoadParameters::StyleImports { roots, .. } = &operation.parameters else {
+            return None;
+        };
+        Some((roots.len(), operation.blocking_operation.is_some()))
+    }
+
     pub(super) fn push_ready_connected_style_load(&mut self, ready: ReadyConnectedStyleLoad) {
         let producer = self
             .stylesheet_lifecycle
@@ -728,11 +809,17 @@ impl DocumentRuntime {
         if !node.flags().parser_created() || !node.is_html_element_named("style") {
             return false;
         }
-        document_owned_blocking_stylesheet_candidate_for_node(
+        let Some(candidate) = document_owned_blocking_stylesheet_candidate_for_node(
             &self.dom_host,
             NodeId::new(handle.index()),
-        )
-        .is_some()
+        ) else {
+            return false;
+        };
+        let signature = DocumentBlockingStylesheetSignature::from_candidate(&candidate);
+        self.stylesheet_lifecycle
+            .fetches
+            .blocking_operation(NodeId::new(handle.index()), &signature)
+            .is_none()
     }
 
     pub(crate) fn has_pending_style_loads(&self) -> bool {
@@ -1601,8 +1688,40 @@ impl DocumentRuntime {
     ) -> bool {
         self.apply_pending_stylesheet_source_css_projections(scope, host_ptr);
         let handle = ready.owner();
-        let load_succeeded = self.consume_pending_style_load(host_ptr, &ready);
+        let link_load = match ready.operation() {
+            ReadyConnectedStyleLoadOperation::StylesheetLink(load) => Some(Arc::clone(load)),
+            _ => None,
+        };
+        let had_pending_blocker = !self.parser_blocking_stylesheet_release_is_ready();
+        let document_owner = ready
+            .load_event_binding()
+            .map(|binding| binding.owner())
+            .or_else(|| {
+                if host_ptr.is_null() {
+                    None
+                } else {
+                    unsafe { &*host_ptr }.current_main_document_task_owner()
+                }
+            });
+        let load_succeeded = if link_load.is_some() {
+            ready.successful()
+        } else {
+            self.consume_pending_style_load(host_ptr, &ready)
+        };
         self.dispatch_style_or_link_load_event(scope, host_ptr, handle, load_succeeded);
+        if let Some(load) = link_load
+            && self
+                .stylesheet_lifecycle
+                .owner_states
+                .consume_link_event(&load)
+            && !host_ptr.is_null()
+            && document_owner.is_some_and(|owner| {
+                unsafe { &*host_ptr }.current_main_document_task_owner() == Some(owner)
+            })
+        {
+            // Callback replacement or a successor load must retain its own gate.
+            self.request_parser_if_stylesheet_blockers_released(had_pending_blocker);
+        }
         true
     }
 
@@ -1620,9 +1739,15 @@ impl DocumentRuntime {
                 None
             }
             ReadyConnectedStyleLoadOperation::StylesheetLink(load) => {
-                self.stylesheet_lifecycle
+                // The no-realm path still finishes the selected event body.
+                let had_pending_blocker = !self.parser_blocking_stylesheet_release_is_ready();
+                if self
+                    .stylesheet_lifecycle
                     .owner_states
-                    .consume_link_event(load);
+                    .consume_link_event(load)
+                {
+                    self.request_parser_if_stylesheet_blockers_released(had_pending_blocker);
+                }
                 None
             }
             ReadyConnectedStyleLoadOperation::NativeModulepreload(client) => {
@@ -4328,7 +4453,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn completed_ownerless_failure_releases_parser_before_link_error_dispatch() {
+    async fn completed_ownerless_failure_waits_for_link_error_before_releasing_parser() {
         let listener = TcpListener::bind("127.0.0.1:0")
             .await
             .expect("stylesheet server");
@@ -4383,14 +4508,14 @@ mod tests {
         let signatures = stylesheet_inputs
             .iter()
             .map(|input| input.signature().clone())
-            .collect::<Vec<_>>();
+            .collect::<std::collections::HashSet<_>>();
         assert!(
             !runtime.has_pending_document_owned_blocking_stylesheet_signatures(signatures.iter()),
             "the completed failure must settle the physical stylesheet blocker"
         );
         assert!(
-            !runtime.has_pending_parser_script_blocking_stylesheet_signatures(signatures.iter()),
-            "a terminal stylesheet failure must release script execution before its error task"
+            runtime.has_pending_parser_script_blocking_stylesheet_signatures(&signatures),
+            "a terminal stylesheet failure must keep scripts blocked through its error task"
         );
 
         let load = runtime
@@ -4401,17 +4526,19 @@ mod tests {
             .expect("late client admission should publish its exact error task");
         assert_eq!(ready.owner(), link);
         assert!(!ready.successful());
-        runtime
-            .stylesheet_lifecycle
-            .owner_states
-            .consume_link_event(&load);
+        assert!(
+            runtime
+                .stylesheet_lifecycle
+                .owner_states
+                .consume_link_event(&load)
+        );
         assert!(
             !runtime.has_pending_document_owned_blocking_stylesheet_signatures(signatures.iter()),
             "dispatch must not recreate the settled physical stylesheet blocker"
         );
         assert!(
-            !runtime.has_pending_parser_script_blocking_stylesheet_signatures(signatures.iter()),
-            "dispatching the exact link error task must not recreate the released script gate"
+            !runtime.has_pending_parser_script_blocking_stylesheet_signatures(&signatures),
+            "finishing the exact link error task must release its script gate"
         );
         assert!(
             runtime.pop_ready_connected_style_load().is_none(),

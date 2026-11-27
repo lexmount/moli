@@ -1,21 +1,23 @@
-use std::collections::HashMap;
-
 use moli_selector::{StyloDomHostBinding, StyloElement};
 use style::{
     Atom,
     animation::DocumentAnimationSet,
+    computed_value_flags::ComputedValueFlags,
     context::{
         QuirksMode, RegisteredSpeculativePainter, RegisteredSpeculativePainters,
         SharedStyleContext, StyleContext, StyleSystemOptions, ThreadLocalStyleContext,
     },
+    data::{ElementDataFlags, ElementStyles},
     dom::{TElement, TNode},
+    invalidation::element::restyle_hints::RestyleHint,
     properties::ComputedValues,
     selector_parser::{PseudoElement, SnapshotMap},
+    servo::restyle_damage::ServoRestyleDamage,
     servo_arc::Arc as ServoArc,
     shared_lock::StylesheetGuards,
-    style_resolver::{PseudoElementResolution, StyleResolverForElement},
     stylist::RuleInclusion,
     thread_state::{self, ThreadState},
+    traversal::{resolve_style, restyle_element},
     traversal_flags::TraversalFlags,
 };
 
@@ -23,16 +25,14 @@ use style::{
 use super::STYLE_RESOLUTION_CONTEXTS;
 use super::{
     DocumentStyleWorld, DomHandle, DomHost, MarkerStyleDecision, MoliStyleEngine,
-    StyloAnonymousBoxKind, StyloComputedStyleSnapshot, clear_element_styles_for_resolution,
-    document_quirks_mode, element_style_is_current, marker_style_decision,
-    populate_inline_style_attribute_for_resolution, publish_resolved_element_styles,
-    style_validation_path_needs_resolution, stylo_pseudo_element_for_computed_style,
-    with_cached_lazy_pseudo_style,
+    StyloAnonymousBoxKind, StyloComputedStyleSnapshot, child_restyle_scope, document_quirks_mode,
+    marker_style_decision, populate_inline_style_attribute_for_resolution, record_screen_restyle,
+    stylo_pseudo_element_for_computed_style, with_cached_pseudo_style,
 };
 
 /// One binding and stylesheet read scope for a stable document world. Create
 /// Stylo's thread-local state only when an element actually needs resolving.
-pub(super) struct ResolutionContext<'a, 'dom> {
+pub(in crate::style_engine) struct ResolutionContext<'a, 'dom> {
     world: &'a DocumentStyleWorld,
     adapter: &'dom StyloDomHostBinding<'dom>,
     shared: &'a SharedStyleContext<'a>,
@@ -48,7 +48,7 @@ impl<'dom> ResolutionContext<'_, 'dom> {
         }
     }
 
-    pub(super) fn with_stylo<R>(
+    pub(in crate::style_engine) fn with_stylo<R>(
         &mut self,
         resolve: impl FnOnce(&mut StyleContext<'_, StyloElement<'dom>>) -> R,
     ) -> R {
@@ -100,19 +100,32 @@ pub(super) fn with_resolution_context<'dom, R>(
     adapter: &'dom StyloDomHostBinding<'dom>,
     resolve: impl FnOnce(ResolutionContext<'_, 'dom>) -> R,
 ) -> R {
+    with_resolution_context_and_snapshots(world, adapter, &SnapshotMap::new(), resolve)
+}
+
+pub(in crate::style_engine) fn with_resolution_context_and_snapshots<'dom, R>(
+    world: &DocumentStyleWorld,
+    adapter: &'dom StyloDomHostBinding<'dom>,
+    snapshot_map: &SnapshotMap,
+    resolve: impl FnOnce(ResolutionContext<'_, 'dom>) -> R,
+) -> R {
     let guard = adapter.shared_lock().read();
-    let snapshot_map = SnapshotMap::new();
     let empty_painters = EmptyRegisteredSpeculativePainters;
     let _layout_thread_state = StyloLayoutThreadStateGuard::enter();
     world.document_state.with_retained_style_system(|retained| {
         let shared = SharedStyleContext {
             stylist: &retained.stylist,
             visited_styles_enabled: false,
-            options: StyleSystemOptions::default(),
+            // Demand-driven passes can skip ancestors that a standard
+            // traversal would have marked ineligible for cousin sharing.
+            options: StyleSystemOptions {
+                disable_style_sharing_cache: true,
+                ..StyleSystemOptions::default()
+            },
             guards: StylesheetGuards::same(&guard),
             current_time_for_animations: 0.0,
-            traversal_flags: TraversalFlags::empty(),
-            snapshot_map: &snapshot_map,
+            traversal_flags: TraversalFlags::SkipAnimationUpdates,
+            snapshot_map,
             animations: DocumentAnimationSet::default(),
             registered_speculative_painters: &empty_painters,
         };
@@ -126,12 +139,6 @@ pub(super) fn with_resolution_context<'dom, R>(
     })
 }
 
-#[derive(Clone, Copy)]
-struct PreparedElement {
-    depth: usize,
-    inherited_change: bool,
-}
-
 /// Demand-driven style resolution within one document's stable style world.
 /// Element styles are published in the existing Stylo side table. The pass
 /// holds only traversal metadata and the working state needed to resolve them.
@@ -141,8 +148,8 @@ pub(crate) struct StyleResolutionPass<'a, 'dom> {
     document_url: &'a url::Url,
     quirks_mode: QuirksMode,
     context: ResolutionContext<'a, 'dom>,
-    prepared: HashMap<DomHandle, PreparedElement>,
     pending: Vec<StyloElement<'dom>>,
+    validations: u64,
     resolutions: u64,
 }
 
@@ -155,16 +162,27 @@ pub(in crate::style_engine) fn with_style_resolution_pass<R>(
 ) -> R {
     let world = engine.world_for_document(document);
     let quirks_mode = document_quirks_mode(host, document);
+    with_style_resolution_pass_in_world(engine, host, document_url, &world, quirks_mode, resolve)
+}
+
+pub(super) fn with_style_resolution_pass_in_world<R>(
+    engine: &MoliStyleEngine,
+    host: &DomHost,
+    document_url: &url::Url,
+    world: &DocumentStyleWorld,
+    quirks_mode: QuirksMode,
+    resolve: impl FnOnce(&mut StyleResolutionPass<'_, '_>) -> R,
+) -> R {
     engine.dom_adapter.with_bound_host(host, |adapter| {
-        with_resolution_context(&world, adapter, |context| {
+        with_resolution_context(world, adapter, |context| {
             let mut pass = StyleResolutionPass {
                 engine,
                 host,
                 document_url,
                 quirks_mode,
                 context,
-                prepared: HashMap::new(),
                 pending: Vec::new(),
+                validations: 0,
                 resolutions: 0,
             };
             resolve(&mut pass)
@@ -175,6 +193,58 @@ pub(in crate::style_engine) fn with_style_resolution_pass<R>(
 impl<'dom> StyleResolutionPass<'_, 'dom> {
     pub(crate) const fn document(&self) -> DomHandle {
         self.context.world.document
+    }
+
+    pub(crate) fn screen_style_coverage(&self) -> crate::style_engine::ScreenStyleCoverage {
+        self.context.world.document_state.screen_style_coverage()
+    }
+
+    pub(crate) fn resolve_screen_target_for_reuse(
+        &mut self,
+        handle: DomHandle,
+        after: u64,
+        supported_damage: ServoRestyleDamage,
+    ) -> Option<RestyleHint> {
+        let state = &self.context.world.document_state;
+        if !state.screen_style_dependencies_are_current() || state.screen_uses_lazy_pseudo(handle) {
+            return None;
+        }
+        let element = self.prepare(handle)?;
+        if !supported_damage.is_empty()
+            && element
+                .borrow_data()
+                .is_some_and(|data| !supported_damage.contains(data.damage))
+        {
+            return None;
+        }
+        let invalidation = &state.style_paths;
+        // Resolving the target can also restyle ancestors or retire old branch
+        // observations. Either event can require a new screen layout.
+        if state.screen_restyle_is_full()
+            || (supported_damage.is_empty() && state.screen_needs_layout())
+            || !invalidation.can_compare_after(after)
+        {
+            return None;
+        }
+        Some(
+            invalidation
+                .branch_requirements(handle)
+                .child_hint_after(after),
+        )
+    }
+
+    pub(crate) fn may_inherit_reset_style(&self, handle: DomHandle) -> bool {
+        self.context
+            .adapter
+            .element(self.host, handle)
+            .and_then(|element| {
+                element.borrow_data()?.styles.get_primary().map(|style| {
+                    style
+                        .flags
+                        .contains(ComputedValueFlags::INHERITS_RESET_STYLE)
+                })
+            })
+            .unwrap_or(true)
     }
 
     pub(crate) fn element_styles(
@@ -228,7 +298,7 @@ impl<'dom> StyleResolutionPass<'_, 'dom> {
         primary: &ComputedValues,
     ) -> Option<ServoArc<ComputedValues>> {
         debug_assert!(pseudo.is_lazy());
-        with_cached_lazy_pseudo_style(self.context.world, handle, pseudo, || {
+        with_cached_pseudo_style(self.context.world, handle, pseudo, || {
             self.context.lazy_pseudo_style(element, pseudo, primary)
         })
     }
@@ -262,8 +332,14 @@ impl<'dom> StyleResolutionPass<'_, 'dom> {
             adapter_bindings = 1,
             thread_local_contexts = u8::from(self.context.local.is_some()),
             node_wrappers = self.context.adapter.bound_node_count(),
-            validated_elements = self.prepared.len(),
+            validated_elements = self.validations,
             resolved_elements = self.resolutions,
+            cached_branch_requirements = self
+                .context
+                .world
+                .document_state
+                .style_paths
+                .branch_requirement_count(),
         );
     }
 
@@ -278,55 +354,78 @@ impl<'dom> StyleResolutionPass<'_, 'dom> {
         }
     }
 
-    fn prepare(&mut self, handle: DomHandle) -> Option<StyloElement<'dom>> {
-        if self.host.owner_document_handle(handle) != Some(self.document()) {
+    pub(super) fn prepare(&mut self, handle: DomHandle) -> Option<StyloElement<'dom>> {
+        let document = self.document();
+        if self.host.owner_document_handle(handle) != Some(document) {
             return None;
         }
         let element = self.context.adapter.element(self.host, handle)?;
 
+        let world = self.context.world;
+        let invalidation = &world.document_state.style_paths;
+        let dom_adapter = &self.engine.dom_adapter;
+
         let mut current = Some(element);
-        let mut depth = 0;
-        let mut inherited_change = false;
+        let mut parent = None;
         while let Some(ancestor) = current {
             let handle = DomHandle::new(ancestor.as_node().debug_id());
-            if let Some(prepared) = self.prepared.get(&handle) {
-                if ancestor == element {
-                    return Some(element);
-                }
-                depth = prepared.depth + 1;
-                inherited_change = prepared.inherited_change;
+            invalidation.note_path_node_visit();
+            if let Some(path) = dom_adapter.style_path(document, handle)
+                && path.observed_at == invalidation.generation()
+                && ancestor
+                    .borrow_data()
+                    .is_some_and(|data| data.has_styles() && data.hint.is_empty())
+            {
+                parent = Some((handle, path));
                 break;
             }
             self.pending.push(ancestor);
             current = ancestor.traversal_parent();
         }
 
-        let world = self.context.world;
-        let invalidation = &world.document_state.lazy_invalidation_roots;
         while let Some(element) = self.pending.pop() {
             let handle = DomHandle::new(element.as_node().debug_id());
-            let (required_generation, needs_resolution) = if let Some(generation) =
-                invalidation.required_generation_for_checked_element(handle)
+            let (depth, inherited_subtree, child_restyles) =
+                parent.map_or((0, 0, Default::default()), |(parent, path)| {
+                    (
+                        path.depth() + 1,
+                        path.subtree_generation,
+                        invalidation.branch_requirements(parent),
+                    )
+                });
+            let mut subtree_generation =
+                inherited_subtree.max(invalidation.subtree_generation(handle));
+            // The style-parent chain skips the Document and ShadowRoot.
+            // Their subtree invalidations still apply at that boundary.
+            if let Some(dom_parent) = self.host.parent_node(handle)
+                && parent.is_none_or(|(style_parent, _)| style_parent != dom_parent)
             {
-                (
-                    generation,
-                    !element_style_is_current(world, element, generation),
-                )
-            } else {
-                let path = invalidation.validation_path(self.host, world.document, handle);
-                (
-                    invalidation
-                        .required_generation_for_checked_element(handle)
-                        .unwrap_or_default(),
-                    style_validation_path_needs_resolution(
-                        world,
-                        self.context.adapter,
-                        self.host,
-                        &path,
-                    ),
-                )
-            };
-            if inherited_change || needs_resolution {
+                subtree_generation =
+                    subtree_generation.max(invalidation.subtree_generation(dom_parent));
+            }
+            let data = element.borrow_data();
+            let inherits_reset = data
+                .as_ref()
+                .and_then(|data| data.styles.get_primary())
+                .is_some_and(|style| {
+                    style
+                        .flags
+                        .contains(ComputedValueFlags::INHERITS_RESET_STYLE)
+                });
+            let last_observation = dom_adapter
+                .style_path(document, handle)
+                .map_or(0, |path| path.observed_at);
+            let mut hint = data.as_ref().map_or(RestyleHint::empty(), |data| data.hint);
+            if subtree_generation > last_observation {
+                hint.insert(RestyleHint::RESTYLE_SELF);
+            }
+            if child_restyles.child_requirement(inherits_reset) > last_observation {
+                hint.insert(RestyleHint::RECASCADE_SELF);
+            }
+            let has_styles = data.is_some_and(|data| data.has_styles());
+            let needs_resolution = !hint.is_empty() || !has_styles;
+
+            if needs_resolution {
                 populate_inline_style_attribute_for_resolution(
                     self.engine,
                     self.host,
@@ -334,38 +433,57 @@ impl<'dom> StyleResolutionPass<'_, 'dom> {
                     handle,
                     self.quirks_mode,
                 );
-                clear_element_styles_for_resolution(world, element);
-                let styles = self.context.with_stylo(|context| {
-                    context
-                        .thread_local
-                        .bloom_filter
-                        .insert_parents_recovering(element, depth);
+                let mut data = unsafe { element.ensure_data() };
+                data.hint = hint;
+                let previous = data.styles.clone();
+                let pending_damage = std::mem::take(&mut data.damage);
+                let child_hint = self.context.with_stylo(|context| {
                     context.thread_local.current_dom_depth = depth;
-                    let styles = StyleResolverForElement::new(
-                        element,
-                        context,
-                        RuleInclusion::All,
-                        PseudoElementResolution::IfApplicable,
-                    )
-                    .resolve_style_with_default_parents()
-                    .into();
-                    context.thread_local.bloom_filter.push(element);
-                    styles
+                    let mut child_hint =
+                        data.restyle_kind(context.shared)
+                            .map_or(RestyleHint::empty(), |kind| {
+                                world.pseudo_style_cache.invalidate_handles([handle]);
+                                self.resolutions += 1;
+                                restyle_element(context, element, &mut data, kind)
+                            });
+                    child_hint |= data.hint.propagate(&context.shared.traversal_flags);
+                    child_hint
                 });
-                publish_resolved_element_styles(world, element, styles, required_generation);
-                inherited_change = true;
-                self.resolutions += 1;
+                let child_hint = if previous.get_primary().is_some() {
+                    child_restyle_scope(child_hint)
+                } else {
+                    RestyleHint::recascade_subtree()
+                };
+                let damage = record_screen_restyle(world, element, &previous, &data, child_hint);
+                data.flags.remove(ElementDataFlags::WAS_RESTYLED);
+                data.damage = pending_damage | damage;
+                if previous.get_primary().is_some() {
+                    invalidation.record_child_requirements(handle, child_hint, subtree_generation);
+                }
             }
-            self.prepared.insert(
-                handle,
-                PreparedElement {
-                    depth,
-                    inherited_change,
-                },
+            self.validations += 1;
+            subtree_generation = subtree_generation.max(invalidation.subtree_generation(handle));
+            let path = moli_selector::StyloStylePath::new(
+                invalidation.generation(),
+                subtree_generation,
+                depth,
             );
-            depth += 1;
+            dom_adapter.set_style_path(document, handle, path);
+            parent = Some((handle, path));
         }
         Some(element)
+    }
+
+    pub(super) fn eager_pseudo_styles_for_read(
+        &mut self,
+        element: StyloElement<'dom>,
+        pseudo: &PseudoElement,
+    ) -> ElementStyles {
+        // CSSOM can query a pseudo that didn't generate a box. Keep its
+        // forced resolution separate from the canonical element styles.
+        self.context.with_stylo(|context| {
+            resolve_style(context, element, RuleInclusion::All, Some(pseudo), None)
+        })
     }
 }
 
@@ -374,7 +492,7 @@ impl Drop for StyleResolutionPass<'_, '_> {
         self.context
             .world
             .document_state
-            .note_ancestor_style_validation_visits(self.prepared.len() as u64);
+            .note_ancestor_style_validation_visits(self.validations);
         self.context
             .world
             .document_state
@@ -421,6 +539,174 @@ impl Drop for StyloLayoutThreadStateGuard {
     fn drop(&mut self) {
         if self.entered {
             thread_state::exit(ThreadState::LAYOUT);
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::dom::native::NativeDom;
+    use crate::style_engine::{
+        FullStyleWorldSnapshot, StyleViewport, StyleWorldKey, StyloStylesheetSource,
+    };
+    use style::context::ElementCascadeInputs;
+    use style::invalidation::element::restyle_hints::RestyleHint;
+    use style::matching::MatchMethods;
+    use style::style_resolver::{PseudoElementResolution, StyleResolverForElement};
+    use style_traits::ToCss;
+
+    #[test]
+    fn stylo_incremental_restyle_keeps_wide_inheritance_demand_driven() {
+        let url = url::Url::parse("https://example.test/").unwrap();
+        let mut host = DomHost::from_dom(NativeDom::new_html(url.clone()));
+        let document = host.document_handle();
+        let html = host.create_element("html");
+        let parent = host.create_element("section");
+        assert!(host.append_child(document, html));
+        assert!(host.append_child(html, parent));
+        let children: Vec<_> = (0..10_000)
+            .map(|_| {
+                let child = host.create_element("span");
+                assert!(host.append_child(parent, child));
+                child
+            })
+            .collect();
+
+        let mut engine = MoliStyleEngine::new();
+        let inputs = FullStyleWorldSnapshot::default();
+        let key = StyleWorldKey::new(&inputs, StyleViewport::default());
+        engine.ensure_retained_style_system_for_document(&host, document, key, &inputs);
+        with_style_resolution_pass(&engine, &host, &url, document, |pass| {
+            pass.prepare_targets(&children);
+        });
+
+        assert!(host.set_attribute(parent, "style", "color: rgb(1, 2, 3)"));
+        engine.invalidate_inline_style_subtree(&host, parent);
+        with_style_resolution_pass(&engine, &host, &url, document, |pass| {
+            let child = pass.element_styles(children[0]).unwrap();
+            assert_eq!(
+                child
+                    .primary
+                    .get_inherited_text()
+                    .clone_color()
+                    .to_css_string(),
+                "rgb(1, 2, 3)"
+            );
+            let stats = &pass.context.local.as_ref().unwrap().statistics;
+            assert_eq!(stats.elements_styled, 2);
+            assert_eq!(stats.elements_matched, 0);
+            assert!(pass.context.adapter.bound_node_count() < 16);
+        });
+
+        let leaf = children[1];
+        engine.invalidate_style_subtree(&host, leaf);
+        with_style_resolution_pass(&engine, &host, &url, document, |pass| {
+            assert!(pass.prepare(leaf).is_some());
+            assert_eq!(
+                pass.context
+                    .local
+                    .as_ref()
+                    .unwrap()
+                    .statistics
+                    .elements_matched,
+                1
+            );
+        });
+    }
+
+    #[test]
+    fn stylo_root_pseudos_use_current_font_bases_on_match_and_recascade() {
+        let url = url::Url::parse("https://example.test/").unwrap();
+        let mut host = DomHost::from_dom(NativeDom::new_html(url.clone()));
+        let document = host.document_handle();
+        let html = host.create_element("html");
+        assert!(host.append_child(document, html));
+
+        let engine = MoliStyleEngine::new();
+        let source = StyloStylesheetSource::new(
+            r#"html { font: 20px/30px monospace; }
+               html::before { content: ""; font: 7px/9px monospace; width: 2rch; height: 2rlh; }"#
+                .into(),
+            url.clone(),
+        );
+        let mut inputs = FullStyleWorldSnapshot::default();
+        inputs.document_stylesheet_sources.push(source);
+        let key = StyleWorldKey::new(&inputs, StyleViewport::default());
+        engine.ensure_retained_style_system_for_document(&host, document, key, &inputs);
+        let world = engine.world_for_document(document);
+
+        for (replacement, width) in [(None, "20px"), (Some("font-family: Ahem"), "40px")] {
+            if let Some(replacement) = replacement {
+                assert!(host.set_attribute(html, "style", replacement));
+                populate_inline_style_attribute_for_resolution(
+                    &engine,
+                    &host,
+                    &url,
+                    html,
+                    document_quirks_mode(&host, document),
+                );
+            }
+
+            engine.dom_adapter.with_bound_host(&host, |adapter| {
+                let root = adapter.element(&host, html).unwrap();
+                with_resolution_context(&world, adapter, |mut scope| {
+                    scope.with_stylo(|context| {
+                        let mut data = unsafe { root.ensure_data() };
+                        let mut important_rules_changed = true;
+                        let cascade_inputs = replacement.map(|_| {
+                            let mut inputs = ElementCascadeInputs::new_from_element_data(&data);
+                            important_rules_changed = root.replace_rules(
+                                RestyleHint::RESTYLE_STYLE_ATTRIBUTE,
+                                context,
+                                &mut inputs,
+                            );
+                            inputs
+                        });
+                        let mut resolver = StyleResolverForElement::new(
+                            root,
+                            context,
+                            RuleInclusion::All,
+                            PseudoElementResolution::IfApplicable,
+                        );
+                        let styles = match cascade_inputs {
+                            Some(inputs) => resolver.cascade_styles_with_default_parents(inputs),
+                            None => resolver.resolve_style_with_default_parents(),
+                        };
+                        let before = styles.pseudos.get(&PseudoElement::Before).unwrap();
+                        assert_eq!(before.get_position().width.to_css_string(), width);
+                        assert_eq!(before.get_position().height.to_css_string(), "60px");
+
+                        let child_hint = root.finish_restyle(
+                            context,
+                            &mut data,
+                            styles,
+                            important_rules_changed,
+                        );
+                        if replacement.is_some() {
+                            assert!(
+                                child_hint.contains(
+                                    RestyleHint::RESTYLE_IF_AFFECTED_BY_WM_OR_ANCESTOR_FONT
+                                )
+                            );
+                        }
+
+                        let shared = context.shared;
+                        let device = shared.stylist.device();
+                        let published_font_size = device.root_font_size();
+                        let published_ch = device.root_font_metrics_ch();
+                        StyleResolverForElement::new(
+                            root,
+                            context,
+                            RuleInclusion::DefaultOnly,
+                            PseudoElementResolution::IfApplicable,
+                        )
+                        .resolve_style_with_default_parents();
+                        assert_eq!(device.root_font_size(), published_font_size);
+                        assert_eq!(device.root_font_metrics_ch(), published_ch);
+                    });
+                });
+            });
         }
     }
 }

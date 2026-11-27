@@ -15,7 +15,7 @@ fn assert_participating_text(markup: &str, range: &str, expected: &str) {
         const container=document.createElement('div');container.style.fontFamily='ParticipationFace';
         container.innerHTML={markup};document.body.append(container);
     "#)).unwrap();
-    vm.prime_document_lifecycle_processing_and_record_stylesheet_network_results();
+    vm.prime_document_lifecycle_and_publish_stylesheets();
     run_font_tasks(&mut vm);
     assert_eq!(vm.eval("face.status").unwrap(), expected, "{markup}");
     vm.eval("document.fonts.ready.then(()=>globalThis.ready=true)")
@@ -127,7 +127,7 @@ async fn automatic_fonts_column_pseudos_do_not_request_discarded_generated_text(
                 globalThis.events=[];
                 document.fonts.addEventListener('loading',()=>events.push('loading'));
             "#)).unwrap();
-            vm.prime_document_lifecycle_processing_and_record_stylesheet_network_results();
+            vm.prime_document_lifecycle_and_publish_stylesheets();
             run_font_tasks(&mut vm);
             assert_eq!(
                 vm.eval("face.status").unwrap(),
@@ -158,7 +158,7 @@ async fn automatic_fonts_column_pseudos_do_not_request_discarded_generated_text(
             // text is retained, without a FontFace.load() or FontFaceSet getter.
             vm.eval("style.sheet.cssRules[0].style.display='inline'")
                 .unwrap();
-            vm.prime_document_lifecycle_processing_and_record_stylesheet_network_results();
+            vm.prime_document_lifecycle_and_publish_stylesheets();
             run_font_tasks(&mut vm);
             assert_eq!(vm.eval("face.status").unwrap(), "loading");
             let request = tokio::time::timeout(Duration::from_secs(2), request_rx)

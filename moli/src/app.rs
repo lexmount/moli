@@ -257,26 +257,24 @@ async fn run_cli_with_transport<W: Write>(
                 let with_output_context =
                     |error| with_http_status_context(error, &args, page_status, final_url.as_str());
                 if !args.fail || http_failure.is_none() {
-                    let rendered = if let Some(expression) = eval_expression.as_deref() {
-                        // OnDemand needs an explicit sample before the script.
-                        // Realtime refreshes at each geometry demand itself.
-                        if config.browser.layout_policy() == moli_core::LayoutPolicy::OnDemand {
-                            page.publish_layout_async()
-                                .await
-                                .context("failed to publish layout before evaluating JavaScript")
-                                .map_err(with_output_context)?;
-                        }
-                        if args.dump.is_some() {
+                    let rendered = async {
+                        if let Some(expression) = eval_expression.as_deref() {
+                            // Lazy needs an explicit sample before the script.
+                            // Realtime refreshes at each geometry demand itself.
+                            if config.browser.layout_policy() == moli_core::LayoutPolicy::Lazy {
+                                page.publish_layout_async()
+                                    .await
+                                    .context("failed to publish layout before evaluating JavaScript")?;
+                            }
+                            if args.dump.is_none() {
+                                return eval_output::evaluate(&mut page, expression).await;
+                            }
                             eval_output::execute(&mut page, expression)
-                                .await
-                                .map_err(with_output_context)?;
-                            fetch_dump::render_page_output_async(&mut page, &config.fetch).await
-                        } else {
-                            eval_output::evaluate(&mut page, expression).await
+                                .await?;
                         }
-                    } else {
                         fetch_dump::render_page_output_async(&mut page, &config.fetch).await
                     }
+                    .await
                     .map_err(with_output_context)?;
                     stdout
                         .write_all(&rendered)

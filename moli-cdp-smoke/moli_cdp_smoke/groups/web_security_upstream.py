@@ -2,8 +2,7 @@
 
 Source revision and exclusions live in web_security_upstream_sources.json.
 Expected results come from the pinned desktop Chrome, never from Moli. This
-opt-in conformance group also exercises capabilities Moli does not yet expose
-(notably file URL loaders); those differences fail, rather than being skipped.
+opt-in conformance group reports observable differences as test failures.
 """
 
 from __future__ import annotations

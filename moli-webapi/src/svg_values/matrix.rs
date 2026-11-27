@@ -14,7 +14,9 @@ const SVG_MATRIX_C_SLOT: &str = "__moliSvgMatrixC";
 const SVG_MATRIX_D_SLOT: &str = "__moliSvgMatrixD";
 const SVG_MATRIX_E_SLOT: &str = "__moliSvgMatrixE";
 const SVG_MATRIX_F_SLOT: &str = "__moliSvgMatrixF";
-const SVG_MATRIX_ACCESSOR_NAMES: &[&str] = &["a", "b", "c", "d", "e", "f"];
+const SVG_MATRIX_ACCESSOR_NAMES: &[&str] = &[
+    "a", "b", "c", "d", "e", "f", "m11", "m12", "m21", "m22", "m41", "m42",
+];
 
 #[derive(WebApiObject)]
 #[webapi(interface = web_api_interfaces::SVGMatrix, own_to_string_tag = "SVGMatrix")]
@@ -206,6 +208,48 @@ struct SvgMatrixTemplateAccessorsDeclaration {
         data = callback_data_index_value(scope, 5)
     )]
     f: (),
+    #[webapi(
+        accessor_property = "m11",
+        getter = svg_matrix_getter,
+        setter = svg_matrix_setter,
+        data = callback_data_index_value(scope, 6)
+    )]
+    m11: (),
+    #[webapi(
+        accessor_property = "m12",
+        getter = svg_matrix_getter,
+        setter = svg_matrix_setter,
+        data = callback_data_index_value(scope, 7)
+    )]
+    m12: (),
+    #[webapi(
+        accessor_property = "m21",
+        getter = svg_matrix_getter,
+        setter = svg_matrix_setter,
+        data = callback_data_index_value(scope, 8)
+    )]
+    m21: (),
+    #[webapi(
+        accessor_property = "m22",
+        getter = svg_matrix_getter,
+        setter = svg_matrix_setter,
+        data = callback_data_index_value(scope, 9)
+    )]
+    m22: (),
+    #[webapi(
+        accessor_property = "m41",
+        getter = svg_matrix_getter,
+        setter = svg_matrix_setter,
+        data = callback_data_index_value(scope, 10)
+    )]
+    m41: (),
+    #[webapi(
+        accessor_property = "m42",
+        getter = svg_matrix_getter,
+        setter = svg_matrix_setter,
+        data = callback_data_index_value(scope, 11)
+    )]
+    m42: (),
 }
 
 pub fn install_svg_matrix_bindings<'s>(
@@ -272,12 +316,12 @@ pub fn svg_matrix_components<'s>(
 
 fn svg_matrix_slot(name: &str) -> Option<&'static str> {
     match name {
-        "a" => Some(SVG_MATRIX_A_SLOT),
-        "b" => Some(SVG_MATRIX_B_SLOT),
-        "c" => Some(SVG_MATRIX_C_SLOT),
-        "d" => Some(SVG_MATRIX_D_SLOT),
-        "e" => Some(SVG_MATRIX_E_SLOT),
-        "f" => Some(SVG_MATRIX_F_SLOT),
+        "a" | "m11" => Some(SVG_MATRIX_A_SLOT),
+        "b" | "m12" => Some(SVG_MATRIX_B_SLOT),
+        "c" | "m21" => Some(SVG_MATRIX_C_SLOT),
+        "d" | "m22" => Some(SVG_MATRIX_D_SLOT),
+        "e" | "m41" => Some(SVG_MATRIX_E_SLOT),
+        "f" | "m42" => Some(SVG_MATRIX_F_SLOT),
         _ => None,
     }
 }

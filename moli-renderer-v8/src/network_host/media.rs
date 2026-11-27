@@ -60,20 +60,56 @@ pub(crate) fn start_media_element_resource_fetch(
     };
     let (request_mode, credentials_mode) = media_cross_origin_request_modes(element);
 
+    #[cfg(all(
+        feature = "media-ext",
+        any(target_os = "linux", target_os = "macos"),
+        target_pointer_width = "64"
+    ))]
+    if host.try_attach_media_source(scope, media_handle, sequence, &request_url)? {
+        return Ok(MediaElementResourceFetchStart::Pending);
+    }
+
     if let Some(response) = local_url_response(&request_url) {
         let response: crate::protocol_types::NavigationResponse = response.into();
         // A completed local response cannot provide media when it has no
         // bytes, even if the URL resolved successfully with a 2xx status.
         let successful = media_response_status_is_successful(response.status)
             && !response.body_bytes().is_empty();
+        #[allow(unused_mut)]
+        let mut result = Ok(response);
         host.record_get_subresource_network_result_with_initiator(
             environment.frame_id,
             environment.document_url,
             request_url,
             options.resource_type,
             SubresourceRequestInitiatorType::Other,
-            &Ok(response),
+            &result,
         );
+        #[cfg(all(
+            feature = "media-ext",
+            any(target_os = "linux", target_os = "macos"),
+            target_pointer_width = "64"
+        ))]
+        if successful
+            && host.manages_video(media_handle)
+            && let Ok(response) = &mut result
+        {
+            if is_mp4_video_response(response) {
+                ensure!(
+                    host.start_buffered_video(
+                        scope,
+                        media_handle,
+                        sequence,
+                        None,
+                        response.body_bytes().len(),
+                        || bytes::Bytes::from(response.take_body_bytes()),
+                    ),
+                    "video resource owner changed before decoding"
+                );
+                return Ok(MediaElementResourceFetchStart::Pending);
+            }
+            host.reset_video_playback(scope, media_handle);
+        }
         return Ok(MediaElementResourceFetchStart::Local { successful });
     }
 
@@ -113,4 +149,20 @@ pub(crate) fn start_media_element_resource_fetch(
 
 pub(crate) fn media_response_status_is_successful(status: u16) -> bool {
     (200..300).contains(&status)
+}
+
+#[cfg(all(
+    feature = "media-ext",
+    any(target_os = "linux", target_os = "macos"),
+    target_pointer_width = "64"
+))]
+pub(crate) fn is_mp4_video_response(response: &crate::protocol_types::NavigationResponse) -> bool {
+    matches!(response.body_bytes().get(4..8), Some(b"ftyp" | b"moov"))
+        || moli_web_mime::response_header_value(&response.headers, "content-type").is_some_and(
+            |mime| {
+                let essence = mime.split(';').next().unwrap_or_default().trim();
+                essence.eq_ignore_ascii_case("video/mp4")
+                    || essence.eq_ignore_ascii_case("application/mp4")
+            },
+        )
 }

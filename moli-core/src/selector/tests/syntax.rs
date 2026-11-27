@@ -12,7 +12,7 @@ fn rejects_invalid_selector_syntax_edges() {
         "div,,span",
         "[attr!=value]",
         "p >",
-        "[data-test",
+        "[data-test=",
     ] {
         let result =
             engine.query_selector_all(&parse_document("<html><body></body></html>"), selector);

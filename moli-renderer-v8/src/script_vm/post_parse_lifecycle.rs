@@ -1,4 +1,3 @@
-use std::sync::Arc;
 use std::time::Instant;
 use tracing::debug;
 use url::Url;
@@ -385,6 +384,7 @@ impl ScriptVm {
                 module_failure_policy,
                 source_network_result,
                 error_constructor,
+                ..
             }) => {
                 let _ = (
                     id,
@@ -1350,7 +1350,7 @@ impl ScriptVm {
         release: MainDocumentScriptLoadDelayRelease,
     ) {
         if release == MainDocumentScriptLoadDelayRelease::BecameUnblocked {
-            self.prime_document_lifecycle_processing_and_record_stylesheet_network_results();
+            self.prime_document_lifecycle_and_publish_stylesheets();
         }
     }
 
@@ -1792,14 +1792,14 @@ impl ScriptVm {
     ) -> PostParseDriverStep {
         let has_post_domcontentloaded_load_delaying_runtime_work =
             self.has_post_domcontentloaded_load_delaying_runtime_work();
-        self.prime_document_lifecycle_processing_and_record_stylesheet_network_results();
+        self.prime_document_lifecycle_and_publish_stylesheets();
         let owner_step = self
             .document_runtime
             .poll_next_post_parse_owner_driver_step(
                 page_task_queue,
                 has_post_domcontentloaded_load_delaying_runtime_work,
             );
-        self.record_ready_stylesheet_network_results();
+        self.publish_ready_stylesheet_results();
         if let PostParseOwnerDriverStep::Ready(action) = owner_step {
             return self.select_ready_owner_post_parse_driver_step(*action, page_task_queue);
         }
@@ -2287,6 +2287,7 @@ impl ScriptVm {
         })
     }
 
+    #[cfg(test)]
     pub(crate) fn apply_pending_stylesheet_source_css_projections(&mut self) {
         let _ = self.with_current_main_world_document_scope(|scope, host_ptr, document_runtime| {
             document_runtime.apply_pending_stylesheet_source_css_projections(scope, host_ptr);
@@ -2376,14 +2377,12 @@ impl ScriptVm {
         }
     }
 
-    pub(crate) fn prime_document_lifecycle_processing_and_record_stylesheet_network_results(
-        &mut self,
-    ) {
+    pub(crate) fn prime_document_lifecycle_and_publish_stylesheets(&mut self) {
         let prime_result = self
             .document_runtime
             .prime_document_lifecycle_processing_for_owner(self._context_host.as_ref().as_ptr());
         self.apply_connected_style_load_prime_result(prime_result);
-        self.record_ready_stylesheet_network_results();
+        self.publish_ready_stylesheet_results();
         self.reconcile_document_font_resources();
     }
 
@@ -2448,239 +2447,6 @@ impl ScriptVm {
         }
     }
 
-    pub(crate) fn record_ready_stylesheet_network_results(&mut self) {
-        let results = self
-            .document_runtime
-            .take_ready_stylesheet_network_results();
-        let client_terminals = self
-            .document_runtime
-            .take_ready_stylesheet_link_client_terminals();
-        let blocking_import_graphs = self
-            .document_runtime
-            .take_ready_blocking_style_import_graphs();
-        if results.is_empty() && client_terminals.is_empty() && blocking_import_graphs.is_empty() {
-            return;
-        }
-        let optional_resource_fetch_mask = self
-            .document_runtime
-            .current_document_resource_loader()
-            .map_or(
-                crate::protocol_types::OptionalResourceFetchMask::NONE,
-                |loader| loader.request_client().optional_resource_fetch_mask(),
-            );
-        let mut performance_entries = Vec::new();
-        let mut css_subresources = Vec::new();
-        let mut import_graph_results: Vec<(
-            crate::document_runtime::ConnectedStyleImportRoot,
-            Vec<crate::live_stylesheet::LiveStylesheetImportResponse>,
-        )> = Vec::new();
-        let mut parsed_responses = Vec::new();
-        let mut host = self._context_host.borrow_mut();
-        for network_result in results {
-            let crate::document_runtime::ConnectedLoadNetworkResult {
-                network_observed,
-                resource_timing_initiator_type,
-                stylesheet_fetch,
-                blocking_operation: _,
-                source_operation: _,
-                import_roots,
-                parsed_stylesheet,
-                document_url,
-                request_url,
-                source_owners,
-                resource_type,
-                start_unix_millis,
-                origin_clean,
-                result,
-            } = network_result;
-            parsed_responses.extend(parsed_stylesheet.iter().cloned());
-            let is_import_graph_result = !import_roots.is_empty();
-            let import_roots = import_roots
-                .into_iter()
-                .filter(|root| {
-                    host.live_stylesheet(root.stylesheet_id)
-                        .is_some_and(|stylesheet| root.matches_stylesheet(&stylesheet))
-                })
-                .collect::<Vec<_>>();
-            let has_stylesheet_install_authority = if is_import_graph_result {
-                !import_roots.is_empty()
-            } else {
-                !source_owners.is_empty()
-            };
-            performance_entries.push(
-                crate::context_bootstrap::ResourcePerformanceEntry::from_network_result(
-                    request_url.as_str(),
-                    resource_timing_initiator_type,
-                    start_unix_millis,
-                    &result,
-                ),
-            );
-            if resource_type == SubresourceResourceType::Stylesheet && stylesheet_fetch.is_none() {
-                let validated_response = result
-                    .as_ref()
-                    .ok()
-                    .filter(|response| (200..=299).contains(&response.status))
-                    .and_then(|response| {
-                        crate::stylesheet_blocking::validate_stylesheet_response(
-                            &request_url,
-                            response.clone(),
-                        )
-                        .ok()
-                    });
-                let (stylesheet_text, stylesheet_base_url) = validated_response
-                    .as_ref()
-                    .map(|response| (response.body_text().to_owned(), response.final_url.clone()))
-                    .unwrap_or_else(|| {
-                        let final_url = result
-                            .as_ref()
-                            .ok()
-                            .map(|response| response.final_url.clone())
-                            .unwrap_or_else(|| request_url.clone());
-                        (String::new(), final_url)
-                    });
-                if is_import_graph_result {
-                    let response = crate::live_stylesheet::LiveStylesheetImportResponse {
-                        request_url: request_url.clone(),
-                        response_url: stylesheet_base_url.clone(),
-                        css_text: stylesheet_text.clone(),
-                        parsed_stylesheet: parsed_stylesheet.clone(),
-                        successful: validated_response.is_some(),
-                        origin_clean,
-                    };
-                    for root in import_roots {
-                        if let Some((_, responses)) =
-                            import_graph_results.iter_mut().find(|(candidate, _)| {
-                                candidate.owner == root.owner
-                                    && candidate.stylesheet_id == root.stylesheet_id
-                                    && candidate.contents_revision == root.contents_revision
-                                    && candidate.import_generation == root.import_generation
-                            })
-                        {
-                            responses.push(response.clone());
-                        } else {
-                            import_graph_results.push((root, vec![response.clone()]));
-                        }
-                    }
-                }
-                if !is_import_graph_result {
-                    for owner in source_owners.iter().copied() {
-                        let Some(prepared) = host.prepare_linked_stylesheet_resource(
-                            owner,
-                            &stylesheet_text,
-                            stylesheet_base_url.clone(),
-                            request_url.clone(),
-                            origin_clean,
-                            parsed_stylesheet.as_ref(),
-                        ) else {
-                            continue;
-                        };
-                        host.install_linked_stylesheet(
-                            crate::document_runtime::InstallLinkedStylesheet::from_prepared(
-                                owner,
-                                request_url.clone(),
-                                prepared,
-                            ),
-                        );
-                    }
-                }
-                // A stale completion remains observable as Network and
-                // Performance data, but cannot derive new requests in the
-                // current document after its exact owner/root authority was
-                // revoked.
-                if has_stylesheet_install_authority && validated_response.is_some() {
-                    for resource in
-                        crate::css_resource_urls::stylesheet_load_blocking_font_resources(
-                            &stylesheet_text,
-                            &stylesheet_base_url,
-                            optional_resource_fetch_mask,
-                        )
-                    {
-                        let Some(binding) =
-                            host.accept_current_main_stylesheet_subresource_load_delay()
-                        else {
-                            tracing::debug!(
-                                url = ?resource.request_url(),
-                                kind = ?resource.kind(),
-                                "skipping stylesheet subresource for stale main document owner"
-                            );
-                            continue;
-                        };
-                        css_subresources.push((binding, resource));
-                    }
-                }
-            }
-            if !network_observed {
-                host.record_get_subresource_network_result_with_initiator(
-                    None,
-                    document_url,
-                    request_url,
-                    resource_type,
-                    SubresourceRequestInitiatorType::Parser,
-                    &result,
-                );
-            }
-        }
-        for (root, responses) in import_graph_results {
-            let _ = host.install_and_refresh_live_stylesheet_import_graph(root, &responses);
-        }
-        // Roots filtered by revision or generation still leave a completed
-        // network record. Only this installation batch needs its native parse.
-        for parsed in parsed_responses {
-            parsed.discard();
-        }
-        for blocking_import_graph in blocking_import_graphs {
-            let (source, roots, graph) = blocking_import_graph.into_parts();
-            let mut successful = graph.successful();
-            let expected_root_count = roots.len();
-            let roots = roots
-                .into_iter()
-                .filter(|root| {
-                    host.live_stylesheet(root.stylesheet_id)
-                        .is_some_and(|stylesheet| root.matches_stylesheet(&stylesheet))
-                })
-                .collect::<Vec<_>>();
-            successful &= !roots.is_empty() && roots.len() == expected_root_count;
-            let responses =
-                crate::document_runtime::live_stylesheet_import_responses(graph.as_ref());
-            if !roots.is_empty() {
-                for response in &responses {
-                    if !response.successful {
-                        continue;
-                    }
-                    for resource in
-                        crate::css_resource_urls::stylesheet_load_blocking_font_resources(
-                            &response.css_text,
-                            &response.response_url,
-                            optional_resource_fetch_mask,
-                        )
-                    {
-                        let Some(binding) =
-                            host.accept_current_main_stylesheet_subresource_load_delay()
-                        else {
-                            continue;
-                        };
-                        css_subresources.push((binding, resource));
-                    }
-                }
-            }
-            for root in roots {
-                match host.install_and_refresh_live_stylesheet_import_graph(root, &responses) {
-                    Some(graph_successful) => {
-                        successful &= graph_successful;
-                    }
-                    None => successful = false,
-                }
-            }
-            self.document_runtime
-                .complete_ready_blocking_style_import_graph(source, successful, Arc::clone(&graph));
-        }
-        drop(host);
-        self.settle_stylesheet_link_clients(client_terminals);
-        self.apply_pending_stylesheet_source_css_projections();
-        self.start_stylesheet_subresource_fetches(css_subresources);
-        self.record_resource_performance_entries(performance_entries);
-    }
-
     fn record_resource_performance_entries(
         &mut self,
         entries: Vec<crate::context_bootstrap::ResourcePerformanceEntry>,
@@ -2696,28 +2462,6 @@ impl ScriptVm {
         }) {
             self.record_runtime_warning(format_args!(
                 "failed to record resource performance entries: {error}"
-            ));
-        }
-    }
-
-    pub(super) fn start_stylesheet_subresource_fetches(
-        &mut self,
-        resources: Vec<(
-            crate::frame_owner_model::StylesheetSubresourceLoadDelayBinding,
-            crate::css_resource_urls::StylesheetLoadBlockingResource,
-        )>,
-    ) {
-        if resources.is_empty() {
-            return;
-        }
-        if let Err(error) = self.with_default_context_scope(move |scope, host_ptr| {
-            crate::document_runtime::DocumentRuntime::start_stylesheet_subresource_fetches_in_current_scope(
-                scope, host_ptr, resources,
-            );
-            Ok(())
-        }) {
-            self.record_runtime_warning(format_args!(
-                "failed to enter stylesheet subresource request scope: {error}"
             ));
         }
     }

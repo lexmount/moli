@@ -689,7 +689,6 @@ impl PageScriptHost {
             &script_for_load,
             &loader.fetch_context().request_origin(),
             Some(&document_character_set),
-            loader.request_client().local_file_navigation_access(),
         ) {
             let application =
                 self.apply_child_classic_script_load_completion(ChildClassicScriptLoadCompletion {

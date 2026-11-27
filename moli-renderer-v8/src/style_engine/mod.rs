@@ -1,25 +1,20 @@
+pub(crate) use moli_css_parse::ensure_stylo_browser_compat_prefs;
 #[cfg(test)]
 use std::sync::Arc as StdArc;
-use std::sync::Once;
 use std::{cell::RefCell, collections::HashMap, rc::Rc};
 
 use crate::{document_runtime::DomHandle, dom::native::DomHost};
 use dom::ElementState as StyloElementState;
-#[cfg(test)]
-use indexmap::IndexSet;
-#[cfg(test)]
-use moli_selector::StyloRetainedStyleInvalidationQuery as RetainedStyleInvalidationQuery;
-#[cfg(test)]
-use moli_selector::StyloStyleSourceScope as StyleSourceScope;
-#[cfg(test)]
-use moli_selector::stylo_element_dependency_snapshot as style_element_dependency_snapshot;
 use moli_selector::{QueryContainerSizes, StyloDomStyleAdapter};
-#[cfg(test)]
-use moli_selector::{
-    StyloStylesheetSourceScopeFallbackInput, stylo_stylesheet_source_scope_fallback_roots,
-};
-#[cfg(test)]
-use style::Atom;
+use style::servo::restyle_damage::ServoRestyleDamage;
+
+pub(crate) struct ScreenProjectionStyleUpdates {
+    pub(crate) damage: ServoRestyleDamage,
+    pub(crate) styles: Vec<(
+        DomHandle,
+        style::servo_arc::Arc<style::properties::ComputedValues>,
+    )>,
+}
 
 mod active_stylesheets;
 #[cfg(test)]
@@ -35,21 +30,14 @@ mod computed;
 pub(crate) use computed::take_style_resolution_context_count_for_test;
 mod document_world;
 mod drain;
-mod eligibility;
-mod fallback;
 mod invalidation;
-mod lazy_invalidation;
 pub(crate) mod media_list;
 mod mutation_effect;
-mod outcome;
-mod pending_invalidation;
-mod pending_mutation;
-mod planner;
+mod native_invalidation;
 mod property_metadata;
-mod query;
 mod registered_properties;
-mod request;
 mod retained;
+mod style_paths;
 pub(crate) use stylesheet::{
     NativeStylesheetFontFaceProjection, NativeStylesheetFontFaceRuleProjection,
     StylesheetFontFaceProjection, StylesheetFontFaceRuleProjection, initial_font_size_px,
@@ -59,35 +47,24 @@ pub(crate) use stylesheet::{
 pub(crate) use stylesheet::{
     author_source_text_parse_count_for_test, reset_author_source_text_parse_count_for_test,
 };
-mod retained_plan;
 mod runtime_invalidation;
-mod schedule;
-mod scope;
 mod shadow_scopes;
 mod snapshot;
 mod source;
-mod source_cascade;
-#[cfg(test)]
-pub(crate) use source_cascade::{
-    reset_source_cascade_rebuild_count_for_test, source_cascade_rebuild_count_for_test,
-};
 mod source_dirty;
 mod source_document;
 mod source_id;
 mod source_key;
-mod source_lifecycle;
 mod source_owner;
 mod source_owner_text;
-mod source_record;
-mod source_scope_plan;
 mod state;
 #[cfg(debug_assertions)]
 pub(crate) use state::ComputedStyleObservationInputEpochs;
+pub(crate) use state::ScreenStyleCoverage;
+use state::{ScreenRestyleTargets, ScreenStyleInvalidation};
+pub(crate) use style_paths::StyleInvalidationScope;
 mod stylesheet;
 mod stylesheet_resources;
-mod target_plan;
-mod target_queries;
-mod target_result;
 #[cfg(test)]
 mod tests;
 mod ua;
@@ -102,17 +79,13 @@ pub(crate) use computed::{
     ComputedDisplayKind, ComputedRenderedStyleFacts, ComputedTextTransformKind,
     ComputedTextWrapModeKind, ComputedWhiteSpaceCollapseKind, MarkerStyleDecision,
     StyleObservationSnapshot, StyleResolutionPass, StyloAnonymousBoxKind,
-    StyloComputedStyleSnapshot, marker_style_decision, serialize_resolved_computed_property,
+    StyloComputedStyleSnapshot, layout_damage_for_style_change, marker_style_decision,
+    serialize_resolved_computed_property,
 };
 use document_world::{DocumentStyleWorld, DocumentStyleWorlds};
 pub(in crate::style_engine) use drain::StyleInvalidationDrainBoundary;
 pub(crate) use drain::StyleInvalidationTurnExitBoundary;
-use drain::drain_style_invalidations;
-#[cfg(test)]
-use moli_selector::StyloSourceDependencySummary;
-pub(crate) use mutation_effect::{
-    StyleAttributeImpact, StyleMutationEffect, normalized_style_attribute_name,
-};
+pub(crate) use mutation_effect::{StyleMutationEffect, normalized_style_attribute_name};
 pub(crate) use property_metadata::{
     computed_longhand_count, computed_longhand_name_at, computed_property_is_queryable,
 };
@@ -120,19 +93,16 @@ pub(crate) use registered_properties::{
     CssCustomPropertyRegistration, CssCustomPropertyRegistrationError,
     CssCustomPropertyRegistrationRecord,
 };
-#[cfg(test)]
-use scope::style_source_scope_for_mutation_effects;
 pub(crate) use source::adopted::AdoptedStyleSheetInstallation;
 pub(crate) use source::inline::InlineStyleCspState;
 pub(crate) use source::store::{
     OwnerStyleSheetSource, StylesheetFontFaceDescriptor, StyloStylesheetSource,
 };
-pub(crate) use source_id::StyleSourceId;
+pub(crate) use source_document::OwnedStyleSourceDocumentContext;
+use source_document::StyleSourceDocumentContext;
 #[cfg(test)]
-use source_id::StyleSourceKind;
-use source_id::{StyleInvalidationSourceTarget, StyleScopeId};
-pub(crate) use source_lifecycle::OwnedStyleSourceDocumentContext;
-use source_lifecycle::StyleSourceDocumentContext;
+use source_id::StyleScopeId;
+pub(crate) use source_id::StyleSourceId;
 pub(crate) use source_owner::{
     link_rel_qualifies_as_stylesheet, stylesheet_owner_type_is_supported,
 };
@@ -142,8 +112,6 @@ use stylesheet_resources::{
     reset_stylesheet_resource_manifest_build_count_for_test,
     stylesheet_resource_manifest_build_count_for_test,
 };
-#[cfg(test)]
-use target_queries::PendingStyleInvalidationTargetQueries;
 pub(crate) use world_environment::{
     StyleTreeScopeVersions, StyleViewport, StyleWorldEnvironment, StyloStyleEnvironment,
 };
@@ -262,6 +230,170 @@ impl MoliStyleEngine {
         self.document_worlds
             .generation_snapshot_for_document(document)
             .computed_cache_generation
+    }
+
+    pub(crate) fn has_screen_style_invalidation(&self, document: DomHandle) -> bool {
+        self.document_worlds
+            .active_world(document)
+            .is_some_and(|world| {
+                // Queued native snapshots still need to be drained before
+                // they can contribute affected targets to screen restyles.
+                !world.pending_invalidations.borrow().is_empty()
+                    || !matches!(
+                        *world.document_state.screen_style_invalidation.borrow(),
+                        ScreenStyleInvalidation::Clean
+                    )
+            })
+    }
+
+    /// The scopes to settle while the existing screen layout may still be used.
+    pub(crate) fn screen_restyle_targets(
+        &self,
+        host: &DomHost,
+        document: DomHandle,
+        supported_damage: ServoRestyleDamage,
+    ) -> Option<ScreenRestyleTargets> {
+        let Some(world) = self.document_worlds.active_world(document) else {
+            return Some(ScreenRestyleTargets::default());
+        };
+        let state = &world.document_state;
+        state.finish_screen_style_invalidation();
+        if supported_damage.is_empty() && state.screen_needs_layout() {
+            return None;
+        }
+        state.screen_restyle_targets(host, document)
+    }
+
+    pub(crate) fn screen_style_damage_is_within(
+        &self,
+        document: DomHandle,
+        supported_damage: ServoRestyleDamage,
+    ) -> bool {
+        let Some(world) = self.document_worlds.active_world(document) else {
+            return false;
+        };
+        let state = &world.document_state;
+        state.finish_screen_style_invalidation();
+        state.screen_style_dependencies_are_current()
+            && !state.screen_restyle_is_full()
+            && state.screen_damage_nodes.borrow().iter().all(|&handle| {
+                self.dom_adapter
+                    .element_restyle_damage(document, handle)
+                    .is_some_and(|damage| supported_damage.contains(damage))
+            })
+    }
+
+    /// Read canonical damage only after settling each affected path.
+    pub(crate) fn screen_projection_style_updates(
+        &self,
+        document: DomHandle,
+        supported_damage: ServoRestyleDamage,
+    ) -> Option<ScreenProjectionStyleUpdates> {
+        let mut updates = ScreenProjectionStyleUpdates {
+            damage: ServoRestyleDamage::empty(),
+            styles: Vec::new(),
+        };
+        let Some(world) = self.document_worlds.active_world(document) else {
+            return Some(updates);
+        };
+        let state = &world.document_state;
+        state.finish_screen_style_invalidation();
+        if state.screen_restyle_is_full() {
+            return None;
+        }
+        for &handle in &*state.screen_damage_nodes.borrow() {
+            let damage = self.dom_adapter.element_restyle_damage(document, handle)?;
+            if !supported_damage.contains(damage) {
+                return None;
+            }
+            let styles = self.dom_adapter.clone_clean_element_styles(
+                document,
+                handle,
+                state.style_paths.generation(),
+            )?;
+            let (primary, before, after) = StyloComputedStyleSnapshot::from_element_styles(&styles)
+                .into_element_computed_values();
+            if before.is_some() || after.is_some() {
+                return None;
+            }
+            updates.damage |= damage;
+            updates.styles.push((handle, primary));
+        }
+        Some(updates)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn observed_screen_damage_for_test(
+        &self,
+        document: DomHandle,
+    ) -> ServoRestyleDamage {
+        let world = self.world_for_document(document);
+        world
+            .document_state
+            .screen_damage_nodes
+            .borrow()
+            .iter()
+            .filter_map(|&handle| self.dom_adapter.element_restyle_damage(document, handle))
+            .fold(ServoRestyleDamage::empty(), |all, damage| all | damage)
+    }
+
+    pub(crate) fn screen_layout_style_targets(
+        &self,
+        host: &DomHost,
+        document: DomHandle,
+    ) -> Option<Vec<(DomHandle, StyleInvalidationScope)>> {
+        let world = self.document_worlds.active_world(document)?;
+        let state = &world.document_state;
+        if !state.screen_style_dependencies_are_current() {
+            return None;
+        }
+        state.finish_screen_style_invalidation();
+        let mut targets = state.screen_restyle_targets(host, document)?.targets;
+        targets.extend(
+            state
+                .screen_damage_nodes
+                .borrow()
+                .iter()
+                .copied()
+                .filter(|&target| {
+                    host.is_connected(target)
+                        && host.owner_document_handle(target) == Some(document)
+                })
+                .map(|target| (target, StyleInvalidationScope::Subtree)),
+        );
+        Some(targets)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn screen_style_damage_for_node_for_test(
+        &self,
+        document: DomHandle,
+        handle: DomHandle,
+    ) -> Option<ServoRestyleDamage> {
+        self.dom_adapter
+            .element_restyle_damage(document, handle)
+            .filter(|damage| !damage.is_empty())
+    }
+
+    pub(crate) fn begin_screen_layout(&self, document: DomHandle) {
+        if let Some(world) = self.document_worlds.active_world(document) {
+            world.document_state.begin_screen_layout();
+        }
+    }
+
+    pub(crate) fn publish_screen_styles(&self, document: DomHandle, coverage: ScreenStyleCoverage) {
+        if let Some(world) = self.document_worlds.active_world(document) {
+            world.document_state.publish_screen_styles(coverage);
+            self.dom_adapter
+                .consume_restyle_damage(document, world.document_state.consume_screen_style_work());
+        }
+    }
+
+    pub(crate) fn consume_screen_style_work(&self, document: DomHandle) {
+        if let Some(world) = self.document_worlds.active_world(document) {
+            self.dom_adapter
+                .consume_restyle_damage(document, world.document_state.consume_screen_style_work());
+        }
     }
 
     /// Visual output changes with source inputs, not with materialization of
@@ -478,7 +610,7 @@ impl MoliStyleEngine {
     ) -> usize {
         self.world_for_document(document)
             .document_state
-            .lazy_invalidation_roots
+            .style_paths
             .root_count()
     }
 
@@ -489,7 +621,7 @@ impl MoliStyleEngine {
     ) -> u64 {
         self.world_for_document(document)
             .document_state
-            .lazy_invalidation_roots
+            .style_paths
             .generation()
     }
 
@@ -500,7 +632,7 @@ impl MoliStyleEngine {
     ) -> u64 {
         self.world_for_document(document)
             .document_state
-            .lazy_invalidation_roots
+            .style_paths
             .path_node_visit_count()
     }
 
@@ -559,17 +691,8 @@ impl MoliStyleEngine {
     }
 
     #[cfg(test)]
-    pub(crate) fn invalidation_clear_all_fallback_reasons_for_document_for_test(
-        &self,
-        document: DomHandle,
-    ) -> Vec<moli_selector::StyloSourceInvalidationFallbackReason> {
-        self.world_for_document(document)
-            .document_state
-            .invalidation_clear_all_fallback_reasons_for_test()
-    }
-
-    #[cfg(test)]
     pub(crate) fn clear_retained_style_system_for_document_for_test(&self, document: DomHandle) {
+        self.dom_adapter.clear_style_paths(document);
         self.world_for_document(document)
             .document_state
             .clear_retained_style_system();
@@ -670,25 +793,7 @@ impl MoliStyleEngine {
         document: DomHandle,
     ) -> usize {
         let world = self.world_for_document(document);
-        world.pending_invalidations.work_item_count_for_test()
-            + world
-                .pending_structural_mutations
-                .work_item_count_for_test()
-    }
-
-    #[cfg(test)]
-    pub(crate) fn pending_style_invalidation_work_kind_names_for_document_for_test(
-        &self,
-        document: DomHandle,
-    ) -> Vec<&'static str> {
-        let world = self.world_for_document(document);
-        let mut names = world.pending_invalidations.work_kind_names_for_test();
-        names.extend(
-            world
-                .pending_structural_mutations
-                .work_kind_names_for_test(),
-        );
-        names
+        usize::from(!world.pending_invalidations.borrow().is_empty())
     }
 
     #[cfg(test)]
@@ -697,8 +802,9 @@ impl MoliStyleEngine {
         document: DomHandle,
     ) -> usize {
         self.world_for_document(document)
-            .pending_structural_mutations
-            .effect_count_for_test()
+            .pending_invalidations
+            .borrow()
+            .structural_effect_count_for_test()
     }
 
     pub(in crate::style_engine) fn invalidation_cleanup_for_world<'a>(
@@ -754,6 +860,7 @@ impl MoliStyleEngine {
             .dom_adapter
             .replace_query_container_sizes(document, sizes)?;
         let world = self.world_for_document(document);
+        world.document_state.invalidate_screen_style_comparisons();
         self.invalidation_cleanup_for_world(&world)
             .invalidate_subtrees(host, changed);
         Some(previous)
@@ -775,7 +882,28 @@ impl MoliStyleEngine {
     /// This is deliberately target-local. Subtree invalidation remains lazy;
     /// a disconnected `getComputedStyle()` read must not reintroduce the old
     /// document-wide scan merely to retire the one target it observes.
-    pub(crate) fn retire_computed_style_for_inactive_handle(&self, handle: DomHandle) {
+    pub(crate) fn retire_computed_style_for_inactive_handle(
+        &self,
+        host: &DomHost,
+        handle: DomHandle,
+    ) {
+        if let Some(world) = self.active_owner_document_world(host, handle) {
+            if host.is_connected(handle) {
+                world.document_state.invalidate_screen_style_comparisons();
+            }
+            if self
+                .dom_adapter
+                .style_path(world.document, handle)
+                .is_some()
+            {
+                world.document_state.record_style_targets(
+                    host,
+                    &self.dom_adapter,
+                    world.document,
+                    [(handle, StyleInvalidationScope::Subtree)],
+                );
+            }
+        }
         self.dom_adapter.clear_element_data(handle);
         self.document_worlds
             .invalidate_cached_pseudos_for_handle(handle);
@@ -819,7 +947,6 @@ impl MoliStyleEngine {
             self.drain_pending_style_invalidations_for_document_and_boundary(
                 host,
                 document,
-                document_context,
                 StyleInvalidationDrainBoundary::ComputedStyleRead,
             );
         }
@@ -835,7 +962,6 @@ impl MoliStyleEngine {
             self.drain_pending_style_invalidations_for_document_and_boundary(
                 host,
                 document,
-                document_context,
                 boundary.into(),
             );
         }
@@ -845,24 +971,15 @@ impl MoliStyleEngine {
         &self,
         host: &DomHost,
         document: DomHandle,
-        document_context: StyleSourceDocumentContext<'_>,
         boundary: StyleInvalidationDrainBoundary,
     ) {
         let world = self.world_for_document(document);
-        self.flush_pending_structural_mutations_for_world(host, &world);
         let pending = world.pending_invalidations.take();
-        let source_stores = world.borrow_source_stores();
-        drain_style_invalidations(
-            &self.dom_adapter,
-            &world.document_state,
-            self.invalidation_cleanup_for_world(&world),
-            host,
-            &source_stores,
-            document_context,
-            document,
-            pending,
-            boundary,
-        );
+        if !pending.is_empty() && moli_trace::style_invalidation_trace_enabled() {
+            tracing::info!(target: "moli_style_invalidation", ?document, ?boundary, "drain DOM invalidation");
+        }
+        pending.drain(self, &world, host);
+        world.document_state.finish_screen_style_invalidation();
     }
 
     #[cfg(test)]
@@ -874,7 +991,6 @@ impl MoliStyleEngine {
         self.drain_pending_style_invalidations_for_document_and_boundary(
             host,
             document,
-            StyleSourceDocumentContext::for_root_document(document),
             StyleInvalidationDrainBoundary::TestExplicit,
         );
     }
@@ -887,125 +1003,27 @@ impl MoliStyleEngine {
         computed::retained_current_element_state(self, host, element)
     }
 
-    #[cfg(test)]
-    fn test_author_sources_have_relative_selector_dependency_for_document(
+    pub(crate) fn has_retained_style_attribute_selector(
         &self,
         host: &DomHost,
-        document: DomHandle,
-        source_scope: &StyleSourceScope,
-        emulated_media: &crate::protocol_types::EmulatedMediaOverrides,
+        handle: DomHandle,
     ) -> bool {
-        self.test_author_sources_match_dependency_summary_for_document(
-            host,
-            document,
-            source_scope,
-            emulated_media,
-            StyloSourceDependencySummary::has_relative_selector_dependency,
-        )
-    }
-
-    #[cfg(test)]
-    fn test_author_sources_match_dependency_summary_for_document(
-        &self,
-        host: &DomHost,
-        document: DomHandle,
-        source_scope: &StyleSourceScope,
-        emulated_media: &crate::protocol_types::EmulatedMediaOverrides,
-        summary_predicate: impl Fn(&StyloSourceDependencySummary) -> bool + Copy,
-    ) -> bool {
-        let world = self.world_for_document(document);
-        let source_stores = world.borrow_source_stores();
-        source_stores
-            .matching_dependency_sources(
-                host,
-                source_scope,
-                emulated_media,
-                StyleViewport::default(),
-            )
-            .iter()
-            .any(|source| source.dependency_summary_matches_for_test(summary_predicate))
-    }
-
-    #[cfg(test)]
-    fn test_author_sources_have_attribute_dependency_for_document(
-        &self,
-        host: &DomHost,
-        document: DomHandle,
-        element: DomHandle,
-        attribute_name: &str,
-    ) -> bool {
-        let world = self.world_for_document(document);
-        let source_stores = world.borrow_source_stores();
-        let mut queries = IndexSet::new();
-        queries.insert(RetainedStyleInvalidationQuery::attribute(
-            element,
-            attribute_name.to_owned(),
-        ));
-        let request_plan = request::RetainedSourceDependencyRequestPlan::exact(queries);
-        source_stores.has_dependency_match_for_request_plan(host, &request_plan)
-    }
-
-    #[cfg(test)]
-    pub(crate) fn retained_stylesheet_source_ids_for_document_for_test(
-        &self,
-        host: &DomHost,
-        document: DomHandle,
-    ) -> Vec<StyleSourceId> {
-        let world = self.world_for_document(document);
-        let document_context = StyleSourceDocumentContext::for_root_document(document);
-        let source_stores = world.borrow_source_stores();
-        let source_lifecycle = source_stores.source_lifecycle_report(host, document_context);
-        source_stores
-            .retained_source_records_for_lifecycle(host, &source_lifecycle)
-            .into_iter()
-            .map(|record| record.id().clone())
-            .collect()
-    }
-
-    #[cfg(test)]
-    pub(crate) fn matching_dependency_source_ids_for_document_for_test(
-        &self,
-        host: &DomHost,
-        document: DomHandle,
-        source_scope: &StyleSourceScope,
-        emulated_media: &crate::protocol_types::EmulatedMediaOverrides,
-    ) -> Vec<(StyleSourceId, IndexSet<DomHandle>)> {
-        self.matching_dependency_source_targets_for_document_for_test(
-            host,
-            document,
-            source_scope,
-            emulated_media,
-        )
-        .into_iter()
-        .filter_map(|(target, fallback_roots)| {
-            Some((target.stylesheet_source_id()?.clone(), fallback_roots))
-        })
-        .collect()
-    }
-
-    #[cfg(test)]
-    fn matching_dependency_source_targets_for_document_for_test(
-        &self,
-        host: &DomHost,
-        document: DomHandle,
-        source_scope: &StyleSourceScope,
-        emulated_media: &crate::protocol_types::EmulatedMediaOverrides,
-    ) -> Vec<(StyleInvalidationSourceTarget, IndexSet<DomHandle>)> {
-        let world = self.world_for_document(document);
-        let source_stores = world.borrow_source_stores();
-        let sources = source_stores.matching_dependency_sources(
-            host,
-            source_scope,
-            emulated_media,
-            StyleViewport::default(),
-        );
-        sources
-            .into_iter()
-            .map(|source| {
-                let (target, fallback_roots) = source.into_target_and_fallback_roots_for_test();
-                (target, fallback_roots.into_iter().collect())
-            })
-            .collect()
+        let Some(world) = self.active_owner_document_world(host, handle) else {
+            return false;
+        };
+        // The active cascade already indexes attribute selectors. A pending
+        // source refresh can introduce new dependencies before the next read.
+        world
+            .document_state
+            .source_dirty_scope_snapshot()
+            .requires_retained_style_update()
+            || host.has_shadow_roots()
+            || world
+                .document_state
+                .try_with_retained_style_system(|retained| {
+                    native_invalidation::style_attribute_in_selector(&retained.stylist)
+                })
+                != Some(false)
     }
 
     #[cfg(test)]
@@ -1105,12 +1123,12 @@ impl MoliStyleEngine {
         host: &DomHost,
         document_url: &url::Url,
         document: DomHandle,
-        update: Option<(&PreparedStyleWorldUpdate, StyleSourceDocumentContext<'_>)>,
+        update: Option<&PreparedStyleWorldUpdate>,
         resolve: impl FnOnce(&mut computed::StyleResolutionPass<'_, '_>) -> R,
     ) -> R {
-        if let Some((update, document_context)) = update {
+        if let Some(update) = update {
             let world = self.world_for_document(document);
-            computed::apply_style_world_update(self, host, &world, update, document_context);
+            computed::apply_style_world_update(self, host, &world, update);
         }
         computed::with_style_resolution_pass(self, host, document_url, document, resolve)
     }
@@ -1178,45 +1196,6 @@ impl MoliStyleEngine {
             read_document,
         )
     }
-}
-
-pub(crate) fn ensure_stylo_browser_compat_prefs() {
-    static ENABLE: Once = Once::new();
-    ENABLE.call_once(|| {
-        stylo_static_prefs::set_pref!("layout.container-queries.enabled", true);
-        stylo_static_prefs::set_pref!("layout.columns.enabled", true);
-        stylo_static_prefs::set_pref!("layout.css.at-scope.enabled", true);
-        stylo_static_prefs::set_pref!("layout.css.content.alt-text.enabled", true);
-        stylo_static_prefs::set_pref!("layout.css.font-palette.enabled", true);
-        stylo_static_prefs::set_pref!("layout.css.margin-rules.enabled", true);
-        stylo_static_prefs::set_pref!("layout.css.scroll-driven-animations.enabled", true);
-        stylo_static_prefs::set_pref!("layout.css.starting-style-at-rules.enabled", true);
-        stylo_static_prefs::set_pref!("layout.css.style-queries.enabled", true);
-        stylo_static_prefs::set_pref!("layout.css.tree-counting-functions.enabled", true);
-        stylo_static_prefs::set_pref!("layout.css.zoom.enabled", true);
-        stylo_static_prefs::set_pref!("layout.grid.enabled", true);
-        stylo_static_prefs::set_pref!("layout.variable_fonts.enabled", true);
-        // Stylo exposes the experimental CSS Sizing `fit-content(<length>)`
-        // form behind a Servo pref. Chromium 147 rejects that function for
-        // width/height while still accepting the bare `fit-content` keyword
-        // and grid track `fit-content()`. Keep declaration parsing, CSSOM and
-        // CSS.supports on the Chromium surface; the grid parser is separate.
-        stylo_static_prefs::set_pref!("layout.css.fit-content-function.enabled", false);
-        // Blitz d788124a enables Stylo's omnibus Servo gate before creating
-        // its Stylist. CSS masking is implemented in this pinned Stylo world
-        // but remains grouped behind that gate, so paint cannot receive the
-        // computed mask longhands without matching the upstream setup.
-        stylo_static_prefs::set_pref!("layout.unimplemented", true);
-        stylo_static_prefs::set_pref!("layout.writing-mode.enabled", true);
-    });
-}
-
-#[cfg(test)]
-fn stylo_source_metadata_for_css_text(
-    css_text: &str,
-    base_url: &url::Url,
-) -> source::store::StyleSourceMetadata {
-    stylesheet::style_source_metadata_for_css_text(css_text, base_url).0
 }
 
 fn retain_owner_documents_except_document(

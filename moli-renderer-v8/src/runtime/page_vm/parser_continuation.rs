@@ -239,8 +239,15 @@ impl PageVm {
         }
 
         let owner = MainParserDocumentOwner::new(task_owner);
-        let ready = self
-            .vm_mut()
+        let vm = self.vm_mut();
+        vm.publish_ready_stylesheet_results();
+        if vm
+            .document_runtime
+            .parser_deferred_script_is_blocked_by_stylesheets(owner)
+        {
+            return Ok(MainParserDeferredExecution::idle());
+        }
+        let ready = vm
             .document_runtime
             .parser_module_document_scripts_mut()
             .take_next_after_parsing_ready_script(owner);

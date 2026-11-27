@@ -63,6 +63,24 @@ Implications:
 - `V8_FROM_SOURCE=1` is supported only after restoring the full upstream
   source-build layout; the slim tree fails early and lists the missing inputs
 
+OHOS runs V8 with `--jitless --wasm-jitless`. DrumBrake requires a V8 archive
+built with pointer compression. On Linux, install the
+`aarch64-unknown-linux-musl` Rust target and the rusty_v8 build tools, set
+`RUSTY_V8_MUSL_SYSROOT` to an ARM64 musl sysroot, and run
+`scripts/build-ohos-v8-arm64.sh` from the repository root to build the pinned
+archive and its Rust bindings. The script writes them to
+`target/ohos-v8/artifacts`. Set `MOLI_OHOS_V8_ARTIFACTS` to use the artifacts
+from another build machine.
+
+For the OHOS build, add the `aarch64-unknown-linux-ohos` Rust target and run
+`scripts/build-ohos-arm64.sh` from the repository root. Set
+`OHOS_SDK_NATIVE` if the DevEco native SDK is installed somewhere other than
+the default macOS app path. Set `MOLI_OHOS_V8_CXX` to select a recent Clang++
+for the V8 bridges.
+
+The script verifies the archive and matching bindings and pins the Chromium
+libc++ headers. Refresh the version and source pins on rusty_v8 upgrades.
+
 `serde_v8 0.320.0` depends on `deno_v8 0.3.0`, whose published manifest still
 selects V8 150. The adjacent slim `vendor/deno_v8-0.3.0` patch changes only that
 dependency constraint to V8 152 so serde_v8 and Moli share one V8 type universe.

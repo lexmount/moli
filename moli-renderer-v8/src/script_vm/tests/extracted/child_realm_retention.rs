@@ -17,7 +17,7 @@ fn collected_native_context_count(vm: &mut StandaloneScriptVmHarness) -> usize {
 fn retired_child_content_surfaces_do_not_root_unreachable_realms() {
     for policy in [
         LayoutPolicy::Mock,
-        LayoutPolicy::OnDemand,
+        LayoutPolicy::Lazy,
         LayoutPolicy::Realtime,
     ] {
         let mut vm = new_parsed_test_vm(
@@ -55,7 +55,7 @@ fn retired_child_content_surfaces_do_not_root_unreachable_realms() {
 fn retained_child_content_surfaces_preserve_author_state_until_released() {
     for policy in [
         LayoutPolicy::Mock,
-        LayoutPolicy::OnDemand,
+        LayoutPolicy::Lazy,
         LayoutPolicy::Realtime,
     ] {
         let mut vm = new_parsed_test_vm(
@@ -117,7 +117,7 @@ fn retained_child_content_surfaces_preserve_author_state_until_released() {
 fn promoted_child_content_surfaces_follow_author_reachability() {
     for policy in [
         LayoutPolicy::Mock,
-        LayoutPolicy::OnDemand,
+        LayoutPolicy::Lazy,
         LayoutPolicy::Realtime,
     ] {
         let mut vm = new_parsed_test_vm(
@@ -253,7 +253,7 @@ fn detached_content_surface_inventory(vm: &StandaloneScriptVmHarness) -> [usize;
 fn collected_child_content_surface_caches_release_entries_and_capacity() {
     for policy in [
         LayoutPolicy::Mock,
-        LayoutPolicy::OnDemand,
+        LayoutPolicy::Lazy,
         LayoutPolicy::Realtime,
     ] {
         let mut vm = new_parsed_test_vm(
@@ -286,7 +286,7 @@ fn collected_child_content_surface_caches_release_entries_and_capacity() {
 fn child_content_surface_maintenance_preserves_author_identity() {
     for policy in [
         LayoutPolicy::Mock,
-        LayoutPolicy::OnDemand,
+        LayoutPolicy::Lazy,
         LayoutPolicy::Realtime,
     ] {
         let mut vm = new_parsed_test_vm(

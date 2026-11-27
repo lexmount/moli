@@ -252,8 +252,10 @@ async fn websocket_bidi_navigation_started_matches_network_and_result() {
 }
 
 #[tokio::test]
-async fn websocket_bidi_file_navigation_returns_unknown_error_without_lifecycle_or_replacement() {
-    let (cdp_addr, protocol_server) = spawn_test_protocol_server().await;
+async fn websocket_bidi_blocked_file_navigation_returns_unknown_error_without_lifecycle_or_replacement()
+ {
+    let (cdp_addr, protocol_server) =
+        spawn_test_protocol_server_with_fetch_config(host_file_access_blocked_config()).await;
     let (mut socket, _) = connect_async(format!("ws://{cdp_addr}/session"))
         .await
         .expect("connect to BiDi websocket");

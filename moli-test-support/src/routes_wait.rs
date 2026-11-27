@@ -800,12 +800,12 @@ async fn wait_until_slow_interval_dom_mutation_page() -> Html<&'static str> {
 }
 
 async fn wait_until_shared_deadline_page() -> Html<&'static str> {
-    sleep(Duration::from_secs(4)).await;
+    sleep(Duration::from_secs(10)).await;
     Html(WAIT_UNTIL_SHARED_DEADLINE_HTML)
 }
 
 async fn wait_until_shared_deadline_activity() -> &'static str {
-    sleep(Duration::from_secs(8)).await;
+    sleep(Duration::from_secs(24)).await;
     "complete"
 }
 

@@ -1,10 +1,6 @@
 use std::sync::Arc;
 
 use indexmap::IndexSet;
-use moli_selector::{
-    StyloElementDependencySnapshot as StyleElementDependencySnapshot,
-    stylo_removed_element_dependency_snapshots as removed_element_dependency_snapshots,
-};
 use smallvec::SmallVec;
 
 use crate::{
@@ -12,12 +8,11 @@ use crate::{
     dom::native::{DomHost, DomMutationEffects, Node},
 };
 
-const REMOVED_SUBTREE_SNAPSHOT_NODE_LIMIT: usize = 256;
-
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) enum StyleMutationEffect {
     Attribute {
         element: DomHandle,
+        namespace: Option<Arc<str>>,
         name: String,
         old_value: Option<String>,
         new_value: Option<String>,
@@ -40,38 +35,79 @@ pub(crate) enum StyleMutationEffect {
         parent: DomHandle,
         added_nodes: Vec<DomHandle>,
         removed_nodes: Vec<DomHandle>,
-        removed_element_snapshots: Vec<StyleElementDependencySnapshot>,
         previous_sibling: Option<DomHandle>,
         next_sibling: Option<DomHandle>,
     },
 }
 
 impl StyleMutationEffect {
-    #[cfg(test)]
-    pub(crate) fn attribute_for_element_ns(
-        host: &DomHost,
-        element: DomHandle,
-        namespace: Option<&str>,
-        name: &str,
-        old_value: Option<String>,
-        new_value: Option<String>,
-    ) -> Self {
-        Self::Attribute {
-            element,
-            name: if namespace.is_some() {
-                name.to_owned()
-            } else {
-                normalized_style_attribute_name(host, element, name)
-            },
-            old_value,
-            new_value,
+    pub(super) fn detached_roots(&self) -> &[DomHandle] {
+        match self {
+            Self::DisconnectedSubtrees { roots } => roots,
+            Self::ChildList { removed_nodes, .. } => removed_nodes,
+            _ => &[],
         }
     }
 
-    pub(crate) fn from_dom_mutation_effects(
-        host: &DomHost,
-        effects: &DomMutationEffects,
-    ) -> SmallVec<[Self; 1]> {
+    pub(crate) fn touches_connected_tree(&self, host: &DomHost) -> bool {
+        match self {
+            Self::Attribute { element: node, .. }
+            | Self::CharacterData { node }
+            | Self::ChildList { parent: node, .. }
+            | Self::SlotAssignment { slot: node, .. } => host.is_connected(*node),
+            Self::ConnectedSubtrees { roots } | Self::DisconnectedSubtrees { roots } => {
+                roots.iter().any(|&root| host.is_connected(root))
+            }
+        }
+    }
+
+    pub(crate) fn affects_layout_metric(&self, host: &DomHost) -> bool {
+        let Self::Attribute {
+            element,
+            namespace,
+            name,
+            ..
+        } = self
+        else {
+            return true;
+        };
+        // Native geometry and commonly changed CSS inputs can affect cached
+        // layout independently of the element's presentational hints.
+        matches!(
+            name.as_str(),
+            "style"
+                | "class"
+                | "id"
+                | "width"
+                | "height"
+                | "cols"
+                | "rows"
+                | "size"
+                | "value"
+                | "border"
+                | "slot"
+                | "type"
+        ) || moli_selector::attribute_affects_presentational_hints(
+            host,
+            *element,
+            namespace.as_deref(),
+            name,
+        )
+    }
+
+    pub(crate) fn affects_native_layout(&self, host: &DomHost) -> bool {
+        match self {
+            Self::Attribute {
+                element,
+                namespace,
+                name,
+                ..
+            } => host.attribute_affects_native_layout(*element, namespace.as_deref(), name),
+            _ => true,
+        }
+    }
+
+    pub(crate) fn from_dom_mutation_effects(effects: &DomMutationEffects) -> SmallVec<[Self; 1]> {
         // A single text update needs neither deduplication nor a heap buffer.
         let style = effects.style();
         if let [node] = style.character_data_mutations()
@@ -159,45 +195,20 @@ impl StyleMutationEffect {
                 parent: mutation.target(),
                 added_nodes: mutation.added_nodes().to_vec(),
                 removed_nodes: mutation.removed_nodes().to_vec(),
-                removed_element_snapshots: removed_element_dependency_snapshots_for_mutation(
-                    host,
-                    mutation.removed_nodes(),
-                ),
                 previous_sibling: mutation.previous_sibling(),
                 next_sibling: mutation.next_sibling(),
             });
         }
         for mutation in effects.style().attribute_mutations() {
-            let normalized_name = if mutation.namespace().is_some() {
-                mutation.local_name().to_owned()
-            } else {
-                normalized_style_attribute_name(host, mutation.target(), mutation.local_name())
-            };
             style_effects.insert(Self::Attribute {
                 element: mutation.target(),
-                name: normalized_name,
+                namespace: mutation.namespace().map(Arc::from),
+                name: mutation.local_name().to_owned(),
                 old_value: mutation.old_value().map(str::to_owned),
                 new_value: mutation.new_value().map(str::to_owned),
             });
         }
         style_effects.into_iter().collect()
-    }
-
-    pub(super) fn attribute_dependency_change(&self) -> Option<StyleAttributeDependencyChange<'_>> {
-        let Self::Attribute {
-            name,
-            old_value,
-            new_value,
-            ..
-        } = self
-        else {
-            return None;
-        };
-        Some(StyleAttributeDependencyChange::new(
-            name,
-            old_value.as_deref(),
-            new_value.as_deref(),
-        ))
     }
 }
 
@@ -209,55 +220,6 @@ fn shared_tree_roots<'a>(
         .filter_map(|(candidate, shared)| (candidate == roots).then_some(shared))
         .next()
         .unwrap_or_else(|| Arc::from(roots))
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum StyleAttributeImpact {
-    None,
-    LayoutMetric,
-    ComputedStyle,
-    DescendantComputedStyle,
-    StylesheetLinkage,
-    LayoutMetricAndStylesheetLinkage,
-}
-
-impl StyleAttributeImpact {
-    pub(crate) fn for_attribute_name(name: &str) -> Self {
-        let name = name.to_ascii_lowercase();
-        match name.as_str() {
-            "style" | "class" | "id" | "hidden" => Self::ComputedStyle,
-            "width" | "height" | "cols" | "rows" | "size" | "value" | "border" | "slot"
-            | "align" => Self::LayoutMetric,
-            "cellpadding" => Self::DescendantComputedStyle,
-            "href" | "rel" | "media" | "blocking" | "disabled" => Self::StylesheetLinkage,
-            "type" => Self::LayoutMetricAndStylesheetLinkage,
-            _ if moli_selector::is_svg_presentation_attribute_name(&name) => Self::LayoutMetric,
-            _ => Self::None,
-        }
-    }
-
-    pub(crate) fn affects_layout_metric(self) -> bool {
-        matches!(
-            self,
-            Self::LayoutMetric
-                | Self::ComputedStyle
-                | Self::DescendantComputedStyle
-                | Self::LayoutMetricAndStylesheetLinkage
-        )
-    }
-
-    #[cfg(test)]
-    pub(crate) fn changes_computed_style(self) -> bool {
-        matches!(self, Self::ComputedStyle | Self::DescendantComputedStyle)
-    }
-
-    #[cfg(test)]
-    pub(crate) fn changes_stylesheet_linkage(self) -> bool {
-        matches!(
-            self,
-            Self::StylesheetLinkage | Self::LayoutMetricAndStylesheetLinkage
-        )
-    }
 }
 
 pub(crate) fn normalized_style_attribute_name(
@@ -287,181 +249,6 @@ fn is_empty_ordinary_fragment_child_list(host: &DomHost, effect: &StyleMutationE
     host.node(*parent)
         .is_some_and(|node| node.is_document_fragment() && node.first_child().is_none())
         && !host.is_shadow_root(*parent)
-}
-
-pub(super) fn detached_style_subtree_roots_for_mutations(
-    effects: &[StyleMutationEffect],
-) -> IndexSet<DomHandle> {
-    let mut roots = IndexSet::new();
-    for effect in effects {
-        match effect {
-            StyleMutationEffect::DisconnectedSubtrees {
-                roots: disconnected_roots,
-            } => {
-                roots.extend(disconnected_roots.iter().copied());
-            }
-            StyleMutationEffect::ChildList { removed_nodes, .. } => {
-                roots.extend(removed_nodes.iter().copied());
-            }
-            StyleMutationEffect::Attribute { .. }
-            | StyleMutationEffect::ConnectedSubtrees { .. }
-            | StyleMutationEffect::SlotAssignment { .. }
-            | StyleMutationEffect::CharacterData { .. } => {}
-        }
-    }
-    roots
-}
-
-fn removed_element_dependency_snapshots_for_mutation(
-    host: &DomHost,
-    removed_nodes: &[DomHandle],
-) -> Vec<StyleElementDependencySnapshot> {
-    if removed_nodes
-        .iter()
-        .map(|&root| style_subtree_element_count(host, root))
-        .sum::<usize>()
-        > REMOVED_SUBTREE_SNAPSHOT_NODE_LIMIT
-    {
-        return Vec::new();
-    }
-    removed_element_dependency_snapshots(host, removed_nodes)
-}
-
-fn style_subtree_element_count(host: &DomHost, root: DomHandle) -> usize {
-    let mut count = 0usize;
-    let mut stack = vec![root];
-    while let Some(handle) = stack.pop() {
-        let Some(node) = host.node(handle) else {
-            continue;
-        };
-        if node.as_element().is_some() {
-            count += 1;
-        }
-        let mut child = node.first_child();
-        while let Some(current) = child {
-            stack.push(current);
-            child = host.next_sibling(current);
-        }
-    }
-    count
-}
-
-pub(super) fn style_mutation_effects_are_all_attributes(effects: &[StyleMutationEffect]) -> bool {
-    !effects.is_empty()
-        && effects
-            .iter()
-            .all(|effect| matches!(effect, StyleMutationEffect::Attribute { .. }))
-}
-
-pub(super) fn style_mutation_effects_are_child_list_structural(
-    effects: &[StyleMutationEffect],
-) -> bool {
-    !effects.is_empty()
-        && effects.iter().all(|effect| {
-            matches!(
-                effect,
-                StyleMutationEffect::ChildList { .. }
-                    | StyleMutationEffect::ConnectedSubtrees { .. }
-                    | StyleMutationEffect::DisconnectedSubtrees { .. }
-                    | StyleMutationEffect::SlotAssignment { .. }
-            )
-        })
-        && effects
-            .iter()
-            .any(|effect| matches!(effect, StyleMutationEffect::ChildList { .. }))
-}
-
-pub(super) fn style_mutation_effects_are_all_character_data(
-    effects: &[StyleMutationEffect],
-) -> bool {
-    !effects.is_empty()
-        && effects
-            .iter()
-            .all(|effect| matches!(effect, StyleMutationEffect::CharacterData { .. }))
-}
-
-pub(super) fn style_mutation_effects_are_all_slot_assignments(
-    effects: &[StyleMutationEffect],
-) -> bool {
-    !effects.is_empty()
-        && effects
-            .iter()
-            .all(|effect| matches!(effect, StyleMutationEffect::SlotAssignment { .. }))
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) struct StyleAttributeDependencyChange<'a> {
-    pub(super) attribute_name: &'a str,
-    pub(super) removed_class_tokens: Vec<String>,
-    pub(super) added_class_tokens: Vec<String>,
-    pub(super) removed_id: Option<String>,
-    pub(super) added_id: Option<String>,
-}
-
-impl<'a> StyleAttributeDependencyChange<'a> {
-    fn new(attribute_name: &'a str, old_value: Option<&str>, new_value: Option<&str>) -> Self {
-        let (removed_class_tokens, added_class_tokens) = if attribute_name == "class" {
-            changed_ascii_whitespace_tokens(old_value, new_value)
-        } else {
-            (Vec::new(), Vec::new())
-        };
-        let (removed_id, added_id) = if attribute_name == "id" {
-            changed_identifier(old_value, new_value)
-        } else {
-            (None, None)
-        };
-        Self {
-            attribute_name,
-            removed_class_tokens,
-            added_class_tokens,
-            removed_id,
-            added_id,
-        }
-    }
-}
-
-fn changed_ascii_whitespace_tokens(
-    old_value: Option<&str>,
-    new_value: Option<&str>,
-) -> (Vec<String>, Vec<String>) {
-    let old_tokens = ascii_whitespace_token_set(old_value.unwrap_or_default());
-    let new_tokens = ascii_whitespace_token_set(new_value.unwrap_or_default());
-    let removed = old_tokens
-        .iter()
-        .filter(|token| !new_tokens.contains(*token))
-        .cloned()
-        .collect();
-    let added = new_tokens
-        .iter()
-        .filter(|token| !old_tokens.contains(*token))
-        .cloned()
-        .collect();
-    (removed, added)
-}
-
-fn ascii_whitespace_token_set(value: &str) -> IndexSet<String> {
-    value
-        .split_ascii_whitespace()
-        .filter(|token| !token.is_empty())
-        .map(str::to_owned)
-        .collect()
-}
-
-fn changed_identifier(
-    old_value: Option<&str>,
-    new_value: Option<&str>,
-) -> (Option<String>, Option<String>) {
-    if old_value == new_value {
-        return (None, None);
-    }
-    (
-        old_value
-            .filter(|value| !value.is_empty())
-            .map(str::to_owned),
-        new_value
-            .filter(|value| !value.is_empty())
-            .map(str::to_owned),
-    )
 }
 
 #[cfg(test)]
@@ -495,7 +282,7 @@ mod tests {
             .find(|mutation| mutation.target() == parent)
             .expect("fragment insertion should record one child-list mutation");
         let shared_added_nodes = child_list.shared_added_nodes();
-        let style_effects = StyleMutationEffect::from_dom_mutation_effects(&host, &effects);
+        let style_effects = StyleMutationEffect::from_dom_mutation_effects(&effects);
         let connected_batches = style_effects
             .iter()
             .filter_map(|effect| match effect {
@@ -509,91 +296,33 @@ mod tests {
         assert!(Arc::ptr_eq(connected_batches[0], &shared_added_nodes));
     }
 
-    fn collect_native_effects(
-        output: &mut Vec<StyleMutationEffect>,
-        host: &DomHost,
-        effects: &DomMutationEffects,
-    ) {
+    fn collect_native_effects(output: &mut Vec<StyleMutationEffect>, effects: &DomMutationEffects) {
         assert!(effects.did_change());
-        output.extend(StyleMutationEffect::from_dom_mutation_effects(
-            host, effects,
-        ));
-    }
-
-    fn merged_structural_effects(effects: &[StyleMutationEffect]) -> Vec<StyleMutationEffect> {
-        use crate::style_engine::pending_mutation::PendingStructuralStyleEffects;
-
-        let mut pending = PendingStructuralStyleEffects::default();
-        for effect in effects {
-            pending.extend(std::slice::from_ref(effect));
-        }
-        let (merged, input_count) = pending.into_effects();
-        assert_eq!(input_count, effects.len());
-        merged
+        output.extend(StyleMutationEffect::from_dom_mutation_effects(effects));
     }
 
     #[test]
-    fn consumed_fragment_preparation_preserves_real_splices_and_the_effect_limit() {
-        use crate::style_engine::{
-            eligibility::child_list_effects_have_current_topology,
-            scope::style_source_scope_for_mutation_effects,
-        };
-
+    fn consumed_fragment_preparation_preserves_the_order_of_real_splices() {
         let mut host = test_host();
         let parent = host.create_element("div");
         assert!(host.append_child(host.document_handle(), parent));
         let mut effects = Vec::new();
-        let mut inserted = Vec::new();
         let mut fragments = Vec::new();
         // Match textContent + ParentNode.append's native commits, including
         // the staging insertion and fragment consumption as separate facts.
         for _ in 0..64 {
             let child = host.create_element("div");
             let text = host.set_text_content_effects(child, "ABCD");
-            collect_native_effects(&mut effects, &host, &text);
+            collect_native_effects(&mut effects, &text);
             let fragment = host.create_document_fragment();
             let staged = host.append_child_effects(fragment, child);
-            collect_native_effects(&mut effects, &host, &staged);
+            collect_native_effects(&mut effects, &staged);
             let consumed = host.append_child_effects(parent, fragment);
-            collect_native_effects(&mut effects, &host, &consumed);
-            inserted.push(child);
+            collect_native_effects(&mut effects, &consumed);
             fragments.push(fragment);
         }
-        assert!(effects.len() > 256);
-        assert!(!child_list_effects_have_current_topology(&host, &effects));
-        assert_eq!(
-            detached_style_subtree_roots_for_mutations(&effects)
-                .into_iter()
-                .collect::<Vec<_>>(),
-            inserted,
-            "cleanup must see the original removed roots before normalization"
-        );
-        let mut normalized = merged_structural_effects(&effects);
-        let connected_batches = normalized
-            .iter()
-            .filter_map(|effect| match effect {
-                StyleMutationEffect::ConnectedSubtrees { roots } => Some(roots.as_ref()),
-                _ => None,
-            })
-            .collect::<Vec<_>>();
-        let connected_roots = effects
-            .iter()
-            .filter_map(|effect| match effect {
-                StyleMutationEffect::ConnectedSubtrees { roots } => Some(roots.iter().copied()),
-                _ => None,
-            })
-            .flatten()
-            .collect::<IndexSet<_>>()
-            .into_iter()
-            .collect::<Vec<_>>();
-        assert_eq!(connected_batches, [connected_roots.as_slice()]);
+        let mut normalized = effects.clone();
         retain_live_structural_mutation_effects(&host, &mut normalized);
-        assert!(normalized.len() <= 256);
-        assert!(child_list_effects_have_current_topology(&host, &normalized));
-        assert_eq!(
-            style_source_scope_for_mutation_effects(&host, &effects),
-            style_source_scope_for_mutation_effects(&host, &normalized)
-        );
         let real_splices = effects
             .iter()
             .filter(|effect| match effect {
@@ -609,31 +338,10 @@ mod tests {
             .collect::<Vec<_>>();
         assert_eq!(real_splices.len(), 128);
         assert_eq!(kept_splices, real_splices);
-        drop(normalized);
-
-        // Normalization must not turn an actually large structural history
-        // into a small batch. These are 300 distinct, selector-visible splices.
-        for _ in 0..300 {
-            let child = host.create_element("span");
-            let added = host.append_child_effects(parent, child);
-            collect_native_effects(&mut effects, &host, &added);
-        }
-        let mut normalized = merged_structural_effects(&effects);
-        retain_live_structural_mutation_effects(&host, &mut normalized);
-        assert_eq!(
-            normalized
-                .iter()
-                .filter(|effect| matches!(effect, StyleMutationEffect::ChildList { .. }))
-                .count(),
-            428
-        );
-        assert!(normalized.len() > 256);
     }
 
     #[test]
     fn element_shadow_and_refilled_fragment_histories_are_retained() {
-        use crate::style_engine::eligibility::child_list_effects_have_current_topology;
-
         for parent_kind in ["detached-element", "shadow-root", "refilled-fragment"] {
             let mut host = test_host();
             let document = host.document_handle();
@@ -652,15 +360,15 @@ mod tests {
             let moved = host.create_element("span");
             let mut effects = Vec::new();
             let staged = host.append_child_effects(old_parent, moved);
-            collect_native_effects(&mut effects, &host, &staged);
+            collect_native_effects(&mut effects, &staged);
             let relocated = host.append_child_effects(destination, moved);
-            collect_native_effects(&mut effects, &host, &relocated);
+            collect_native_effects(&mut effects, &relocated);
             assert!(effects.iter().any(|effect| matches!(
                 effect,
                 StyleMutationEffect::ChildList { parent, removed_nodes, .. }
                     if *parent == old_parent && removed_nodes == &[moved]
             )));
-            let mut normalized = merged_structural_effects(&effects);
+            let mut normalized = effects.clone();
             if parent_kind == "refilled-fragment" {
                 let remaining = host.create_element("span");
                 assert!(host.append_child(old_parent, remaining));
@@ -668,17 +376,11 @@ mod tests {
             let original_count = normalized.len();
             retain_live_structural_mutation_effects(&host, &mut normalized);
             assert_eq!(normalized.len(), original_count, "{parent_kind}");
-            assert!(
-                !child_list_effects_have_current_topology(&host, &normalized),
-                "real reparenting must retain the conservative fallback: {parent_kind}"
-            );
         }
     }
 
     #[test]
     fn consumed_fragment_does_not_erase_an_existing_elements_removal() {
-        use crate::style_engine::eligibility::child_list_effects_have_current_topology;
-
         let mut host = test_host();
         let document = host.document_handle();
         let old_parent = host.create_element("section");
@@ -690,10 +392,10 @@ mod tests {
         let fragment = host.create_document_fragment();
         let mut effects = Vec::new();
         let staged = host.append_child_effects(fragment, moved);
-        collect_native_effects(&mut effects, &host, &staged);
+        collect_native_effects(&mut effects, &staged);
         let consumed = host.append_child_effects(destination, fragment);
-        collect_native_effects(&mut effects, &host, &consumed);
-        let mut normalized = merged_structural_effects(&effects);
+        collect_native_effects(&mut effects, &consumed);
+        let mut normalized = effects.clone();
         retain_live_structural_mutation_effects(&host, &mut normalized);
         assert!(normalized.iter().any(|effect| matches!(
             effect,
@@ -708,9 +410,5 @@ mod tests {
             effect,
             StyleMutationEffect::DisconnectedSubtrees { roots } if roots.contains(&moved)
         )));
-        assert!(
-            !child_list_effects_have_current_topology(&host, &normalized),
-            "connected and disconnected facts must not cancel a real element-parent removal"
-        );
     }
 }

@@ -1113,7 +1113,7 @@ pub(crate) fn scroll_window_to(
     if !set_scroll_position(scope, global, x, y) && !scrolling_element_changed {
         return;
     }
-    unsafe { &*host_ptr }.note_realtime_scroll_change();
+    unsafe { &*host_ptr }.note_realtime_scroll_change(scrolling_element);
     queue_scroll_observable_effects(scope, host_ptr, document, true);
 }
 

@@ -57,6 +57,11 @@ fn parse(
         };
         FileInputTarget::Node(reference)
     };
+    if !params.files.is_empty() {
+        conn.local_file_policy()
+            .check_host_file_access()
+            .map_err(PendingDomCommandStartError::renderer_error)?;
+    }
     Ok(FileInputRequest {
         target,
         paths: params.files,

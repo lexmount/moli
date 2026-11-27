@@ -1287,7 +1287,7 @@ async fn spawn_owner_wake_server_with_content_type_and_headers(
     (format!("http://{addr}"), server)
 }
 
-async fn spawn_owner_wake_gated_binary_server_with_content_type(
+pub(super) async fn spawn_owner_wake_gated_binary_server_with_content_type(
     expected_path: &'static str,
     body: Vec<u8>,
     content_type: &'static str,

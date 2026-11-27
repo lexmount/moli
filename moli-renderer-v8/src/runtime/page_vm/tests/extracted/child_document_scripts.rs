@@ -587,7 +587,7 @@ async fn child_parser_link_completion_after_mutation(mutation: &'static str) {
                 {{ const theme = __staleTheme; {action} theme.media = 'screen'; }}
             "#))?;
             if mutation == "href" {
-                page_vm.vm_mut().prime_document_lifecycle_processing_and_record_stylesheet_network_results();
+                page_vm.vm_mut().prime_document_lifecycle_and_publish_stylesheets();
                 let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
                 while page_vm.vm_mut().eval("getComputedStyle(__staleFrame.contentDocument.documentElement).getPropertyValue('--new-sheet').trim()")? != "current" {
                     if !page_vm.run_exact_selected_page_task_for_test(

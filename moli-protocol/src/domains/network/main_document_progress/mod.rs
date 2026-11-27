@@ -2193,7 +2193,7 @@ impl MainDocumentNavigationProgressEvent {
                 cookie_set_reports,
             } => {
                 for session_id in &target.session_ids {
-                    emit::emit_response_received_extra_info(
+                    super::emit_response_received_extra_info(
                         output,
                         session_id.as_deref(),
                         &target.request_id,

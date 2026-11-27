@@ -6,17 +6,6 @@ pub(super) struct StyleSourceKey {
     pub(super) fingerprint: [u8; 32],
 }
 
-/// Ordered revision key used only by source-local CSSOM cascade projections.
-///
-/// This is deliberately not part of the Document style-world identity. The
-/// persistent active collections and their dirty journals decide when the
-/// Document world changes.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub(super) struct StyleSourceSetKey {
-    pub(super) len: usize,
-    pub(super) fingerprint: [u8; 32],
-}
-
 impl StyleSourceKey {
     pub(super) fn css_fingerprint(css_text: &str) -> [u8; 32] {
         let mut hasher = Sha256Context::new();

@@ -102,6 +102,22 @@ pub trait PageInputExt {
         &mut self,
         completion: CompletedPageCommand,
     ) -> Result<RendererInputDispatchOutcome>;
+    fn start_validate_synthetic_wheel_anchor(
+        &self,
+        x: f64,
+        y: f64,
+        gesture: crate::page::RendererSyntheticWheelGesture,
+    ) -> Result<PendingPageCommand>;
+    fn start_dispatch_synthetic_wheel(
+        &self,
+        x: f64,
+        y: f64,
+        delta_x: f64,
+        delta_y: f64,
+        end: bool,
+        intercept_drags: bool,
+        gesture: crate::page::RendererSyntheticWheelGesture,
+    ) -> Result<PendingPageCommand>;
     async fn dispatch_touch_event_at_point_with_outcome_async(
         &mut self,
         x: f64,
@@ -305,6 +321,40 @@ impl PageInputExt for Page {
     ) -> Result<RendererInputDispatchOutcome> {
         let reply = self.finish_page_command(completion);
         decode_input_dispatch_outcome_reply(reply, "mouse event page command")
+    }
+
+    fn start_validate_synthetic_wheel_anchor(
+        &self,
+        x: f64,
+        y: f64,
+        gesture: crate::page::RendererSyntheticWheelGesture,
+    ) -> Result<PendingPageCommand> {
+        self.start_page_command(RendererPageCommand::DevTools(
+            RendererDevToolsPageCommand::ValidateSyntheticWheelAnchor { x, y, gesture },
+        ))
+    }
+
+    fn start_dispatch_synthetic_wheel(
+        &self,
+        x: f64,
+        y: f64,
+        delta_x: f64,
+        delta_y: f64,
+        end: bool,
+        intercept_drags: bool,
+        gesture: crate::page::RendererSyntheticWheelGesture,
+    ) -> Result<PendingPageCommand> {
+        self.start_page_command(RendererPageCommand::DevTools(
+            RendererDevToolsPageCommand::DispatchSyntheticWheel {
+                x,
+                y,
+                delta_x,
+                delta_y,
+                end,
+                intercept_drags,
+                gesture,
+            },
+        ))
     }
 
     async fn dispatch_touch_event_at_point_with_outcome_async(

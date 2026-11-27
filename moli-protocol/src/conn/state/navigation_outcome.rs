@@ -405,6 +405,24 @@ pub enum NavigationRequestLoadPolicy {
     DocumentInitiatedReload,
 }
 
+impl NavigationRequestLoadPolicy {
+    pub(crate) fn local_file_access(
+        self,
+        policy: moli_fetch::LocalFilePolicy,
+        initiator: Option<&moli_core::page::RendererNavigationInitiator>,
+    ) -> moli_fetch::LocalFileNavigationAccess {
+        use moli_fetch::LocalFileNavigationAccess;
+        if !policy.blocks_file_urls()
+            && (matches!(self, Self::BrowserInitiated | Self::Reload)
+                || initiator.is_some_and(|source| source.allows_local_file_navigation()))
+        {
+            LocalFileNavigationAccess::BrowserGranted
+        } else {
+            LocalFileNavigationAccess::Denied
+        }
+    }
+}
+
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TargetInfo<'a> {

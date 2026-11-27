@@ -1,4 +1,7 @@
+use std::sync::Arc;
+
 use super::super::NativeDom;
+use super::super::inline_style::{CssInlineStyleDeclarationState, CssomStyleAttribute};
 use super::super::node::{NativeNodeId, NodeData};
 use html5ever::{LocalName, Namespace, Prefix};
 
@@ -7,12 +10,55 @@ pub struct Attribute {
     pub(super) local_name: LocalName,
     pub(super) namespace: Namespace,
     pub(super) prefix: Option<Prefix>,
-    pub(super) value: Box<str>,
+    value: AttributeValue,
+}
+
+#[derive(Debug, Clone)]
+enum AttributeValue {
+    Text(Box<str>),
+    Style(Arc<InlineStyleAttribute>),
+}
+
+/// Shares the source identity with immutable DOM and cascade snapshots.
+#[derive(Debug)]
+pub enum InlineStyleAttribute {
+    Text(Box<str>),
+    Cssom(Box<CssomStyleAttribute>),
+}
+
+impl InlineStyleAttribute {
+    pub fn new(text: String) -> Self {
+        Self::Text(text.into_boxed_str())
+    }
+
+    pub fn as_str(&self) -> &str {
+        match self {
+            Self::Text(text) => text,
+            Self::Cssom(source) => source.serialized(),
+        }
+    }
+
+    fn cssom(&self) -> Option<&CssomStyleAttribute> {
+        match self {
+            Self::Cssom(source) => Some(source),
+            Self::Text(_) => None,
+        }
+    }
+}
+
+impl AttributeValue {
+    fn new(value: String, is_style: bool) -> Self {
+        if is_style {
+            Self::Style(Arc::new(InlineStyleAttribute::new(value)))
+        } else {
+            Self::Text(value.into_boxed_str())
+        }
+    }
 }
 
 impl Attribute {
     const XLINK_NAMESPACE: &'static str = "http://www.w3.org/1999/xlink";
-    const XML_NAMESPACE: &'static str = "http://www.w3.org/XML/1998/namespace";
+    pub(super) const XML_NAMESPACE: &'static str = "http://www.w3.org/XML/1998/namespace";
     const XMLNS_NAMESPACE: &'static str = "http://www.w3.org/2000/xmlns/";
 
     pub fn new(
@@ -21,11 +67,12 @@ impl Attribute {
         prefix: Option<String>,
         value: String,
     ) -> Self {
+        let is_style = local_name == "style" && prefix.as_deref().is_none_or(str::is_empty);
         Self {
             local_name: LocalName::from(local_name),
             namespace: Namespace::from(namespace),
             prefix: prefix.map(Prefix::from),
-            value: value.into_boxed_str(),
+            value: AttributeValue::new(value, is_style),
         }
     }
 
@@ -79,7 +126,64 @@ impl Attribute {
     }
 
     pub fn value(&self) -> &str {
-        self.value.as_ref()
+        match &self.value {
+            AttributeValue::Text(value) => value,
+            AttributeValue::Style(value) => value.as_str(),
+        }
+    }
+
+    /// Shares the same backing used by the DOM value for a `style` attribute.
+    pub fn shared_style_value(&self) -> Option<Arc<InlineStyleAttribute>> {
+        match &self.value {
+            AttributeValue::Style(value) => Some(Arc::clone(value)),
+            AttributeValue::Text(_) => None,
+        }
+    }
+
+    pub fn cssom_style(&self) -> Option<&CssomStyleAttribute> {
+        match &self.value {
+            AttributeValue::Style(value) => value.cssom(),
+            AttributeValue::Text(_) => None,
+        }
+    }
+
+    pub(in crate::native) fn edit_cssom_style(
+        &mut self,
+        mutate: impl FnOnce(&mut CssInlineStyleDeclarationState) -> bool,
+    ) -> bool {
+        let AttributeValue::Style(source) = &mut self.value else {
+            return false;
+        };
+        if let Some(InlineStyleAttribute::Cssom(unique)) = Arc::get_mut(source) {
+            return unique.edit(mutate);
+        }
+        let Some(shared) = source.cssom() else {
+            return false;
+        };
+        // A retained DOM snapshot still uses the original attribute.
+        let mut next = CssomStyleAttribute::new(shared.read().clone());
+        if !next.edit(mutate) {
+            return false;
+        }
+        *source = Arc::new(InlineStyleAttribute::Cssom(Box::new(next)));
+        true
+    }
+
+    pub(super) fn set_cssom_style(&mut self, source: Box<CssomStyleAttribute>) {
+        self.value = AttributeValue::Style(Arc::new(InlineStyleAttribute::Cssom(source)));
+    }
+
+    pub(super) fn new_cssom_style(source: Box<CssomStyleAttribute>) -> Self {
+        Self {
+            local_name: html5ever::local_name!("style"),
+            namespace: Namespace::default(),
+            prefix: None,
+            value: AttributeValue::Style(Arc::new(InlineStyleAttribute::Cssom(source))),
+        }
+    }
+
+    pub(super) fn set_value(&mut self, value: String) {
+        self.value = AttributeValue::new(value, self.name_matches("style"));
     }
 }
 

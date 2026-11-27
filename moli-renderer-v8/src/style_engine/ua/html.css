@@ -98,6 +98,14 @@ figure {
   margin-inline-end: 40px;
 }
 
+hr {
+  margin-block: 0.5em;
+  margin-inline: auto;
+  border: 1px inset;
+  color: gray;
+  overflow: hidden;
+}
+
 table {
   display: table;
   border-collapse: separate;
@@ -164,11 +172,21 @@ th {
 
 caption {
   display: table-caption;
+  text-align: -moz-center;
 }
 
-li,
+li {
+  display: list-item;
+}
+
 details > summary:first-of-type {
   display: list-item;
+  list-style: disclosure-closed inside;
+  counter-increment: list-item 0;
+}
+
+details[open] > summary:first-of-type {
+  list-style-type: disclosure-open;
 }
 
 ul, menu, dir {
@@ -269,6 +287,22 @@ script, style, template, title {
 
 /* Form controls. */
 
+label {
+  cursor: default;
+}
+
+fieldset {
+  margin-inline: 2px;
+  padding-block: 0.35em 0.625em;
+  padding-inline: 0.75em;
+  border: 2px groove ThreeDFace;
+  min-inline-size: min-content;
+}
+
+legend {
+  padding-inline: 2px;
+}
+
 button {
   appearance: auto;
 }
@@ -304,7 +338,6 @@ textarea {
 
 input {
   appearance: auto;
-  box-sizing: border-box;
   cursor: text;
   padding: 1px 0;
   border: 2px inset light-dark(#767676, #858585);
@@ -531,6 +564,24 @@ progress {
 
 /* Remaining construction and basic inline decoration defaults. */
 
+video {
+  object-fit: contain;
+}
+
+video, canvas, img {
+  overflow: clip;
+  overflow-clip-margin: content-box;
+}
+
+iframe, embed, object {
+  overflow: clip !important;
+  overflow-clip-margin: content-box !important;
+}
+
+iframe {
+  border: 2px inset;
+}
+
 audio:not([controls]) {
   display: none !important;
 }
@@ -613,6 +664,23 @@ a:any-link {
   color: LinkText;
   text-decoration: underline;
   cursor: pointer;
+}
+
+:focus-visible {
+  outline: 1px auto AccentColor;
+}
+
+html:focus-visible, body:focus-visible,
+embed:focus-visible, iframe:focus-visible, object:focus-visible {
+  outline: none;
+}
+
+a:any-link:focus-visible {
+  outline-offset: 1px;
+}
+
+input:is([type="checkbox" i], [type="radio" i]):focus-visible {
+  outline-offset: 2px;
 }
 
 body {

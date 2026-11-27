@@ -21,7 +21,6 @@ fn no_source_no_cache_mutations_do_not_queue_retained_invalidation_work() {
             parent,
             added_nodes: vec![child],
             removed_nodes: Vec::new(),
-            removed_element_snapshots: Vec::new(),
             previous_sibling: None,
             next_sibling: None,
         }],
@@ -31,6 +30,7 @@ fn no_source_no_cache_mutations_do_not_queue_retained_invalidation_work() {
         &host,
         &[StyleMutationEffect::Attribute {
             element: target,
+            namespace: None,
             name: "class".to_owned(),
             old_value: None,
             new_value: Some("active".to_owned()),
@@ -50,62 +50,6 @@ fn no_source_no_cache_mutations_do_not_queue_retained_invalidation_work() {
         engine.target_context_epoch_for_document_for_test(document),
         epoch + 2
     );
-}
-
-#[test]
-fn mutation_source_scope_presence_uses_cheap_effect_classification() {
-    let mut host = test_host();
-    let document = host.document_handle();
-    let connected = host.create_element("section");
-    let detached = host.create_element("article");
-    assert!(host.append_child(document, connected));
-
-    let cases = [
-        (
-            Vec::new(),
-            false,
-            "empty effects should not have a source scope",
-        ),
-        (
-            vec![StyleMutationEffect::DisconnectedSubtrees {
-                roots: vec![detached].into(),
-            }],
-            false,
-            "only disconnected subtree effects should not have a source scope",
-        ),
-        (
-            vec![StyleMutationEffect::ConnectedSubtrees {
-                roots: vec![connected].into(),
-            }],
-            true,
-            "connected subtree effects should have a source scope",
-        ),
-        (
-            vec![StyleMutationEffect::ChildList {
-                parent: document,
-                added_nodes: vec![connected],
-                removed_nodes: Vec::new(),
-                removed_element_snapshots: Vec::new(),
-                previous_sibling: None,
-                next_sibling: None,
-            }],
-            true,
-            "child-list effects should have a source scope",
-        ),
-    ];
-
-    for (effects, expected, message) in cases {
-        assert_eq!(
-            mutation_effects_have_source_scope(&effects),
-            expected,
-            "{message}"
-        );
-        assert_eq!(
-            source_scope_for_mutations(&host, &effects).is_some(),
-            expected,
-            "{message}"
-        );
-    }
 }
 
 #[test]
@@ -141,7 +85,6 @@ fn retained_system_mutations_without_computed_cache_still_queue_work() {
             parent,
             added_nodes: vec![child],
             removed_nodes: Vec::new(),
-            removed_element_snapshots: Vec::new(),
             previous_sibling: None,
             next_sibling: None,
         }],
@@ -163,7 +106,7 @@ fn retained_system_mutations_without_computed_cache_still_queue_work() {
 }
 
 #[test]
-fn has_selector_child_list_invalidation_uses_target_queries_without_rebuilding_stylist() {
+fn has_selector_child_list_invalidation_uses_native_dependencies_without_rebuilding_stylist() {
     let mut host = test_host();
     let document = host.document_handle();
     let style = host.create_element("style");
@@ -188,7 +131,13 @@ fn has_selector_child_list_invalidation_uses_target_queries_without_rebuilding_s
         "body:has(span) .subject { color: red; }".into(),
     );
     let document_url = url::Url::parse("https://example.test/").unwrap();
-    let inputs = FullStyleWorldSnapshot::default();
+    let inputs = FullStyleWorldSnapshot {
+        document_stylesheet_sources: engine
+            .owner_style_sheet_source_with_host(&host, style)
+            .into_iter()
+            .collect(),
+        ..Default::default()
+    };
     assert!(
         engine
             .computed_style_property_value(
@@ -228,23 +177,10 @@ fn has_selector_child_list_invalidation_uses_target_queries_without_rebuilding_s
         parent: container,
         added_nodes: vec![added],
         removed_nodes: Vec::new(),
-        removed_element_snapshots: Vec::new(),
         previous_sibling: None,
         next_sibling: None,
     }];
     let media = crate::protocol_types::EmulatedMediaOverrides::default();
-    let source_scope = style_source_scope_for_mutation_effects(&host, &effects);
-    assert!(
-        engine.test_author_sources_have_relative_selector_dependency_for_document(
-            &host,
-            document,
-            &source_scope,
-            &media,
-        )
-    );
-    let planned_scope = source_scope_for_mutations(&host, &effects);
-    assert_eq!(planned_scope, Some(source_scope));
-
     engine.invalidate_for_mutations(&host, &effects, &media);
 
     assert_eq!(
@@ -260,14 +196,18 @@ fn has_selector_child_list_invalidation_uses_target_queries_without_rebuilding_s
         2
     );
     engine.drain_pending_style_invalidations_for_document_for_test(&host, document);
+    assert!(engine.computed_style_cache_contains_handle_for_document_for_test(document, outside));
     assert_eq!(
-        engine.computed_style_cache_entry_count_for_document_for_test(document),
-        2,
-        "the broad :has() cleanup must retain published descendants until observation"
-    );
-    assert!(
-        engine.retained_style_invalidation_root_count_for_document_for_test(document) > 0,
-        "the broad target-query result must be retained as lazy roots"
+        engine.computed_style_property_value(
+            &host,
+            &document_url,
+            subject,
+            "color",
+            None,
+            &inputs,
+            None
+        ),
+        Some("rgb(255, 0, 0)".to_owned())
     );
 }
 
@@ -293,7 +233,13 @@ fn has_selector_child_list_invalidation_collects_inserted_subtree_dependency_key
         ".subject:has(.descendant) { color: rgb(1, 2, 3); }".into(),
     );
     let document_url = url::Url::parse("https://example.test/").unwrap();
-    let inputs = FullStyleWorldSnapshot::default();
+    let inputs = FullStyleWorldSnapshot {
+        document_stylesheet_sources: engine
+            .owner_style_sheet_source_with_host(&host, style)
+            .into_iter()
+            .collect(),
+        ..Default::default()
+    };
     let initial = engine
         .computed_style_property_value(&host, &document_url, subject, "color", None, &inputs, None)
         .expect("subject color should compute before insertion");
@@ -312,7 +258,6 @@ fn has_selector_child_list_invalidation_collects_inserted_subtree_dependency_key
         parent: subject,
         added_nodes: vec![wrapper],
         removed_nodes: Vec::new(),
-        removed_element_snapshots: Vec::new(),
         previous_sibling: None,
         next_sibling: None,
     }];
@@ -366,7 +311,6 @@ fn has_selector_child_list_invalidation_matches_inserted_heading_pseudo_class() 
         parent: ancestor,
         added_nodes: vec![heading],
         removed_nodes: Vec::new(),
-        removed_element_snapshots: Vec::new(),
         previous_sibling: None,
         next_sibling: None,
     }];
@@ -442,7 +386,6 @@ fn has_selector_child_list_invalidation_matches_inserted_adjacent_heading_pseudo
         parent: body,
         added_nodes: vec![heading],
         removed_nodes: Vec::new(),
-        removed_element_snapshots: Vec::new(),
         previous_sibling: Some(sibling),
         next_sibling: Some(target),
     }];
@@ -522,7 +465,6 @@ fn has_selector_child_list_insertion_ignores_unrelated_element_type() {
         parent: container,
         added_nodes: vec![inserted],
         removed_nodes: Vec::new(),
-        removed_element_snapshots: Vec::new(),
         previous_sibling: None,
         next_sibling: None,
     }];
@@ -536,169 +478,6 @@ fn has_selector_child_list_insertion_ignores_unrelated_element_type() {
     );
     assert!(engine.computed_style_cache_contains_handle_for_document_for_test(document, outside));
     assert!(engine.computed_style_cache_contains_handle_for_document_for_test(document, subject));
-}
-
-#[test]
-fn stylo_tree_invalidator_wrapper_collects_sibling_roots() {
-    let mut host = test_host();
-    let document = host.document_handle();
-    let marker = host.create_element("div");
-    let target = host.create_element("p");
-    assert!(host.set_attribute(marker, "class", "marker"));
-    assert!(host.set_attribute(target, "class", "target"));
-    assert!(host.append_child(document, marker));
-    assert!(host.append_child(document, target));
-
-    let engine = MoliStyleEngine::new();
-    let document_url = url::Url::parse("https://example.test/").unwrap();
-    let mut inputs = FullStyleWorldSnapshot::default();
-    inputs.document_stylesheet_sources.push(
-        StyloStylesheetSource::new(
-            ".marker + .target { color: red; }".into(),
-            document_url.clone(),
-        )
-        .with_source_id(Some(StyleSourceId::document_adopted_style_sheet(
-            document, 0,
-        ))),
-    );
-    let key = StyleWorldKey::new(&inputs, None);
-    engine.ensure_retained_style_system_for_document(&host, host.document_handle(), key, &inputs);
-
-    let (roots, requires_fallback) = collect_source_invalidation_roots_for_test(
-        &engine,
-        &host,
-        marker,
-        StyloStyleInvalidationQuery::Class("marker"),
-    );
-
-    assert!(!requires_fallback);
-    assert!(roots.contains(&target));
-    assert!(!roots.contains(&document));
-}
-
-#[test]
-fn stylo_tree_invalidator_wrapper_handles_normal_dependency_chains() {
-    let mut host = test_host();
-    let document = host.document_handle();
-    let scope = host.create_element("section");
-    let marker = host.create_element("div");
-    let target = host.create_element("p");
-    assert!(host.set_attribute(scope, "class", "scope"));
-    assert!(host.set_attribute(marker, "class", "marker"));
-    assert!(host.set_attribute(target, "class", "target"));
-    assert!(host.append_child(document, scope));
-    assert!(host.append_child(scope, marker));
-    assert!(host.append_child(scope, target));
-
-    let engine = MoliStyleEngine::new();
-    let document_url = url::Url::parse("https://example.test/").unwrap();
-    let mut inputs = FullStyleWorldSnapshot::default();
-    inputs.document_stylesheet_sources.push(
-        StyloStylesheetSource::new(
-            ".scope :is(.marker) + .target { color: red; }".into(),
-            document_url.clone(),
-        )
-        .with_source_id(Some(StyleSourceId::document_adopted_style_sheet(
-            document, 0,
-        ))),
-    );
-    let key = StyleWorldKey::new(&inputs, None);
-    engine.ensure_retained_style_system_for_document(&host, host.document_handle(), key, &inputs);
-
-    let (roots, requires_fallback) = collect_source_invalidation_roots_for_test(
-        &engine,
-        &host,
-        marker,
-        StyloStyleInvalidationQuery::Class("marker"),
-    );
-
-    assert!(!requires_fallback);
-    assert!(roots.contains(&target));
-    assert!(!roots.contains(&document));
-}
-
-#[test]
-fn stylo_tree_invalidator_wrapper_handles_scope_dependency_chains() {
-    let mut host = test_host();
-    let document = host.document_handle();
-    let scope = host.create_element("section");
-    let marker = host.create_element("div");
-    let target = host.create_element("p");
-    let unrelated = host.create_element("p");
-    assert!(host.set_attribute(scope, "class", "scope"));
-    assert!(host.set_attribute(marker, "class", "marker"));
-    assert!(host.set_attribute(target, "class", "target"));
-    assert!(host.set_attribute(unrelated, "class", "target"));
-    assert!(host.append_child(document, scope));
-    assert!(host.append_child(scope, marker));
-    assert!(host.append_child(scope, target));
-    assert!(host.append_child(document, unrelated));
-
-    let engine = MoliStyleEngine::new();
-    let document_url = url::Url::parse("https://example.test/").unwrap();
-    let mut inputs = FullStyleWorldSnapshot::default();
-    inputs.document_stylesheet_sources.push(
-        StyloStylesheetSource::new(
-            ":scope .marker + .target { color: red; }".into(),
-            document_url.clone(),
-        )
-        .with_source_id(Some(StyleSourceId::document_adopted_style_sheet(
-            document, 0,
-        ))),
-    );
-    let key = StyleWorldKey::new(&inputs, None);
-    engine.ensure_retained_style_system_for_document(&host, host.document_handle(), key, &inputs);
-
-    let (roots, requires_fallback) = collect_source_invalidation_roots_for_test(
-        &engine,
-        &host,
-        marker,
-        StyloStyleInvalidationQuery::Class("marker"),
-    );
-
-    assert!(!requires_fallback, "roots={roots:?}");
-    assert!(roots.contains(&target), "roots={roots:?}");
-    assert!(!roots.contains(&unrelated), "roots={roots:?}");
-    assert!(!roots.contains(&document), "roots={roots:?}");
-}
-
-#[test]
-fn stylo_tree_invalidator_wrapper_accepts_empty_scope_dependency_result() {
-    let mut host = test_host();
-    let document = host.document_handle();
-    let marker = host.create_element("div");
-    let spacer = host.create_element("p");
-    let target = host.create_element("p");
-    assert!(host.set_attribute(marker, "class", "marker"));
-    assert!(host.set_attribute(target, "class", "target"));
-    assert!(host.append_child(document, marker));
-    assert!(host.append_child(document, spacer));
-    assert!(host.append_child(document, target));
-
-    let engine = MoliStyleEngine::new();
-    let document_url = url::Url::parse("https://example.test/").unwrap();
-    let mut inputs = FullStyleWorldSnapshot::default();
-    inputs.document_stylesheet_sources.push(
-        StyloStylesheetSource::new(
-            ":scope .marker + .target { color: red; }".into(),
-            document_url.clone(),
-        )
-        .with_source_id(Some(StyleSourceId::document_adopted_style_sheet(
-            document, 0,
-        ))),
-    );
-    let key = StyleWorldKey::new(&inputs, None);
-    engine.ensure_retained_style_system_for_document(&host, host.document_handle(), key, &inputs);
-
-    let (roots, requires_fallback) = collect_source_invalidation_roots_for_test(
-        &engine,
-        &host,
-        marker,
-        StyloStyleInvalidationQuery::Class("marker"),
-    );
-
-    assert!(!requires_fallback);
-    assert!(roots.is_empty(), "{roots:?}");
 }
 
 #[test]
@@ -802,7 +581,7 @@ fn detached_subtree_invalidation_clears_relative_selector_flags() {
     assert!(host.append_child(document, anchor));
     assert!(host.append_child(anchor, marker));
 
-    let engine = MoliStyleEngine::new();
+    let mut engine = MoliStyleEngine::new();
     let document_url = url::Url::parse("https://example.test/").unwrap();
     let source = StyloStylesheetSource::new(
         ".anchor:has(.marker) { color: red; }".into(),
@@ -836,18 +615,10 @@ fn detached_subtree_invalidation_clears_relative_selector_flags() {
         );
     });
 
-    assert!(host.remove_child(document, anchor));
-    engine.invalidate_detached_style_subtrees_for_mutations(
-        &host,
-        &[StyleMutationEffect::ChildList {
-            parent: document,
-            added_nodes: Vec::new(),
-            removed_nodes: vec![anchor],
-            removed_element_snapshots: Vec::new(),
-            previous_sibling: None,
-            next_sibling: None,
-        }],
-    );
+    let removal = host.remove_child_effects(document, anchor);
+    let effects = StyleMutationEffect::from_dom_mutation_effects(&removal);
+    engine.invalidate_dom_mutations(&host, &effects);
+    engine.drain_pending_style_invalidations_for_document_for_test(&host, document);
 
     engine.dom_adapter.with_bound_host(&host, |binding| {
         let anchor_element = binding.element(&host, anchor).unwrap();

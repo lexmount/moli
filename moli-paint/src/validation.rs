@@ -58,6 +58,23 @@ pub(crate) fn validate_fragment_stream(snapshot: &PaintSnapshot) -> Result<usize
                     index: image.image.index(),
                 });
             }
+            PaintFragment::Tiles(tiles) => match tiles.source {
+                moli_layout::PaintTileSource::Image(image, _)
+                    if snapshot.image(image).is_none() =>
+                {
+                    return Err(PaintError::MissingImageResource {
+                        index: image.index(),
+                    });
+                }
+                moli_layout::PaintTileSource::Svg(image, _)
+                    if snapshot.svg_image(image).is_none() =>
+                {
+                    return Err(PaintError::MissingSvgImageResource {
+                        index: image.index(),
+                    });
+                }
+                _ => {}
+            },
             PaintFragment::Fill { .. }
             | PaintFragment::Stroke(_)
             | PaintFragment::Border { .. }

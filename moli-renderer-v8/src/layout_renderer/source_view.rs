@@ -4,9 +4,9 @@ use std::{
 };
 
 use moli_layout::{
-    LayoutElementCategory, LayoutElementMetadata, LayoutElementSemantics, LayoutImageResource,
-    LayoutNamespace, LayoutReplacedKind, LayoutSource, LayoutSourceKind, LayoutTableData,
-    LayoutTableRole, LayoutTextSelection, ReplacedMetrics,
+    LayoutCssImageState, LayoutElementCategory, LayoutElementMetadata, LayoutElementSemantics,
+    LayoutImageResource, LayoutNamespace, LayoutReplacedKind, LayoutSource, LayoutSourceKind,
+    LayoutTableData, LayoutTableRole, LayoutTextSelection, ReplacedMetrics,
 };
 
 use crate::{
@@ -16,7 +16,7 @@ use crate::{
         flat_children, flat_parent, form_control_data, layout_element_classification, list_data,
         optional_positive_u16_attribute, select_control_data,
     },
-    native_bridge::{PageScriptHost, element::StyleObservation},
+    native_bridge::{CssImagePaintSnapshot, PageScriptHost, element::StyleObservation},
 };
 
 pub(super) struct NativeLayoutSourceView<'a> {
@@ -25,13 +25,14 @@ pub(super) struct NativeLayoutSourceView<'a> {
     document: Option<DomHandle>,
     styles: RefCell<StyleObservation<'a>>,
     paint_resources: bool,
+    css_images: Option<&'a CssImagePaintSnapshot>,
     text_selections: HashMap<DomHandle, LayoutTextSelection>,
 }
 
 impl<'a> NativeLayoutSourceView<'a> {
     #[cfg(test)]
     pub(super) fn new(runtime: &'a PageScriptHost, root: DomHandle) -> Self {
-        Self::with_paint_resources(runtime, root, StyleObservation::new(runtime), false)
+        Self::with_paint_resources(runtime, root, StyleObservation::new(runtime), false, None)
     }
 
     pub(super) fn with_paint_resources(
@@ -39,6 +40,7 @@ impl<'a> NativeLayoutSourceView<'a> {
         root: DomHandle,
         styles: StyleObservation<'a>,
         paint_resources: bool,
+        css_images: Option<&'a CssImagePaintSnapshot>,
     ) -> Self {
         Self {
             runtime,
@@ -46,12 +48,68 @@ impl<'a> NativeLayoutSourceView<'a> {
             document: runtime.dom_host().owner_document_handle(root),
             styles: RefCell::new(styles),
             paint_resources,
+            css_images,
             text_selections: document_text_selections(runtime, root),
         }
     }
 
     fn host(&self) -> &DomHost {
         self.runtime.dom_host()
+    }
+
+    pub(super) fn has_text_selection(&self) -> bool {
+        !self.text_selections.is_empty()
+    }
+
+    pub(super) fn svg_input(
+        &self,
+        node: DomHandle,
+        style: &moli_layout::ResolvedLayoutStyle,
+        viewport: moli_layout::LayoutSize,
+    ) -> Option<moli_layout::InlineSvgInput<DomHandle>> {
+        super::inline_svg::collect_input(self.runtime, node, style, viewport, &self.styles)
+    }
+}
+
+pub(crate) fn native_replaced_image(
+    runtime: &PageScriptHost,
+    node: DomHandle,
+    kind: LayoutReplacedKind,
+) -> Option<LayoutImageResource> {
+    match kind {
+        LayoutReplacedKind::Image => {
+            let ready = runtime.ready_image_for_layout(node)?;
+            Some(LayoutImageResource {
+                intrinsic_width: ready.intrinsic_width,
+                intrinsic_height: ready.intrinsic_height,
+                pixels: ready.pixels,
+                svg: ready.svg,
+            })
+        }
+        LayoutReplacedKind::Canvas => {
+            let pixels = runtime.canvas_pixels_for_layout(node)?;
+            Some(LayoutImageResource {
+                intrinsic_width: pixels.width as f32,
+                intrinsic_height: pixels.height as f32,
+                pixels: Some(pixels),
+                svg: None,
+            })
+        }
+        #[cfg(all(
+            feature = "media-ext",
+            any(target_os = "linux", target_os = "macos"),
+            target_pointer_width = "64"
+        ))]
+        LayoutReplacedKind::Media => {
+            let pixels = runtime.video_image(node)?;
+            Some(LayoutImageResource {
+                intrinsic_width: pixels.width as f32,
+                intrinsic_height: pixels.height as f32,
+                pixels: Some(pixels),
+                svg: None,
+            })
+        }
+        _ => None,
     }
 }
 
@@ -229,6 +287,16 @@ impl LayoutSource for NativeLayoutSourceView<'_> {
         let attribute_width = numeric_dimension_attribute(self.host(), node, "width");
         let attribute_height = numeric_dimension_attribute(self.host(), node, "height");
         let intrinsic = self.runtime.image_resource_intrinsic_size(node);
+        #[cfg(all(
+            feature = "media-ext",
+            any(target_os = "linux", target_os = "macos"),
+            target_pointer_width = "64"
+        ))]
+        let intrinsic = self
+            .runtime
+            .video_dimensions(node)
+            .map(|(width, height)| (width as f32, height as f32))
+            .or(intrinsic);
         Some(ReplacedMetrics {
             intrinsic_width: intrinsic.map(|(width, _)| width),
             intrinsic_height: intrinsic.map(|(_, height)| height),
@@ -252,66 +320,15 @@ impl LayoutSource for NativeLayoutSourceView<'_> {
             .node(node)
             .and_then(Node::as_element)
             .map(|element| layout_element_semantics_for_source(self.host(), node, element))?;
-        match semantics.replaced {
-            Some(LayoutReplacedKind::Image) => {
-                let ready = self.runtime.ready_image_for_layout(node)?;
-                Some(LayoutImageResource {
-                    intrinsic_width: ready.intrinsic_width,
-                    intrinsic_height: ready.intrinsic_height,
-                    pixels: ready.pixels,
-                    svg: ready.svg,
-                })
-            }
-            Some(LayoutReplacedKind::Canvas) => {
-                let pixels = self.runtime.canvas_pixels_for_layout(node)?;
-                Some(LayoutImageResource {
-                    intrinsic_width: pixels.width as f32,
-                    intrinsic_height: pixels.height as f32,
-                    pixels: Some(pixels),
-                    svg: None,
-                })
-            }
-            _ => None,
-        }
+        native_replaced_image(self.runtime, node, semantics.replaced?)
     }
 
-    fn css_image_resource(&self, resolved_url: &str) -> Option<LayoutImageResource> {
-        if !self.paint_resources {
-            return None;
-        }
-        let parsed = url::Url::parse(resolved_url).ok()?;
-        // Blink shares the fetched bytes using a fragment-free cache key, but
-        // then applies SVG view/element-fragment semantics separately. Until
-        // that latter projection exists, painting the whole SVG would be a
-        // visibly incorrect fallback.
-        if parsed.fragment().is_some() {
-            return None;
-        }
-        let ready = self
-            .runtime
-            .ready_css_image_for_layout(self.document?, parsed.as_str())?;
-        Some(LayoutImageResource {
-            intrinsic_width: ready.intrinsic_width,
-            intrinsic_height: ready.intrinsic_height,
-            pixels: ready.pixels,
-            svg: ready.svg,
-        })
-    }
-
-    fn svg_content(
-        &self,
-        node: DomHandle,
-        style: &moli_layout::ResolvedLayoutStyle,
-        viewport: moli_layout::LayoutSize,
-    ) -> Option<moli_layout::LayoutSvgContent<DomHandle>> {
-        super::inline_svg::layout_content(
-            self.runtime,
-            node,
-            style,
-            viewport,
-            &self.styles,
-            self.paint_resources,
-        )
+    fn css_image_state(&self, resolved_url: &str) -> LayoutCssImageState {
+        self.css_images
+            .zip(self.document)
+            .map_or_else(LayoutCssImageState::default, |(images, document)| {
+                images.image(document, resolved_url)
+            })
     }
 }
 

@@ -6,7 +6,7 @@ use taffy::Size;
 use unicode_segmentation::UnicodeSegmentation;
 
 use crate::{
-    LayoutAnonymousReason, LayoutAnonymousStyleContext, LayoutBoxId, LayoutBoxKind, LayoutDisplay,
+    LayoutAnonymousReason, LayoutAnonymousStyleContext, LayoutBoxKind, LayoutDisplay,
     LayoutElementCategory, LayoutElementSemantics, LayoutError, LayoutFormControlKind,
     LayoutInputControlKind, LayoutStyleResolver, LayoutTextSelection, LayoutWorld,
     ResolvedLayoutStyle, TextTransform, TextTransformState, replaced::ReplacedContext,
@@ -21,9 +21,9 @@ where
     R: LayoutStyleResolver<N>,
 {
     let controls = (0..world.boxes.len())
-        .map(LayoutBoxId::from_index)
+        .map(|index| world.boxes.id_at(index))
         .filter_map(|id| {
-            let control = &world.boxes[id.index()];
+            let control = &world.boxes[id];
             form_control_texts(
                 &control.element_semantics,
                 control.style.text_transform(),
@@ -34,19 +34,17 @@ where
         .filter(|(_, texts, _, selection)| !texts.is_empty() || selection.is_some())
         .collect::<Vec<_>>();
     for (control, mut texts, placeholder, selection) in controls {
-        let Some(owner) = world.boxes[control.index()].source else {
+        let Some(owner) = world.boxes[control].source else {
             continue;
         };
-        if world.boxes[control.index()]
+        if world.boxes[control]
             .element_semantics
             .as_ref()
             .is_some_and(LayoutElementSemantics::is_select_listbox)
         {
-            world.boxes[control.index()]
-                .style
-                .clip_form_control_contents();
+            world.boxes[control].style.clip_form_control_contents();
         }
-        let owner_label = world.boxes[control.index()].source_label.clone();
+        let owner_label = world.boxes[control].source_label.clone();
         let placeholder_style = if placeholder {
             styles.placeholder_style(owner)?.map(|style| {
                 let mut style = style.into_style();
@@ -57,7 +55,7 @@ where
             None
         };
         let editor_style = styles.anonymous_style(
-            LayoutAnonymousStyleContext::from_parent(&world.boxes[control.index()])
+            LayoutAnonymousStyleContext::from_parent(&world.boxes[control])
                 .expect("form control has a source owner"),
             LayoutDisplay::Block,
         )?;
@@ -107,7 +105,7 @@ where
                 text_style.clone(),
                 Some(text),
             ));
-            world.boxes[text_id.index()].text_selection = selection;
+            world.boxes[text_id].text_selection = selection;
             world.append_synthesized_child(wrapper_id, text_id)?;
             world.append_synthesized_child(control, wrapper_id)?;
         }

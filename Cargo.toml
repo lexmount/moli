@@ -6,7 +6,9 @@ members = [
     "moli-bounded-buffer",
     "moli-bounded-json",
     "moli-broadcast-channel",
-    "molio",
+    "client/molio",
+    "client/molio-ios",
+    "client/molio-ohos",
     "moli-browser-profile",
     "moli-canvas",
     "moli-charset-parser",
@@ -28,6 +30,7 @@ members = [
     "moli-encoding-detector",
     "moli-core",
     "moli-import-map",
+    "moli-input",
     "moli-inspector-json",
     "moli-image",
     "moli-indexeddb",
@@ -64,6 +67,7 @@ members = [
     "moli-stylesheet-blocking",
     "moli-svg",
     "moli-system-fonts",
+    "moli-system-locale",
     "moli-test-support",
     "moli-url",
     "moli-url-policy",
@@ -71,6 +75,7 @@ members = [
     "moli-v8-platform",
     "moli-v8-test-util",
     "moli-v8-util",
+    "moli-video",
     "moli-web-mime",
     "moli-web-storage",
     "moli-web-bot-auth",
@@ -114,8 +119,8 @@ glifo = { git = "https://github.com/ldm0/vello", rev = "1f3376b102ca9a0950221f3d
 vello_common = { git = "https://github.com/ldm0/vello", rev = "1f3376b102ca9a0950221f3df09316c4ef1299ba" }
 # Share AWS-LC 0.46 with aws-lc-rs until upstream openssl-sys updates its backend.
 openssl-sys = { git = "https://github.com/lexmount/rust-openssl", rev = "4497b245b09660f838dd00750616929b4cfe52ba" }
-parley = { git = "https://github.com/lexmount/parley", rev = "a18cfc3ba6638d44ff0d0c9ce7b0b3396b42e8cf" }
-fontique = { git = "https://github.com/lexmount/parley", rev = "a18cfc3ba6638d44ff0d0c9ce7b0b3396b42e8cf" }
+parley = { git = "https://github.com/lexmount/parley", rev = "b456e278105eccf378fdbdb5cd1bcbffdc430c58" }
+fontique = { git = "https://github.com/lexmount/parley", rev = "b456e278105eccf378fdbdb5cd1bcbffdc430c58" }
 # Share fontations between shaping, raster rendering and PDF font subsetting.
 subsetter = { git = "https://github.com/lexmount/subsetter", rev = "8d3815245835af309559c3b4a872d6a0a54913a9" }
 url = { git = "https://github.com/lexmount/rust-url", rev = "ca9fcad2b99f20c30c28a618ad78410f6fd31161" }
@@ -126,13 +131,13 @@ curl-sys = { git = "https://github.com/lexmount/curl-rust", rev = "0392e12475d8d
 cookie = { git = "https://github.com/ldm0/cookie-rs", branch = "priority" }
 v8 = { path = "vendor/v8-152.2.0" }
 deno_v8 = { path = "vendor/deno_v8-0.3.0" }
-selectors = { git = "https://github.com/lexmount/stylo", rev = "739a361e59e5f58adde2f44e2c1e4e8060ff0ad2" }
-servo_arc = { git = "https://github.com/lexmount/stylo", rev = "739a361e59e5f58adde2f44e2c1e4e8060ff0ad2" }
-stylo = { git = "https://github.com/lexmount/stylo", rev = "739a361e59e5f58adde2f44e2c1e4e8060ff0ad2" }
-stylo_atoms = { git = "https://github.com/lexmount/stylo", rev = "739a361e59e5f58adde2f44e2c1e4e8060ff0ad2" }
-stylo_dom = { git = "https://github.com/lexmount/stylo", rev = "739a361e59e5f58adde2f44e2c1e4e8060ff0ad2" }
-stylo_static_prefs = { git = "https://github.com/lexmount/stylo", rev = "739a361e59e5f58adde2f44e2c1e4e8060ff0ad2" }
-stylo_traits = { git = "https://github.com/lexmount/stylo", rev = "739a361e59e5f58adde2f44e2c1e4e8060ff0ad2" }
+selectors = { git = "https://github.com/lexmount/stylo", rev = "2dda6aa11c17be6e7ec46036c1e4d2c62754ed0f" }
+servo_arc = { git = "https://github.com/lexmount/stylo", rev = "2dda6aa11c17be6e7ec46036c1e4d2c62754ed0f" }
+stylo = { git = "https://github.com/lexmount/stylo", rev = "2dda6aa11c17be6e7ec46036c1e4d2c62754ed0f" }
+stylo_atoms = { git = "https://github.com/lexmount/stylo", rev = "2dda6aa11c17be6e7ec46036c1e4d2c62754ed0f" }
+stylo_dom = { git = "https://github.com/lexmount/stylo", rev = "2dda6aa11c17be6e7ec46036c1e4d2c62754ed0f" }
+stylo_static_prefs = { git = "https://github.com/lexmount/stylo", rev = "2dda6aa11c17be6e7ec46036c1e4d2c62754ed0f" }
+stylo_traits = { git = "https://github.com/lexmount/stylo", rev = "2dda6aa11c17be6e7ec46036c1e4d2c62754ed0f" }
 svgtypes = { git = "https://github.com/lexmount/svgtypes", rev = "520374d714d69f8e2dc93c81a9d6be559ecde3ff" }
 # Preserve original SVG selector inputs and collect unclipped source geometry.
 usvg = { git = "https://github.com/lexmount/resvg", rev = "a137793a5749c27862b724eef60c4734526b14a0" }

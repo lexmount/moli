@@ -1,19 +1,8 @@
-use moli_selector::StyloStyleSourceScope as StyleSourceScope;
 use std::collections::{HashMap, HashSet};
 
 use crate::{document_runtime::DomHandle, dom::native::DomHost};
 
-use super::super::{
-    StyleSourceId, StyleViewport,
-    request::RetainedSourceDependencyRequestPlan,
-    source_lifecycle::{
-        StyleSourceLifecycleOwner, StyleSourceLifecycleReport,
-        StyleSourceLifecycleRetainedSourceIdSink, StyleSourceLifecycleSourceRequests,
-        StyleSourceLifecycleWithoutSourceReason, TrackedStyleSourceIds,
-        TrackedStyleSourceLifecycleEntry,
-    },
-    source_record::{MatchingStyleDependencySource, RetainedStylesheetSourceRecord},
-};
+use super::super::source_owner::stylesheet_owner_is_in_style_scope;
 use super::store::StyloStylesheetSource;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -76,11 +65,6 @@ pub(in crate::style_engine) enum LinkedStylesheetSourceRecordChange {
     Updated,
 }
 
-#[derive(Default)]
-struct RetainedStylesheetSourceRecordRequests {
-    source_ids: Vec<StyleSourceId>,
-}
-
 impl LinkedStylesheetSources {
     pub(in crate::style_engine) fn bind_owner(
         &mut self,
@@ -101,197 +85,19 @@ impl LinkedStylesheetSources {
         binding_removed || live_source_removed
     }
 
-    pub(in crate::style_engine) fn tracks_owner(&self, owner: DomHandle) -> bool {
-        self.bindings_by_owner.contains_key(&owner)
-    }
-
-    pub(in crate::style_engine) fn tracked_owners(&self) -> impl Iterator<Item = DomHandle> + '_ {
-        self.bindings_by_owner.keys().copied()
-    }
-
-    pub(in crate::style_engine) fn tracked_lifecycle_entries<'a>(
-        &'a self,
-        host: &'a DomHost,
-    ) -> impl Iterator<Item = TrackedStyleSourceLifecycleEntry> + 'a {
-        self.tracked_owners()
-            .filter_map(move |owner| self.tracked_lifecycle_entry(host, owner))
-    }
-
-    pub(in crate::style_engine) fn tracked_lifecycle_entry(
-        &self,
-        host: &DomHost,
-        owner: DomHandle,
-    ) -> Option<TrackedStyleSourceLifecycleEntry> {
-        if !self.tracks_owner(owner) {
-            return None;
-        }
-        let lifecycle_owner = StyleSourceLifecycleOwner::LinkedStyleSheet { owner };
-        Some(lifecycle_owner.tracked_entry(host, || self.tracked_source_ids(host, owner)))
-    }
-
-    pub(in crate::style_engine) fn has_retained_sources(&self, host: &DomHost) -> bool {
-        self.tracked_owners()
-            .any(|owner| self.retained_source_for_owner(host, owner).is_some())
-    }
-
-    pub(in crate::style_engine) fn matching_dependency_sources_for_store(
-        &self,
-        host: &DomHost,
-        source_scope: &StyleSourceScope,
-        emulated_media: &crate::protocol_types::EmulatedMediaOverrides,
-        viewport: StyleViewport,
-    ) -> Vec<MatchingStyleDependencySource> {
-        let mut sources = Vec::new();
-        self.for_each_retained_source_record(host, |record| {
-            if let Some(source) =
-                record.matching_dependency_source(host, source_scope, emulated_media, viewport)
-            {
-                sources.push(source);
-            }
-        });
-        sources
-    }
-
-    pub(in crate::style_engine) fn has_dependency_match_for_store(
-        &self,
-        host: &DomHost,
-        request_plan: &RetainedSourceDependencyRequestPlan,
-    ) -> bool {
-        self.tracked_owners().any(|owner| {
-            self.retained_source_for_owner(host, owner)
-                .is_some_and(|source| {
-                    request_plan
-                        .matches_dependency_summary(source.source_dependency_summary().as_ref())
-                })
-        })
-    }
-
-    fn for_each_retained_source_record<'a>(
-        &'a self,
-        host: &DomHost,
-        mut callback: impl FnMut(RetainedStylesheetSourceRecord<'a>),
-    ) {
-        for owner in self.tracked_owners() {
-            let Some(source_id) = StyleSourceId::linked_style_sheet(host, owner) else {
-                continue;
-            };
-            if let Some(record) = self.retained_source_record(host, source_id, owner) {
-                callback(record);
-            }
-        }
-    }
-
-    pub(in crate::style_engine) fn tracked_lifecycle_entries_for_source_ids<'a>(
-        &'a self,
-        host: &'a DomHost,
-        source_ids: impl IntoIterator<Item = StyleSourceId> + 'a,
-    ) -> impl Iterator<Item = TrackedStyleSourceLifecycleEntry> + 'a {
-        StyleSourceLifecycleSourceRequests::from_source_ids(source_ids)
-            .into_tracked_entries(move |owner| self.tracked_lifecycle_entry_for_owner(host, owner))
-    }
-
-    fn tracked_lifecycle_entry_for_owner(
-        &self,
-        host: &DomHost,
-        owner: StyleSourceLifecycleOwner,
-    ) -> Option<TrackedStyleSourceLifecycleEntry> {
-        match owner {
-            StyleSourceLifecycleOwner::LinkedStyleSheet { owner } => {
-                self.tracked_lifecycle_entry(host, owner)
-            }
-            StyleSourceLifecycleOwner::OwnerStyleSheet { .. }
-            | StyleSourceLifecycleOwner::DocumentAdoptedStyleSheets { .. }
-            | StyleSourceLifecycleOwner::ShadowRootAdoptedStyleSheets { .. } => None,
-        }
-    }
-
-    pub(in crate::style_engine) fn retained_source_records_for_lifecycle<'a>(
-        &'a self,
-        host: &DomHost,
-        source_lifecycle: &StyleSourceLifecycleReport,
-    ) -> Vec<RetainedStylesheetSourceRecord<'a>> {
-        let mut requests = RetainedStylesheetSourceRecordRequests::default();
-        source_lifecycle.record_retained_source_ids_into(&mut requests);
-        requests
-            .source_ids
-            .iter()
-            .filter_map(|source_id| self.retained_source_record_for_id(host, source_id))
-            .collect()
-    }
-
-    fn retained_source_record_for_id<'a>(
-        &'a self,
-        host: &DomHost,
-        source_id: &StyleSourceId,
-    ) -> Option<RetainedStylesheetSourceRecord<'a>> {
-        let StyleSourceId {
-            kind: super::super::source_id::StyleSourceKind::LinkedStyleSheet { owner },
-            ..
-        } = source_id
-        else {
-            return None;
-        };
-        self.retained_source_record(host, source_id.clone(), *owner)
-    }
-
-    fn retained_source_record<'a>(
-        &'a self,
-        host: &DomHost,
-        source_id: StyleSourceId,
-        owner: DomHandle,
-    ) -> Option<RetainedStylesheetSourceRecord<'a>> {
-        if !self.tracks_owner(owner) {
-            return None;
-        }
-        let source = self.retained_source_for_owner(host, owner)?;
-        Some(RetainedStylesheetSourceRecord::registered(
-            source_id, source,
-        ))
-    }
-
-    fn tracked_source_ids(&self, host: &DomHost, owner: DomHandle) -> TrackedStyleSourceIds {
-        let Some(binding) = self.bindings_by_owner.get(&owner) else {
-            return TrackedStyleSourceIds::WithoutSource(
-                StyleSourceLifecycleWithoutSourceReason::LinkedStyleSheetOwnerInactive,
-            );
-        };
-        if !self.contains_url(&binding.request_url) {
-            return TrackedStyleSourceIds::WithoutSource(
-                StyleSourceLifecycleWithoutSourceReason::LinkedStyleSheetSourceMissing,
-            );
-        }
-        let source_ids: Vec<_> = StyleSourceId::linked_style_sheet(host, owner)
-            .into_iter()
-            .collect();
-        TrackedStyleSourceIds::retained_or_without_source(
-            source_ids,
-            StyleSourceLifecycleWithoutSourceReason::SourceIdMissing,
-        )
-    }
-
-    fn retained_source_for_owner<'a>(
-        &'a self,
-        host: &DomHost,
-        owner: DomHandle,
-    ) -> Option<&'a StyloStylesheetSource> {
-        if !(StyleSourceLifecycleOwner::LinkedStyleSheet { owner })
-            .retained_source_records_are_available(host)
-        {
-            return None;
-        }
-        if let Some(source) = self.live_sources_by_owner.get(&owner) {
-            return Some(&source.source);
-        }
-        let binding = self.bindings_by_owner.get(&owner)?;
-        self.source_for_url_ref(&binding.request_url)
-    }
-
     pub(in crate::style_engine) fn source_for_owner(
         &self,
         host: &DomHost,
         owner: DomHandle,
     ) -> Option<StyloStylesheetSource> {
-        self.retained_source_for_owner(host, owner).cloned()
+        if !stylesheet_owner_is_in_style_scope(host, owner) {
+            return None;
+        }
+        if let Some(source) = self.live_sources_by_owner.get(&owner) {
+            return Some(source.source.clone());
+        }
+        let binding = self.bindings_by_owner.get(&owner)?;
+        self.source_for_url(&binding.request_url)
     }
 
     pub(in crate::style_engine) fn set_owner_live_stylesheet(
@@ -375,10 +181,6 @@ impl LinkedStylesheetSources {
         self.sources_by_url.get(url.as_str())
     }
 
-    fn contains_url(&self, url: &url::Url) -> bool {
-        self.sources_by_url.contains_key(url.as_str())
-    }
-
     fn record_direct_request_url_key(&mut self, url: &url::Url, final_url: &url::Url) {
         let request_key = url.as_str().to_owned();
         if final_url == url {
@@ -459,12 +261,6 @@ impl LinkedStylesheetSourceRecordChange {
             (Self::Inserted, _) | (_, Self::Inserted) => Self::Inserted,
             (Self::Unchanged, Self::Unchanged) => Self::Unchanged,
         }
-    }
-}
-
-impl StyleSourceLifecycleRetainedSourceIdSink for RetainedStylesheetSourceRecordRequests {
-    fn record_source_lifecycle_retained_source_id(&mut self, source_id: &StyleSourceId) {
-        self.source_ids.push(source_id.clone());
     }
 }
 

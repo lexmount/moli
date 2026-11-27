@@ -1127,6 +1127,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "camino"
+version = "1.2.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bbbad30e4b4c14a39e3cc8aed085a12a327257c316619c93581e017bc52be591"
+
+[[package]]
 name = "castaway"
 version = "0.2.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1606,6 +1612,20 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "77745e017f5edba1a9c1d854f6f3a52dac8a12dd5af5d2f54aecf61e43d80d30"
 dependencies = [
  "libm",
+]
+
+[[package]]
+name = "coreaudio-rs"
+version = "0.14.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7d5d7dca3ebcf65a035582c9ad4385371a9d9ee6537474d2a278f4e1e475bb58"
+dependencies = [
+ "bitflags",
+ "libc",
+ "objc2-audio-toolbox",
+ "objc2-core-audio",
+ "objc2-core-audio-types",
+ "objc2-core-foundation",
 ]
 
 [[package]]
@@ -2643,7 +2663,7 @@ dependencies = [
 [[package]]
 name = "fontique"
 version = "0.11.0"
-source = "git+https://github.com/lexmount/parley?rev=a18cfc3ba6638d44ff0d0c9ce7b0b3396b42e8cf#a18cfc3ba6638d44ff0d0c9ce7b0b3396b42e8cf"
+source = "git+https://github.com/lexmount/parley?rev=b456e278105eccf378fdbdb5cd1bcbffdc430c58#b456e278105eccf378fdbdb5cd1bcbffdc430c58"
 dependencies = [
  "hashbrown 0.17.1",
  "linebender_resource_handle",
@@ -2654,7 +2674,7 @@ dependencies = [
  "objc2-foundation 0.3.2",
  "parlance 0.1.0",
  "read-fonts",
- "roxmltree 0.21.1",
+ "roxmltree 0.21.2",
  "smallvec",
  "windows 0.62.2",
  "windows-core 0.62.2",
@@ -2676,7 +2696,7 @@ dependencies = [
  "objc2-foundation 0.3.2",
  "parlance 0.1.1",
  "read-fonts",
- "roxmltree 0.21.1",
+ "roxmltree 0.21.2",
  "smallvec",
  "windows 0.62.2",
  "windows-core 0.62.2",
@@ -4368,8 +4388,7 @@ dependencies = [
 [[package]]
 name = "libjpeg-turbo-rs"
 version = "0.9.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "083fece5e695fd3678ab4ec206f6beb23cc511c1f65e797812dc88f5502591fa"
+source = "git+https://github.com/lexmount/libjpeg-turbo-rs?rev=82a1375407abda75ffc31ee0dad5920bc219d84e#82a1375407abda75ffc31ee0dad5920bc219d84e"
 dependencies = [
  "thiserror 2.0.18",
 ]
@@ -4813,6 +4832,7 @@ dependencies = [
  "moli-protocol",
  "moli-protocol-server",
  "moli-robots",
+ "moli-system-locale",
  "moli-test-support",
  "parking_lot",
  "regex",
@@ -4825,11 +4845,15 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "url",
+ "wait-timeout",
 ]
 
 [[package]]
 name = "moli-action-window"
 version = "0.1.0"
+dependencies = [
+ "moli-input",
+]
 
 [[package]]
 name = "moli-bounded-buffer"
@@ -4857,6 +4881,7 @@ name = "moli-browser-profile"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "icu_locale_core",
  "moli-cookie-cache",
  "serde",
  "serde_json",
@@ -5045,6 +5070,7 @@ dependencies = [
  "cssparser",
  "euclid",
  "stylo",
+ "stylo_static_prefs",
  "stylo_traits",
  "unicode-case-mapping",
  "url",
@@ -5093,6 +5119,7 @@ dependencies = [
 name = "moli-dom"
 version = "0.1.0"
 dependencies = [
+ "cssparser",
  "html5ever 0.40.1",
  "indexmap",
  "moli-css-parse",
@@ -5100,12 +5127,14 @@ dependencies = [
  "moli-html-input-temporal",
  "moli-html-input-type",
  "moli-html2md",
+ "parking_lot",
  "percent-encoding 2.3.2 (registry+https://github.com/rust-lang/crates.io-index)",
  "selectors",
  "serde",
  "serde_json",
  "servo_arc",
  "strum 0.28.0",
+ "stylo",
  "thin-vec",
  "url",
 ]
@@ -5261,7 +5290,9 @@ version = "0.1.0"
 dependencies = [
  "image",
  "libjpeg-turbo-rs",
+ "moli-system-fonts",
  "png",
+ "roxmltree 0.21.2",
  "thiserror 2.0.18",
  "usvg",
  "xmlparser",
@@ -5303,6 +5334,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "moli-input"
+version = "0.1.0"
+
+[[package]]
 name = "moli-inspector-json"
 version = "0.1.0"
 dependencies = [
@@ -5323,6 +5358,7 @@ dependencies = [
  "moli-trace",
  "parley 0.11.0",
  "read-fonts",
+ "slotmap",
  "stylo",
  "stylo_taffy",
  "taffy 0.15.0",
@@ -5434,10 +5470,15 @@ dependencies = [
  "anyrender",
  "anyrender_svg",
  "anyrender_vello_cpu",
+ "glifo",
  "krilla",
  "lopdf",
  "moli-image",
  "moli-layout",
+ "moli-system-fonts",
+ "objc2-core-foundation",
+ "objc2-core-graphics",
+ "objc2-core-text",
  "peniko",
  "skrifa",
 ]
@@ -5665,6 +5706,7 @@ dependencies = [
  "moli-image",
  "moli-import-map",
  "moli-indexeddb",
+ "moli-input",
  "moli-inspector-json",
  "moli-layout",
  "moli-local-executor",
@@ -5699,6 +5741,7 @@ dependencies = [
  "moli-v8-platform",
  "moli-v8-test-util",
  "moli-v8-util",
+ "moli-video",
  "moli-web-errors",
  "moli-web-mime",
  "moli-web-storage",
@@ -5724,7 +5767,6 @@ dependencies = [
  "strum 0.28.0",
  "stylo",
  "stylo_dom",
- "stylo_static_prefs",
  "stylo_traits",
  "tempfile",
  "thiserror 2.0.18",
@@ -5877,8 +5919,19 @@ name = "moli-system-fonts"
 version = "0.1.0"
 dependencies = [
  "fontique 0.11.0",
+ "objc2-core-foundation",
+ "objc2-core-text",
  "parking_lot",
+ "write-fonts",
  "yeslogic-fontconfig-sys",
+]
+
+[[package]]
+name = "moli-system-locale"
+version = "0.1.0"
+dependencies = [
+ "icu_locale_core",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -5958,6 +6011,21 @@ dependencies = [
  "serde_json",
  "v8",
  "widestring",
+]
+
+[[package]]
+name = "moli-video"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "bytes",
+ "coreaudio-rs",
+ "moli-image",
+ "moli-web-mime",
+ "objc2-core-audio",
+ "parking_lot",
+ "rsmpeg",
+ "symphonia",
 ]
 
 [[package]]
@@ -6196,6 +6264,39 @@ dependencies = [
  "tempfile",
  "tokio",
  "unicode-segmentation",
+ "url",
+]
+
+[[package]]
+name = "molio-ios"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "moli-core",
+ "moli-fetch",
+ "moli-v8-init",
+ "parking_lot",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "url",
+ "v8",
+]
+
+[[package]]
+name = "molio-ohos"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "moli-core",
+ "moli-fetch",
+ "moli-web-mime",
+ "parking_lot",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
  "url",
 ]
 
@@ -6599,6 +6700,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "objc2-audio-toolbox"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6948501a91121d6399b79abaa33a8aa4ea7857fe019f341b8c23ad6e81b79b08"
+dependencies = [
+ "bitflags",
+ "libc",
+ "objc2 0.6.5",
+ "objc2-core-audio",
+ "objc2-core-audio-types",
+ "objc2-core-foundation",
+ "objc2-foundation 0.3.2",
+]
+
+[[package]]
 name = "objc2-core-audio"
 version = "0.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6701,6 +6817,7 @@ checksum = "0cde0dfb48d25d2b4862161a4d5fcc0e3c24367869ad306b0c9ec0073bfed92d"
 dependencies = [
  "bitflags",
  "objc2-core-foundation",
+ "objc2-core-graphics",
 ]
 
 [[package]]
@@ -7254,7 +7371,7 @@ dependencies = [
 [[package]]
 name = "parlance"
 version = "0.1.0"
-source = "git+https://github.com/lexmount/parley?rev=a18cfc3ba6638d44ff0d0c9ce7b0b3396b42e8cf#a18cfc3ba6638d44ff0d0c9ce7b0b3396b42e8cf"
+source = "git+https://github.com/lexmount/parley?rev=b456e278105eccf378fdbdb5cd1bcbffdc430c58#b456e278105eccf378fdbdb5cd1bcbffdc430c58"
 
 [[package]]
 name = "parlance"
@@ -7265,7 +7382,7 @@ checksum = "73072a9470554c8e794778acece2312661218aaabb635600957d952cf01c716e"
 [[package]]
 name = "parley"
 version = "0.11.0"
-source = "git+https://github.com/lexmount/parley?rev=a18cfc3ba6638d44ff0d0c9ce7b0b3396b42e8cf#a18cfc3ba6638d44ff0d0c9ce7b0b3396b42e8cf"
+source = "git+https://github.com/lexmount/parley?rev=b456e278105eccf378fdbdb5cd1bcbffdc430c58#b456e278105eccf378fdbdb5cd1bcbffdc430c58"
 dependencies = [
  "fontique 0.11.0",
  "hashbrown 0.17.1",
@@ -7292,7 +7409,7 @@ dependencies = [
 [[package]]
 name = "parley_data"
 version = "0.11.0"
-source = "git+https://github.com/lexmount/parley?rev=a18cfc3ba6638d44ff0d0c9ce7b0b3396b42e8cf#a18cfc3ba6638d44ff0d0c9ce7b0b3396b42e8cf"
+source = "git+https://github.com/lexmount/parley?rev=b456e278105eccf378fdbdb5cd1bcbffdc430c58#b456e278105eccf378fdbdb5cd1bcbffdc430c58"
 dependencies = [
  "icu_collections",
  "icu_properties",
@@ -7311,7 +7428,7 @@ dependencies = [
 [[package]]
 name = "parley_emoji"
 version = "0.11.0"
-source = "git+https://github.com/lexmount/parley?rev=a18cfc3ba6638d44ff0d0c9ce7b0b3396b42e8cf#a18cfc3ba6638d44ff0d0c9ce7b0b3396b42e8cf"
+source = "git+https://github.com/lexmount/parley?rev=b456e278105eccf378fdbdb5cd1bcbffdc430c58#b456e278105eccf378fdbdb5cd1bcbffdc430c58"
 
 [[package]]
 name = "parley_emoji"
@@ -7322,7 +7439,7 @@ checksum = "9c4482d912d7671a7cd2089794f90ef3bb5f5f8c738230fb0fcd50fa020f0ed3"
 [[package]]
 name = "parley_engine"
 version = "0.11.0"
-source = "git+https://github.com/lexmount/parley?rev=a18cfc3ba6638d44ff0d0c9ce7b0b3396b42e8cf#a18cfc3ba6638d44ff0d0c9ce7b0b3396b42e8cf"
+source = "git+https://github.com/lexmount/parley?rev=b456e278105eccf378fdbdb5cd1bcbffdc430c58#b456e278105eccf378fdbdb5cd1bcbffdc430c58"
 dependencies = [
  "fontique 0.11.0",
  "harfrust",
@@ -8166,6 +8283,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "regex-lite"
+version = "0.1.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cab834c73d247e67f4fae452806d17d3c7501756d98c8808d7c9c7aa7d18f973"
+
+[[package]]
 name = "regex-syntax"
 version = "0.8.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -8236,11 +8359,22 @@ checksum = "6c20b6793b5c2fa6553b250154b78d6d0db37e72700ae35fad9387a46f487c97"
 
 [[package]]
 name = "roxmltree"
-version = "0.21.1"
+version = "0.21.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f1964b10c76125c36f8afe190065a4bf9a87bf324842c05701330bba9f1cacbb"
+checksum = "9da7f59328b09405b181fee1018925fad50f157afb43c0c0f5c522c256dd5907"
 dependencies = [
  "memchr",
+]
+
+[[package]]
+name = "rsmpeg"
+version = "0.18.0+ffmpeg.8.0"
+source = "git+https://github.com/lexmount/rsmpeg?rev=a9fb542d8e2f0ca45e5d53ebe7a5033bb6487d2e#a9fb542d8e2f0ca45e5d53ebe7a5033bb6487d2e"
+dependencies = [
+ "bon",
+ "paste",
+ "rusty_ffmpeg",
+ "thiserror 2.0.18",
 ]
 
 [[package]]
@@ -8391,6 +8525,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "rusty_ffmpeg"
+version = "0.17.0+ffmpeg.8.1"
+source = "git+https://github.com/lexmount/rusty_ffmpeg?rev=375ec5897617ed8083afca9d57f634b62cda73fe#375ec5897617ed8083afca9d57f634b62cda73fe"
+dependencies = [
+ "bindgen 0.72.1",
+ "camino",
+ "cc",
+ "once_cell",
+ "pkg-config",
+]
+
+[[package]]
 name = "ryu"
 version = "1.0.23"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -8490,7 +8636,7 @@ dependencies = [
 [[package]]
 name = "selectors"
 version = "0.41.0"
-source = "git+https://github.com/lexmount/stylo?rev=739a361e59e5f58adde2f44e2c1e4e8060ff0ad2#739a361e59e5f58adde2f44e2c1e4e8060ff0ad2"
+source = "git+https://github.com/lexmount/stylo?rev=2dda6aa11c17be6e7ec46036c1e4d2c62754ed0f#2dda6aa11c17be6e7ec46036c1e4d2c62754ed0f"
 dependencies = [
  "bitflags",
  "cssparser",
@@ -8665,7 +8811,7 @@ dependencies = [
 [[package]]
 name = "servo_arc"
 version = "0.5.0"
-source = "git+https://github.com/lexmount/stylo?rev=739a361e59e5f58adde2f44e2c1e4e8060ff0ad2#739a361e59e5f58adde2f44e2c1e4e8060ff0ad2"
+source = "git+https://github.com/lexmount/stylo?rev=2dda6aa11c17be6e7ec46036c1e4d2c62754ed0f#2dda6aa11c17be6e7ec46036c1e4d2c62754ed0f"
 dependencies = [
  "serde",
  "stable_deref_trait",
@@ -9127,7 +9273,7 @@ dependencies = [
 [[package]]
 name = "stylo"
 version = "0.22.0"
-source = "git+https://github.com/lexmount/stylo?rev=739a361e59e5f58adde2f44e2c1e4e8060ff0ad2#739a361e59e5f58adde2f44e2c1e4e8060ff0ad2"
+source = "git+https://github.com/lexmount/stylo?rev=2dda6aa11c17be6e7ec46036c1e4d2c62754ed0f#2dda6aa11c17be6e7ec46036c1e4d2c62754ed0f"
 dependencies = [
  "app_units",
  "arrayvec",
@@ -9183,7 +9329,7 @@ dependencies = [
 [[package]]
 name = "stylo_atoms"
 version = "0.22.0"
-source = "git+https://github.com/lexmount/stylo?rev=739a361e59e5f58adde2f44e2c1e4e8060ff0ad2#739a361e59e5f58adde2f44e2c1e4e8060ff0ad2"
+source = "git+https://github.com/lexmount/stylo?rev=2dda6aa11c17be6e7ec46036c1e4d2c62754ed0f#2dda6aa11c17be6e7ec46036c1e4d2c62754ed0f"
 dependencies = [
  "string_cache 0.11.0",
  "string_cache_codegen 0.11.2",
@@ -9192,7 +9338,7 @@ dependencies = [
 [[package]]
 name = "stylo_derive"
 version = "0.22.0"
-source = "git+https://github.com/lexmount/stylo?rev=739a361e59e5f58adde2f44e2c1e4e8060ff0ad2#739a361e59e5f58adde2f44e2c1e4e8060ff0ad2"
+source = "git+https://github.com/lexmount/stylo?rev=2dda6aa11c17be6e7ec46036c1e4d2c62754ed0f#2dda6aa11c17be6e7ec46036c1e4d2c62754ed0f"
 dependencies = [
  "darling 0.20.11",
  "proc-macro2",
@@ -9204,7 +9350,7 @@ dependencies = [
 [[package]]
 name = "stylo_dom"
 version = "0.22.0"
-source = "git+https://github.com/lexmount/stylo?rev=739a361e59e5f58adde2f44e2c1e4e8060ff0ad2#739a361e59e5f58adde2f44e2c1e4e8060ff0ad2"
+source = "git+https://github.com/lexmount/stylo?rev=2dda6aa11c17be6e7ec46036c1e4d2c62754ed0f#2dda6aa11c17be6e7ec46036c1e4d2c62754ed0f"
 dependencies = [
  "bitflags",
  "stylo_malloc_size_of",
@@ -9213,7 +9359,7 @@ dependencies = [
 [[package]]
 name = "stylo_malloc_size_of"
 version = "0.22.0"
-source = "git+https://github.com/lexmount/stylo?rev=739a361e59e5f58adde2f44e2c1e4e8060ff0ad2#739a361e59e5f58adde2f44e2c1e4e8060ff0ad2"
+source = "git+https://github.com/lexmount/stylo?rev=2dda6aa11c17be6e7ec46036c1e4d2c62754ed0f#2dda6aa11c17be6e7ec46036c1e4d2c62754ed0f"
 dependencies = [
  "app_units",
  "cssparser",
@@ -9231,7 +9377,7 @@ dependencies = [
 [[package]]
 name = "stylo_static_prefs"
 version = "0.22.0"
-source = "git+https://github.com/lexmount/stylo?rev=739a361e59e5f58adde2f44e2c1e4e8060ff0ad2#739a361e59e5f58adde2f44e2c1e4e8060ff0ad2"
+source = "git+https://github.com/lexmount/stylo?rev=2dda6aa11c17be6e7ec46036c1e4d2c62754ed0f#2dda6aa11c17be6e7ec46036c1e4d2c62754ed0f"
 dependencies = [
  "toml",
 ]
@@ -9250,7 +9396,7 @@ dependencies = [
 [[package]]
 name = "stylo_traits"
 version = "0.22.0"
-source = "git+https://github.com/lexmount/stylo?rev=739a361e59e5f58adde2f44e2c1e4e8060ff0ad2#739a361e59e5f58adde2f44e2c1e4e8060ff0ad2"
+source = "git+https://github.com/lexmount/stylo?rev=2dda6aa11c17be6e7ec46036c1e4d2c62754ed0f#2dda6aa11c17be6e7ec46036c1e4d2c62754ed0f"
 dependencies = [
  "app_units",
  "bitflags",
@@ -9389,6 +9535,68 @@ dependencies = [
  "skrifa",
  "yazi",
  "zeno",
+]
+
+[[package]]
+name = "symphonia"
+version = "0.6.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a7edef6a96b696d4e0cab5ee9ebb7ca155ed95f30a6b45bbb8b97d2727f02424"
+dependencies = [
+ "lazy_static",
+ "symphonia-codec-aac",
+ "symphonia-core",
+ "symphonia-metadata",
+]
+
+[[package]]
+name = "symphonia-codec-aac"
+version = "0.6.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f5bf8e39552d34a3c4c98333370e62f48c92456d2e814f273b5c3ad7c4a5f45c"
+dependencies = [
+ "lazy_static",
+ "log",
+ "symphonia-common",
+ "symphonia-core",
+]
+
+[[package]]
+name = "symphonia-common"
+version = "0.6.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2acc3fcc18ec9b8cdd48614e259c4cf0d27b71d41e5d9b120b42c5adab12d7c4"
+dependencies = [
+ "log",
+ "symphonia-core",
+ "symphonia-metadata",
+]
+
+[[package]]
+name = "symphonia-core"
+version = "0.6.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "01c412864d599d4750d0c3d684d7e093ec05e5309681ef5252cc1096a437f6e0"
+dependencies = [
+ "bitflags",
+ "bytemuck",
+ "lazy_static",
+ "log",
+ "num-complex",
+ "smallvec",
+]
+
+[[package]]
+name = "symphonia-metadata"
+version = "0.6.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "83713a97705d77bdef7cdbc0768fd6e5a54e4cd7e48d60a806ae85639e2c87c6"
+dependencies = [
+ "lazy_static",
+ "log",
+ "regex-lite",
+ "smallvec",
+ "symphonia-core",
 ]
 
 [[package]]
@@ -9743,7 +9951,7 @@ checksum = "1f3ccbac311fea05f86f61904b462b55fb3df8837a366dfc601a0161d0532f20"
 [[package]]
 name = "to_shmem"
 version = "0.6.0"
-source = "git+https://github.com/lexmount/stylo?rev=739a361e59e5f58adde2f44e2c1e4e8060ff0ad2#739a361e59e5f58adde2f44e2c1e4e8060ff0ad2"
+source = "git+https://github.com/lexmount/stylo?rev=2dda6aa11c17be6e7ec46036c1e4d2c62754ed0f#2dda6aa11c17be6e7ec46036c1e4d2c62754ed0f"
 dependencies = [
  "cssparser",
  "servo_arc",
@@ -9756,7 +9964,7 @@ dependencies = [
 [[package]]
 name = "to_shmem_derive"
 version = "0.2.0"
-source = "git+https://github.com/lexmount/stylo?rev=739a361e59e5f58adde2f44e2c1e4e8060ff0ad2#739a361e59e5f58adde2f44e2c1e4e8060ff0ad2"
+source = "git+https://github.com/lexmount/stylo?rev=2dda6aa11c17be6e7ec46036c1e4d2c62754ed0f#2dda6aa11c17be6e7ec46036c1e4d2c62754ed0f"
 dependencies = [
  "darling 0.20.11",
  "proc-macro2",
@@ -10175,7 +10383,7 @@ dependencies = [
  "kurbo",
  "log",
  "pico-args",
- "roxmltree 0.21.1",
+ "roxmltree 0.21.2",
  "simplecss",
  "siphasher",
  "skrifa",

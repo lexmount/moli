@@ -413,20 +413,10 @@ fn live_native_attribute_metadata_for_name(
     handle: DomHandle,
     name: &str,
 ) -> Option<DetachedAttrNodeMetadata> {
-    let normalized_name = runtime
-        .dom_host()
-        .dom()
-        .normalized_attribute_name(handle, name)?;
     runtime
         .dom_host()
-        .node(handle)
-        .and_then(|node| node.as_element())
-        .and_then(|element| {
-            element
-                .attributes()
-                .iter()
-                .find(|attribute| attribute.name_matches(&normalized_name))
-        })
+        .dom()
+        .find_attribute(handle, name)
         .map(attr_metadata_from_native_attribute)
 }
 
@@ -436,16 +426,10 @@ fn live_native_attribute_metadata_for_namespace(
     namespace_uri: Option<&str>,
     local_name: &str,
 ) -> Option<DetachedAttrNodeMetadata> {
-    let namespace_uri = namespace_uri.unwrap_or_default();
     runtime
         .dom_host()
-        .node(handle)
-        .and_then(|node| node.as_element())
-        .and_then(|element| {
-            element.attributes().iter().find(|attribute| {
-                attribute.namespace() == namespace_uri && attribute.local_name() == local_name
-            })
-        })
+        .dom()
+        .find_attribute_ns(handle, namespace_uri, local_name)
         .map(attr_metadata_from_native_attribute)
 }
 

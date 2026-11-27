@@ -1655,3 +1655,30 @@ fn global_registry_options_reject_other_document_targets() {
         "NotSupportedError|NotSupportedError|NotSupportedError|NotSupportedError|NotSupportedError|true"
     );
 }
+
+#[test]
+fn attaching_to_a_declarative_shadow_root_keeps_its_registry() {
+    let mut vm = new_parsed_test_vm(
+        "https://declarative-shadow-registry.test/",
+        "<!doctype html><div id=container></div>",
+    );
+    assert_eq!(
+        vm.eval(
+            r#"(() => {
+                const container = document.getElementById('container');
+                container.setHTMLUnsafe('<div><template shadowrootmode=open><span>old</span></template></div>');
+                const host = container.firstElementChild;
+                const root = host.shadowRoot;
+                const registry = root.customElementRegistry;
+                const reused = host.attachShadow({
+                    mode: 'open',
+                    customElementRegistry: new CustomElementRegistry(),
+                });
+                return reused === root && reused.customElementRegistry === registry &&
+                    reused.childNodes.length === 0;
+            })()"#,
+        )
+        .unwrap(),
+        "true"
+    );
+}

@@ -196,13 +196,17 @@ impl DocumentRuntime {
         if followups.is_empty() {
             return;
         }
+        if followups.custom_element_reaction_queue_flush_requested {
+            // A callback may start another parser step while this queue is
+            // being delivered. That step gets its own queue on the stack.
+            self.parser_reentry.custom_element_reaction_queue_active = false;
+        }
         self.dispatch_parser_focus_resets(scope, host_ptr, &followups.focus_resets);
         if followups.custom_element_reaction_queue_flush_requested {
             crate::script_vm::perform_microtask_checkpoint_and_report_pending_promise_rejections(
                 scope,
             );
             custom_elements::flush_parser_custom_element_reaction_queue(scope, host_ptr);
-            self.parser_reentry.custom_element_reaction_queue_active = false;
         }
         self.drop_child_browsing_context_subtrees(
             scope,

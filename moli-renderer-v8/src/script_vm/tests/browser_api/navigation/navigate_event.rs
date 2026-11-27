@@ -154,7 +154,13 @@ fn cross_document_unload_lifecycle_orders_pagehide_before_unload_without_timer()
             r##"
             (() => {
               const log = [];
-              addEventListener("beforeunload", event => log.push(`beforeunload:${event.isTrusted}`));
+              addEventListener("beforeunload", event => {
+                const initial = event.returnValue;
+                event.returnValue = "message";
+                log.push(["beforeunload", event instanceof BeforeUnloadEvent,
+                  event.isTrusted, event.bubbles, event.cancelable,
+                  initial === "", event.returnValue].join(":"));
+              });
               addEventListener("pagehide", event => log.push([
                 "pagehide",
                 event instanceof PageTransitionEvent,
@@ -173,7 +179,7 @@ fn cross_document_unload_lifecycle_orders_pagehide_before_unload_without_timer()
 
     assert_eq!(
         lifecycle,
-        "beforeunload:true|pagehide:true:false:true:true:true|unload:true"
+        "beforeunload:true:true:false:true:true:message|pagehide:true:false:true:true:true|unload:true"
     );
     assert!(
         !vm.has_ready_timeout(),

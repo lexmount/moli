@@ -30,11 +30,33 @@ fn media_ranges_getter<'s>(
     member: &'static str,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    if html_media_element_getter_receiver(scope, receiver, member).is_none() {
+    let Some((_host, _handle)) = html_media_element_getter_receiver(scope, receiver, member) else {
         return;
-    }
-    // The current media backend does not decode/buffer media or advance a
-    // playback timeline. Do not invent loaded or played ranges from currentTime.
-    // Each read still returns an independent native snapshot.
-    rv.set(crate::context_bootstrap::new_time_ranges_value(scope, &[]).into());
+    };
+    let Some(receiver) = moli_webapi_declare::web_api_object_target(scope, receiver) else {
+        return;
+    };
+    let Some(context) = receiver.get_creation_context(scope) else {
+        return;
+    };
+    let scope = &mut v8::ContextScope::new(scope, context);
+    let ranges: &[(f64, f64)] = &[];
+    #[cfg(all(
+        feature = "media-ext",
+        any(target_os = "linux", target_os = "macos"),
+        target_pointer_width = "64"
+    ))]
+    let video_ranges;
+    #[cfg(all(
+        feature = "media-ext",
+        any(target_os = "linux", target_os = "macos"),
+        target_pointer_width = "64"
+    ))]
+    let ranges = if member == "buffered" || member == "seekable" {
+        video_ranges = unsafe { &*_host }.video_buffered(_handle);
+        video_ranges.as_slice()
+    } else {
+        ranges
+    };
+    rv.set(crate::context_bootstrap::new_time_ranges_value(scope, ranges).into());
 }

@@ -4,7 +4,7 @@ use dom::ElementState as StyloElementState;
 use tracing::debug;
 
 use crate::{
-    style_engine::{self, StyleAttributeImpact},
+    style_engine,
     util::{utf16_split_units_lossy, utf16_units},
 };
 use moli_dom::native::{Element, Node, NodeType};
@@ -611,15 +611,69 @@ impl DocumentRuntime {
         scope: &mut v8::PinScope<'_, '_>,
         host_ptr: *mut PageScriptHost,
         handle: DomHandle,
+        source: crate::css_style::CssomStyleAttribute,
         value: &str,
-    ) -> bool {
-        self.set_attribute_with_reaction_policy_and_options(
+        base_url_changed: bool,
+    ) {
+        unsafe { &mut *host_ptr }.break_on_dom_debugger_will_modify_dom_attribute(handle);
+        let was_cssom = unsafe { &*host_ptr }.element_inline_style_csp_state(handle)
+            == crate::style_engine::InlineStyleCspState::Cssom;
+        let render_text_changed = unsafe { &*host_ptr }
+            .element_cssom_style(handle)
+            .and_then(crate::css_style::CssomStyleAttribute::resolution_text)
+            != source.resolution_text();
+        let (effects, old_value) = self
+            .dom_host
+            .set_cssom_style_attribute(handle, Box::new(source), Some(value))
+            .into_parts();
+        // Same-value observer records can be queued without changing the style input.
+        let style_input_changed = old_value.as_deref() != Some(value)
+            || !was_cssom
+            || base_url_changed
+            || render_text_changed;
+        let changed = self.apply_cssom_style_attribute_effects(
             scope,
             host_ptr,
             handle,
-            "style",
-            value,
-            AttributeChangedReactionPolicy::EnqueueInCurrentQueue,
+            effects,
+            style_input_changed,
+        );
+        if should_dispatch_attribute_changed_for_set(changed, old_value.as_deref(), value) {
+            self.apply_attribute_changed_reaction_policy(
+                scope,
+                host_ptr,
+                handle,
+                "style",
+                None,
+                old_value.as_deref(),
+                Some(value),
+                AttributeChangedReactionPolicy::EnqueueInCurrentQueue,
+            );
+        }
+    }
+
+    pub(crate) fn apply_cssom_style_attribute_effects(
+        &mut self,
+        scope: &mut v8::PinScope<'_, '_>,
+        host_ptr: *mut PageScriptHost,
+        handle: DomHandle,
+        effects: DomMutationEffects,
+        style_input_changed: bool,
+    ) -> bool {
+        if style_input_changed {
+            self.note_inline_style_attribute_activity(host_ptr, handle, "style");
+            // A deferred CSSOM write has no attribute effects to invalidate
+            // the Mock policy's published frame viewport.
+            if effects.style().attribute_mutations().is_empty()
+                && self.dom_host.is_html_element_named(handle, "iframe")
+            {
+                unsafe { &*host_ptr }.invalidate_mock_frame_viewports([handle]);
+            }
+        }
+        self.apply_runtime_mutation_effects(
+            scope,
+            host_ptr,
+            effects,
             RuntimeMutationOptions::js_dom_api().with_inline_style_csp_check(false),
         )
     }
@@ -644,7 +698,6 @@ impl DocumentRuntime {
             Some(name),
             Some(value),
         );
-        let style_impact = StyleAttributeImpact::for_attribute_name(name);
         let state = style_state_impact_for_attribute_mutation(&self.dom_host, handle, None, name);
         let old_style_state = self.retained_old_style_state_for_impact(host_ptr, handle, state);
         let derived_old_style_states = self.retained_derived_old_style_states_for_attribute_impact(
@@ -654,8 +707,8 @@ impl DocumentRuntime {
             .dom_host
             .set_attribute_mutation_outcome(handle, name, value)
             .into_parts();
-        if style_impact.affects_layout_metric() && old_value.as_deref() != Some(value) {
-            self.note_attribute_layout_activity(host_ptr, handle, name);
+        if old_value.as_deref() != Some(value) {
+            self.note_inline_style_attribute_activity(host_ptr, handle, name);
         }
         let changed =
             self.apply_runtime_mutation_effects(scope, host_ptr, effects, mutation_options);
@@ -677,9 +730,6 @@ impl DocumentRuntime {
                 old_style_state,
             );
             self.note_derived_element_state_style_activity(host_ptr, &derived_old_style_states);
-            if name.eq_ignore_ascii_case("style") {
-                unsafe { &mut *host_ptr }.clear_element_inline_style_declaration_state(handle);
-            }
         }
         if should_dispatch_attribute_changed_for_set(changed, old_value.as_deref(), value) {
             self.apply_attribute_changed_reaction_policy(
@@ -814,7 +864,6 @@ impl DocumentRuntime {
         {
             unsafe { &mut *host_ptr }.break_on_dom_debugger_will_modify_dom_attribute(handle);
         }
-        let style_impact = StyleAttributeImpact::for_attribute_name(name);
         let state = style_state_impact_for_attribute_mutation(&self.dom_host, handle, None, name);
         let old_style_state = self.retained_old_style_state_for_impact(host_ptr, handle, state);
         let derived_old_style_states = self.retained_derived_old_style_states_for_attribute_impact(
@@ -854,8 +903,8 @@ impl DocumentRuntime {
             .dom_host
             .remove_attribute_mutation_outcome(handle, name)
             .into_parts();
-        if old_value.is_some() && style_impact.affects_layout_metric() {
-            self.note_attribute_layout_activity(host_ptr, handle, name);
+        if old_value.is_some() {
+            self.note_inline_style_attribute_activity(host_ptr, handle, name);
         }
         let changed = self.apply_runtime_mutation_effects(
             scope,
@@ -884,7 +933,6 @@ impl DocumentRuntime {
             if name.eq_ignore_ascii_case("style") {
                 let runtime = unsafe { &mut *host_ptr };
                 runtime.clear_element_inline_style_base_url(handle);
-                runtime.clear_element_inline_style_declaration_state(handle);
             }
         }
         if changed {
@@ -974,7 +1022,6 @@ impl DocumentRuntime {
         {
             unsafe { &mut *host_ptr }.break_on_dom_debugger_will_modify_dom_attribute(handle);
         }
-        let style_impact = StyleAttributeImpact::for_attribute_name(local_name);
         let state = style_state_impact_for_attribute_mutation(
             &self.dom_host,
             handle,
@@ -992,8 +1039,8 @@ impl DocumentRuntime {
             .dom_host
             .remove_attribute_ns_mutation_outcome(handle, namespace, local_name)
             .into_parts();
-        if old_value.is_some() && style_impact.affects_layout_metric() {
-            self.note_attribute_layout_activity(host_ptr, handle, local_name);
+        if old_value.is_some() {
+            self.note_inline_style_attribute_activity(host_ptr, handle, local_name);
         }
         let changed = self.apply_runtime_mutation_effects(
             scope,
@@ -1022,7 +1069,6 @@ impl DocumentRuntime {
             if namespace.is_none() && local_name.eq_ignore_ascii_case("style") {
                 let runtime = unsafe { &mut *host_ptr };
                 runtime.clear_element_inline_style_base_url(handle);
-                runtime.clear_element_inline_style_declaration_state(handle);
             }
         }
         if changed {
@@ -1117,7 +1163,6 @@ impl DocumentRuntime {
             Some(qualified_name),
             Some(value),
         );
-        let style_impact = StyleAttributeImpact::for_attribute_name(local_name);
         let state = style_state_impact_for_attribute_mutation(
             &self.dom_host,
             handle,
@@ -1132,8 +1177,8 @@ impl DocumentRuntime {
             .dom_host
             .set_attribute_ns_mutation_outcome(handle, namespace, prefix, local_name, value)
             .into_parts();
-        if style_impact.affects_layout_metric() && old_value.as_deref() != Some(value) {
-            self.note_attribute_layout_activity(host_ptr, handle, local_name);
+        if old_value.as_deref() != Some(value) {
+            self.note_inline_style_attribute_activity(host_ptr, handle, local_name);
         }
         let changed = self.apply_runtime_mutation_effects(
             scope,
@@ -1159,9 +1204,6 @@ impl DocumentRuntime {
                 old_style_state,
             );
             self.note_derived_element_state_style_activity(host_ptr, &derived_old_style_states);
-            if namespace.is_none() && local_name.eq_ignore_ascii_case("style") {
-                unsafe { &mut *host_ptr }.clear_element_inline_style_declaration_state(handle);
-            }
         }
         if should_dispatch_attribute_changed_for_set(changed, old_value.as_deref(), value) {
             self.apply_attribute_changed_reaction_policy(
@@ -1635,17 +1677,7 @@ impl DocumentRuntime {
         handle: DomHandle,
         selected: bool,
     ) -> bool {
-        let _ = scope;
-        let old_state = unsafe { &*host_ptr }.retained_current_element_state(handle);
-        let changed = self.dom_host.set_selected_state(handle, selected);
-        if changed {
-            unsafe { &mut *host_ptr }.note_element_state_style_activity_with_old_state(
-                handle,
-                StyloElementState::CHECKED | StyloElementState::VALIDITY_STATES,
-                old_state,
-            );
-        }
-        changed
+        self.set_selected_state_with_dirty(scope, host_ptr, handle, selected, true)
     }
 
     pub(crate) fn set_selected_state_with_dirty(
@@ -1657,12 +1689,22 @@ impl DocumentRuntime {
         dirty: bool,
     ) -> bool {
         let _ = scope;
-        let old_state = unsafe { &*host_ptr }.retained_current_element_state(handle);
+        let runtime = unsafe { &*host_ptr };
+        let old_state = runtime.retained_current_element_state(handle);
+        let validity = self
+            .dom_host
+            .node(handle)
+            .and_then(Node::as_element)
+            .filter(|option| option.selected() != selected)
+            .and_then(|_| self.dom_host.option_nearest_ancestor_select(handle))
+            .map(|select| runtime.snapshot_select_validity(select));
         let changed = self
             .dom_host
             .set_selected_state_with_dirty(handle, selected, dirty);
         if changed {
-            unsafe { &mut *host_ptr }.note_element_state_style_activity_with_old_state(
+            let runtime = unsafe { &mut *host_ptr };
+            runtime.invalidate_validity_snapshots(validity.into_iter().flatten());
+            runtime.note_element_state_style_activity_with_old_state(
                 handle,
                 StyloElementState::CHECKED | StyloElementState::VALIDITY_STATES,
                 old_state,
@@ -1693,12 +1735,18 @@ impl DocumentRuntime {
     pub(crate) fn set_select_explicit_none(
         &mut self,
         _scope: &mut v8::PinScope<'_, '_>,
-        _host_ptr: *mut PageScriptHost,
+        host_ptr: *mut PageScriptHost,
         handle: DomHandle,
         explicit_none: bool,
     ) -> bool {
-        self.dom_host
-            .set_select_explicit_none_state(handle, explicit_none)
+        let validity = unsafe { &*host_ptr }.snapshot_select_validity(handle);
+        let changed = self
+            .dom_host
+            .set_select_explicit_none_state(handle, explicit_none);
+        if changed {
+            unsafe { &mut *host_ptr }.invalidate_validity_snapshots(validity);
+        }
+        changed
     }
 
     pub(crate) fn set_select_value(&mut self, handle: DomHandle, value: &str) -> bool {
@@ -2222,12 +2270,14 @@ fn style_state_impact_for_attribute_mutation(
     namespace: Option<&str>,
     name: &str,
 ) -> StyloElementState {
-    namespace
-        .is_none()
-        .then(|| style_engine::normalized_style_attribute_name(host, handle, name))
-        .as_deref()
-        .map(style_state_impact_for_attribute)
-        .unwrap_or_else(StyloElementState::empty)
+    if namespace.is_some() {
+        return StyloElementState::empty();
+    }
+    let name = style_engine::normalized_style_attribute_name(host, handle, name);
+    if name == "open" && host.is_html_element_named(handle, "dialog") {
+        return StyloElementState::MODAL;
+    }
+    style_state_impact_for_attribute(&name)
 }
 
 fn style_state_impact_for_attribute(name: &str) -> StyloElementState {
@@ -2331,7 +2381,7 @@ fn is_disableable_descendant_for_optgroup(element: &Element) -> bool {
 }
 
 impl DocumentRuntime {
-    fn note_attribute_layout_activity(
+    fn note_inline_style_attribute_activity(
         &self,
         host_ptr: *mut PageScriptHost,
         handle: DomHandle,

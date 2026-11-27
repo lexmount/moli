@@ -251,7 +251,7 @@ pub(super) use attributes::{
     node_toggle_attribute_callback,
 };
 pub(crate) use canvas::{
-    canvas_get_context_callback, canvas_to_data_url_callback,
+    canvas_get_context_callback, canvas_to_blob_callback, canvas_to_data_url_callback,
     canvas_transfer_control_to_offscreen_callback,
 };
 pub(crate) use canvas::{
@@ -466,9 +466,11 @@ pub(crate) use geometry::observable_input_hit_test;
 pub(crate) use geometry::observable_scrollbar_hit_test;
 #[cfg(feature = "devtools")]
 pub(crate) use geometry::{
-    InputHitTestMode, InputHitTestPolicy, InputSurfaceHit, apply_scroll_observable_effects,
-    input_surface_hit_test, input_target_in_document, observable_geometry_query,
+    InputHitTestMode, InputHitTestPolicy, InputSurfaceHit, WheelScrollTarget,
+    apply_scroll_observable_effects, input_surface_hit_test, input_target_in_document,
+    observable_geometry_query, perform_latched_wheel_scroll_default_action,
     perform_scrollbar_scroll_default_action, perform_wheel_scroll_default_action,
+    select_wheel_scroll_target,
 };
 pub(super) use geometry::{element_for_hit_source, live_interaction_target};
 pub(super) use geometry::{
@@ -491,6 +493,7 @@ pub(crate) use geometry::{
 };
 #[cfg(feature = "devtools")]
 pub(crate) use geometry::{observable_deep_hit_test, scroll_node_into_view_at_center};
+pub(in crate::native_bridge) use global_attributes::canonical_dir_value;
 use global_attributes::canonical_fetch_priority_value;
 pub(super) use global_attributes::{
     anchor_target_getter_function, anchor_target_setter_function, area_no_href_setter_function,
@@ -537,6 +540,7 @@ pub(super) use global_attributes::{
     node_tab_index_setter_function, node_title_getter_function, node_title_setter_function,
     node_translate_getter_function, node_translate_setter_function,
     node_writing_suggestions_getter_function, node_writing_suggestions_setter_function,
+    null_to_empty_dom_string_reflection_getter_function,
     null_to_empty_dom_string_reflection_setter_function, object_archive_getter_function,
     object_code_base_getter_function, object_code_getter_function,
     object_code_type_getter_function, object_data_getter_function, object_declare_getter_function,
@@ -550,30 +554,27 @@ pub(super) use global_attributes::{
     unsigned_long_reflection_setter_function, usv_string_reflection_setter_function,
 };
 use html_elements::{
-    body_a_link_getter_function, body_a_link_setter_function, body_background_getter_function,
-    body_background_setter_function, body_link_getter_function, body_link_setter_function,
-    body_text_getter_function, body_text_setter_function, body_v_link_getter_function,
-    body_v_link_setter_function, li_value_getter_function, li_value_setter_function,
-    meta_content_getter_function, meta_content_setter_function, meta_http_equiv_getter_function,
-    meta_http_equiv_setter_function, ol_reversed_getter_function, ol_reversed_setter_function,
-    ol_start_getter_function, ol_start_setter_function, ol_type_getter_function,
-    ol_type_setter_function, optgroup_disabled_getter_function, optgroup_disabled_setter_function,
-    table_caption_getter_function, table_caption_setter_function,
-    table_cell_col_span_getter_function, table_cell_col_span_setter_function,
-    table_cell_index_getter_function, table_cell_row_span_getter_function,
-    table_cell_row_span_setter_function, table_create_caption_callback,
-    table_create_t_body_callback, table_create_t_foot_callback, table_create_t_head_callback,
-    table_delete_caption_callback, table_delete_row_callback, table_delete_t_foot_callback,
-    table_delete_t_head_callback, table_insert_row_callback, table_row_cells_getter_function,
-    table_row_delete_cell_callback, table_row_index_getter_function,
-    table_row_insert_cell_callback, table_rows_getter_function, table_section_delete_row_callback,
-    table_section_insert_row_callback, table_section_row_index_getter_function,
-    table_section_rows_getter_function, table_t_bodies_getter_function,
-    table_t_foot_getter_function, table_t_foot_setter_function, table_t_head_getter_function,
-    table_t_head_setter_function, track_default_getter_function, track_default_setter_function,
-    track_kind_getter_function, track_kind_setter_function, track_ready_state_getter_function,
-    track_src_getter_function, track_src_setter_function, track_srclang_getter_function,
-    track_srclang_setter_function,
+    body_background_getter_function, body_background_setter_function, li_value_getter_function,
+    li_value_setter_function, meta_content_getter_function, meta_content_setter_function,
+    meta_http_equiv_getter_function, meta_http_equiv_setter_function, ol_reversed_getter_function,
+    ol_reversed_setter_function, ol_start_getter_function, ol_start_setter_function,
+    ol_type_getter_function, ol_type_setter_function, optgroup_disabled_getter_function,
+    optgroup_disabled_setter_function, table_caption_getter_function,
+    table_caption_setter_function, table_cell_col_span_getter_function,
+    table_cell_col_span_setter_function, table_cell_index_getter_function,
+    table_cell_row_span_getter_function, table_cell_row_span_setter_function,
+    table_create_caption_callback, table_create_t_body_callback, table_create_t_foot_callback,
+    table_create_t_head_callback, table_delete_caption_callback, table_delete_row_callback,
+    table_delete_t_foot_callback, table_delete_t_head_callback, table_insert_row_callback,
+    table_row_cells_getter_function, table_row_delete_cell_callback,
+    table_row_index_getter_function, table_row_insert_cell_callback, table_rows_getter_function,
+    table_section_delete_row_callback, table_section_insert_row_callback,
+    table_section_row_index_getter_function, table_section_rows_getter_function,
+    table_t_bodies_getter_function, table_t_foot_getter_function, table_t_foot_setter_function,
+    table_t_head_getter_function, table_t_head_setter_function, track_default_getter_function,
+    track_default_setter_function, track_kind_getter_function, track_kind_setter_function,
+    track_ready_state_getter_function, track_src_getter_function, track_src_setter_function,
+    track_srclang_getter_function, track_srclang_setter_function,
 };
 use html_elements::{
     marquee_loop_getter_function, marquee_loop_setter_function,
@@ -584,9 +585,9 @@ pub(crate) use images::{
     apply_authorized_image_load_event_in_context, apply_image_attribute_mutation_plan,
     image_intrinsic_dimensions, image_selected_request_key, image_selected_source,
     plan_image_attribute_mutation, queue_image_load_event_after_document_adoption,
-    queue_image_load_event_for_loading_change, queue_image_load_event_if_needed,
-    queue_image_load_event_if_needed_with_initiator, queue_image_load_network_terminal_followup,
-    queue_revealed_lazy_image_load, queue_revealed_lazy_image_loads, reset_image_load_dispatch,
+    queue_image_load_event_if_needed, queue_image_load_event_if_needed_with_initiator,
+    queue_image_load_network_terminal_followup, queue_revealed_lazy_image_load,
+    queue_revealed_lazy_image_loads, reset_image_load_dispatch,
     revealed_lazy_image_load_candidates,
 };
 pub(in crate::native_bridge) use images::{
@@ -645,6 +646,7 @@ pub(super) use query::{
     node_get_elements_by_tag_name_ns_callback, node_matches_callback,
     node_query_selector_all_callback, node_query_selector_callback,
 };
+pub(in crate::native_bridge) use reflection::set_reflected_attribute;
 use reflection::{
     CrossOriginReflection, DomStringReflection, ElementReflectionInterface,
     NullToEmptyDomStringReflection, UnsignedLongReflection, UsvStringReflection,
@@ -655,8 +657,7 @@ use reflection::{
     remove_reflected_attribute, set_attribute_property_on_object_or_detached,
     set_boolean_attribute_property_on_object_or_detached,
     set_dom_string_attribute_property_on_object,
-    set_nullable_dom_string_attribute_property_on_object, set_reflected_attribute,
-    set_reflected_boolean_attribute, set_reflected_style_attribute_with_inline_base_url,
+    set_nullable_dom_string_attribute_property_on_object, set_reflected_boolean_attribute,
     set_usv_string_attribute_property_on_object,
 };
 pub(crate) use shadow_dom::install_element_internals_template_bindings;
@@ -758,9 +759,6 @@ pub(in crate::native_bridge) fn set_live_element_attribute_appending_to_current_
     }
     if did_set {
         apply_image_attribute_mutation_plan(scope, runtime_ptr, image_plan);
-        if name.eq_ignore_ascii_case("loading") {
-            queue_image_load_event_for_loading_change(scope, runtime_ptr, handle);
-        }
         queue_media_load_if_source_or_loading_change(scope, runtime_ptr, handle, name);
         queue_text_track_load_if_source(scope, runtime_ptr, handle, name);
     }
@@ -814,9 +812,6 @@ pub(in crate::native_bridge) fn set_live_element_attribute_ns_appending_to_curre
     }
     if did_set && namespace.is_none() {
         apply_image_attribute_mutation_plan(scope, runtime_ptr, image_plan);
-        if local_name.eq_ignore_ascii_case("loading") {
-            queue_image_load_event_for_loading_change(scope, runtime_ptr, handle);
-        }
         queue_media_load_if_source_or_loading_change(scope, runtime_ptr, handle, local_name);
         queue_text_track_load_if_source(scope, runtime_ptr, handle, local_name);
     }
@@ -862,9 +857,6 @@ pub(in crate::native_bridge) fn remove_live_element_attribute_appending_to_curre
     }
     if did_remove {
         apply_image_attribute_mutation_plan(scope, runtime_ptr, image_plan);
-        if name.eq_ignore_ascii_case("loading") {
-            queue_image_load_event_for_loading_change(scope, runtime_ptr, handle);
-        }
         queue_media_load_if_source_or_loading_change(scope, runtime_ptr, handle, name);
         queue_text_track_load_if_source(scope, runtime_ptr, handle, name);
     }
@@ -935,9 +927,6 @@ pub(in crate::native_bridge) fn remove_live_element_attribute_ns_appending_to_cu
     }
     if did_remove && namespace.is_none() {
         apply_image_attribute_mutation_plan(scope, runtime_ptr, image_plan);
-        if local_name.eq_ignore_ascii_case("loading") {
-            queue_image_load_event_for_loading_change(scope, runtime_ptr, handle);
-        }
         queue_media_load_if_source_or_loading_change(scope, runtime_ptr, handle, local_name);
         queue_text_track_load_if_source(scope, runtime_ptr, handle, local_name);
     }

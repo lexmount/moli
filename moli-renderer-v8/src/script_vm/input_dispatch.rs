@@ -14,6 +14,8 @@ mod cursor;
 mod drag_source;
 mod mouse_boundary;
 mod touch_tap;
+mod wheel;
+use crate::native_bridge::element::InputSurfaceHit;
 use drag_source::dispatch_drag_source_event;
 use mouse_boundary::dispatch_mouse_boundary_events;
 use touch_tap::dispatch_touch_tap_activation;
@@ -34,7 +36,7 @@ use crate::dom::{
 };
 use crate::native_bridge::element::{
     InputEventCoordinates, InputHitTestMode, InputHitTestPolicy, TextEditInputType,
-    TextInputSource, TouchEventPoint, activate_handle_after_pointer_release,
+    TextInputSource, TouchEventPoint, WheelScrollTarget, activate_handle_after_pointer_release,
     activate_handle_after_touch_release, activate_handle_via_keyboard,
     cache_input_files_from_selected_files, construct_drag_event_with_related_target,
     construct_keyboard_event, construct_mouse_event_for_target,
@@ -44,9 +46,9 @@ use crate::native_bridge::element::{
     contenteditable_editing_host, dispatch_public_event, input_surface_hit_test,
     input_target_in_document, is_disabled_form_control, observable_input_hit_test,
     perform_auxiliary_link_default_action, perform_drop_default_action,
-    perform_implicit_submission_from_control, perform_mouse_focus_default_action,
-    perform_scrollbar_scroll_default_action, perform_text_input,
-    perform_wheel_scroll_default_action, replace_contenteditable_selection,
+    perform_implicit_submission_from_control, perform_latched_wheel_scroll_default_action,
+    perform_mouse_focus_default_action, perform_scrollbar_scroll_default_action,
+    perform_text_input, perform_wheel_scroll_default_action, replace_contenteditable_selection,
     replace_text_control_selection, select_contenteditable_contents,
     text_control_set_selection_range_internal,
     text_control_set_selection_range_with_direction_internal, text_control_value, update_focus,
@@ -57,7 +59,7 @@ use crate::native_bridge::{
 };
 use crate::runtime::{
     RendererDragData, RendererInputDispatchOutcome, RendererInterceptedDrag,
-    RendererPointerEventProperties, RendererTouchPoint,
+    RendererPointerEventProperties, RendererTouchPoint, RendererWheelDispatchOutcome,
 };
 use crate::util::{
     node_wrapper_from_handle, utf16_len, utf16_next_scalar_boundary,
@@ -607,6 +609,29 @@ pub(crate) enum MouseDispatchCompletion {
     DeferToBatch,
 }
 
+pub(crate) struct WheelDispatchOptions {
+    pub(crate) button: i32,
+    /// An omitted value retains the currently pressed buttons.
+    pub(crate) buttons: Option<i32>,
+    pub(crate) click_count: i32,
+    pub(crate) pointer: RendererPointerEventProperties,
+    pub(crate) intercept_drags: bool,
+    pub(crate) completion: MouseDispatchCompletion,
+}
+
+impl Default for WheelDispatchOptions {
+    fn default() -> Self {
+        Self {
+            button: -1,
+            buttons: None,
+            click_count: 0,
+            pointer: RendererPointerEventProperties::default(),
+            intercept_drags: false,
+            completion: MouseDispatchCompletion::FinishTurn,
+        }
+    }
+}
+
 #[derive(Clone, Copy)]
 struct PreparedMouseInputDispatch {
     button: i32,
@@ -1069,7 +1094,63 @@ impl ScriptVm {
         intercept_drags: bool,
         completion: MouseDispatchCompletion,
     ) -> Result<RendererInputDispatchOutcome> {
-        let surface_hit = self.mouse_input_surface_hit(x, y, event_name)?;
+        if event_name == "wheel" {
+            return self.dispatch_direct_wheel(
+                (x, y),
+                (delta_x, delta_y),
+                modifiers,
+                WheelDispatchOptions {
+                    button,
+                    buttons,
+                    click_count,
+                    pointer,
+                    intercept_drags,
+                    completion,
+                },
+            );
+        }
+        self.dispatch_mouse_input_to_target(
+            x,
+            y,
+            event_name,
+            button,
+            buttons,
+            click_count,
+            delta_x,
+            delta_y,
+            pointer,
+            modifiers,
+            intercept_drags,
+            completion,
+            None,
+        )
+    }
+
+    fn dispatch_mouse_input_to_target(
+        &mut self,
+        x: f64,
+        y: f64,
+        event_name: &str,
+        button: i32,
+        buttons: Option<i32>,
+        click_count: i32,
+        delta_x: f64,
+        delta_y: f64,
+        pointer: RendererPointerEventProperties,
+        modifiers: u8,
+        intercept_drags: bool,
+        completion: MouseDispatchCompletion,
+        wheel: Option<(InputSurfaceHit, crate::wheel_input::PreparedWheel)>,
+    ) -> Result<RendererInputDispatchOutcome> {
+        let (surface_hit, prepared_wheel) = if let Some((hit, prepared)) = wheel {
+            (hit, Some(prepared))
+        } else {
+            (self.mouse_input_surface_hit(x, y, event_name)?, None)
+        };
+        let wheel_cancelable = prepared_wheel.as_ref().is_none_or(|wheel| wheel.cancelable);
+        let wheel_scroll_target = prepared_wheel
+            .as_ref()
+            .and_then(|wheel| wheel.scroll_target.as_ref());
         let prepared = self.prepare_mouse_input_dispatch(event_name, button, buttons);
         let is_release = event_name == "mouseup";
         let full_release = is_release && prepared.buttons == 0;
@@ -1108,6 +1189,8 @@ impl ScriptVm {
             pointer,
             modifiers,
             intercept_drags,
+            wheel_cancelable,
+            wheel_scroll_target,
         );
         if is_release {
             self.suppress_compat_mouse_events = false;
@@ -1116,11 +1199,20 @@ impl ScriptVm {
             self.mouse_routed_frame = None;
             self._context_host.borrow_mut().clear_mouse_press();
         }
-        // For standalone input the event scope covers the turn-end checkpoint.
-        match completion {
+        // Capture the actual ACK before a checkpoint error can replace the
+        // command result. Keep the input scope through the entire checkpoint.
+        let wheel_outcome = result.as_ref().ok().and_then(|outcome| outcome.wheel);
+        let result = match completion {
             MouseDispatchCompletion::FinishTurn => self.finish_input_event_dispatch_turn(result),
             MouseDispatchCompletion::DeferToBatch => result,
+        };
+        if let Some(prepared) = prepared_wheel {
+            let document = self.wheel_document_owner();
+            self.wheel_input
+                .borrow_mut()
+                .acknowledge(prepared, wheel_outcome, document);
         }
+        result
     }
 
     #[cfg(feature = "molio")]
@@ -1404,6 +1496,8 @@ impl ScriptVm {
         pointer: RendererPointerEventProperties,
         modifiers: u8,
         intercept_drags: bool,
+        wheel_cancelable: bool,
+        wheel_scroll_target: Option<&WheelScrollTarget>,
     ) -> Result<RendererInputDispatchOutcome> {
         let PreparedMouseInputDispatch {
             button, buttons, ..
@@ -1813,6 +1907,7 @@ impl ScriptVm {
                         delta_y,
                         buttons,
                         modifiers,
+                        wheel_cancelable,
                     )
                 } else if matches!(event_name, "mousedown" | "mouseup") {
                     construct_mouse_event_with_detail_for_target(
@@ -1849,14 +1944,39 @@ impl ScriptVm {
                     }
                     let dispatched =
                         dispatch_public_event(scope, runtime_ptr, mouse_dispatch_handle, event);
-                    if event_name == "wheel" && dispatched.allows_default() {
-                        let _ = perform_wheel_scroll_default_action(
-                            scope,
-                            runtime_ptr,
-                            pointer_dispatch_handle,
-                            delta_x,
-                            delta_y,
-                        )?;
+                    if event_name == "wheel" {
+                        let wheel = if dispatched.allows_default() {
+                            let scrolled = if delta_x == 0.0 && delta_y == 0.0 {
+                                false
+                            } else if let Some(scroll_target) = wheel_scroll_target {
+                                perform_latched_wheel_scroll_default_action(
+                                    scope,
+                                    runtime_ptr,
+                                    scroll_target,
+                                    delta_x,
+                                    delta_y,
+                                )?
+                            } else {
+                                perform_wheel_scroll_default_action(
+                                    scope,
+                                    runtime_ptr,
+                                    pointer_dispatch_handle,
+                                    delta_x,
+                                    delta_y,
+                                )?
+                            };
+                            if scrolled {
+                                RendererWheelDispatchOutcome::Scrolled
+                            } else {
+                                RendererWheelDispatchOutcome::Unconsumed
+                            }
+                        } else {
+                            RendererWheelDispatchOutcome::Canceled
+                        };
+                        return Ok(RendererInputDispatchOutcome {
+                            wheel: Some(wheel),
+                            ..input_dispatch_outcome(true)
+                        });
                     }
                     if event_name == "mousedown" && !dispatched.allows_default() {
                         mouse_down_allows_drag.set(false);
@@ -2083,6 +2203,7 @@ impl ScriptVm {
                     if follow_up_event_name == "auxclick" {
                         return Ok(RendererInputDispatchOutcome {
                             handled: true,
+                            wheel: None,
                             triggered_top_level_navigation:
                                 !had_pending_top_level_navigation_before_event
                                     && unsafe { &*runtime_ptr }.has_pending_location_navigation(),
@@ -2428,8 +2549,15 @@ impl ScriptVm {
         let mut compatibility_hover = None;
         let document = self.document_runtime.document_handle();
         let mut pointer_handles = std::mem::take(&mut self.active_touch_pointer_handles);
-        let sampled = self._context_host.borrow().published_frame_geometry();
         let result = self.with_default_context_scope(|scope, runtime_ptr| {
+            let runtime = move || unsafe { &*runtime_ptr };
+            // Continuing touches may route directly through capture without a hit test.
+            if event_name != "touchstart"
+                && runtime().layout_policy() == moli_page_types::LayoutPolicy::Lazy
+            {
+                runtime().ensure_observable_layout()?;
+            }
+            let sampled = runtime().published_frame_geometry();
             for (index, (point, target, previous)) in changed_points.iter().enumerate() {
                 let Some(event_name_for_pointer) = pointer_event_name else {
                     break;
@@ -2438,7 +2566,6 @@ impl ScriptVm {
                 let pointer_id = touch_pointer_id(point.id);
                 let is_primary = previous.map_or(was_empty && index == 0, |p| p.is_primary);
                 let pointer = touch_pointer_properties(event_name, pointer_id, is_primary);
-                let runtime = move || unsafe { &*runtime_ptr };
                 if runtime().layout_policy().is_realtime() {
                     runtime().ensure_observable_layout()?;
                 }
@@ -2524,8 +2651,8 @@ impl ScriptVm {
                     unsafe { &mut *runtime_ptr }.remove_touch_pointer_input(pointer_id);
                 }
             }
-            if unsafe { &*runtime_ptr }.layout_policy().is_realtime() {
-                unsafe { &*runtime_ptr }.ensure_observable_layout()?;
+            if runtime().layout_policy().is_realtime() {
+                runtime().ensure_observable_layout()?;
             }
             let mut active_event_points = Vec::with_capacity(active_snapshot.len());
             for (id, point) in &active_snapshot {

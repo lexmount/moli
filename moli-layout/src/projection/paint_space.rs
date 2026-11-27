@@ -1,7 +1,7 @@
 //! Paint-only snapping and subpixel propagation. These values never feed CSSOM.
 
 use super::coordinates::{ProjectionAnchor, ResolvedPlacement};
-use crate::{LayoutPoint, LayoutRect, LayoutTransform2D};
+use crate::{LayoutPoint, LayoutRect, LayoutTransform2D, PaintPixelGrid, PaintTileGrid};
 
 /// Blink-like linear paint space for one projected coordinate space.
 ///
@@ -44,6 +44,13 @@ impl PaintSpace {
         )
     }
 
+    pub(crate) fn pre_transform_tile_grid(self, mut grid: PaintTileGrid) -> PaintTileGrid {
+        grid.x.start += f64::from(self.paint_offset.x);
+        grid.y.start += f64::from(self.paint_offset.y);
+        grid.coverage = self.pre_transform_rect(grid.coverage);
+        grid
+    }
+
     pub(crate) const fn property_transform(self) -> LayoutTransform2D {
         self.property_transform
     }
@@ -75,22 +82,18 @@ fn establish_property_space(
     state: PaintSpace,
     property_transform: LayoutTransform2D,
     propagation: SubpixelPropagation,
+    grid: PaintPixelGrid,
 ) -> PaintSpace {
-    let rounded_offset = LayoutPoint::new(
-        crate::snapshot::round_layout_pixel(f64::from(state.paint_offset.x)) as f32,
-        crate::snapshot::round_layout_pixel(f64::from(state.paint_offset.y)) as f32,
-    );
-    let residual = LayoutPoint::new(
-        state.paint_offset.x - rounded_offset.x,
-        state.paint_offset.y - rounded_offset.y,
-    );
+    let x = f64::from(state.paint_offset.x);
+    let y = f64::from(state.paint_offset.y);
+    let (snapped_x, _) = grid.snap_axis(x, 0.0);
+    let (snapped_y, _) = grid.snap_axis(y, 0.0);
+    let translation = LayoutTransform2D::new([1.0, 0.0, 0.0, 1.0, snapped_x, snapped_y]);
+    let residual = LayoutPoint::new((x - snapped_x) as f32, (y - snapped_y) as f32);
     PaintSpace {
         property_transform: state
             .property_transform
-            .concatenate(LayoutTransform2D::translation(
-                rounded_offset.x,
-                rounded_offset.y,
-            ))
+            .concatenate(translation)
             .concatenate(property_transform),
         paint_offset: LayoutPoint::new(
             if propagation.x { residual.x } else { 0.0 },
@@ -102,6 +105,7 @@ fn establish_property_space(
 pub(super) fn derive_paint_space(
     placement: ResolvedPlacement<'_>,
     viewport_scroll: LayoutPoint,
+    grid: PaintPixelGrid,
 ) -> PaintSpace {
     let mut state = match placement.anchor {
         ProjectionAnchor::Parent(parent) => parent.paint,
@@ -126,6 +130,7 @@ pub(super) fn derive_paint_space(
             state,
             LayoutTransform2D::translation(-parent_scroll.x, -parent_scroll.y),
             SubpixelPropagation::BOTH,
+            grid,
         );
     }
     state.paint_offset = LayoutPoint::new(
@@ -139,7 +144,7 @@ pub(super) fn derive_paint_space(
         } else {
             SubpixelPropagation::through_transform(resolved_transform.transform)
         };
-        state = establish_property_space(state, resolved_transform.transform, propagation);
+        state = establish_property_space(state, resolved_transform.transform, propagation, grid);
     }
     state
 }
@@ -187,6 +192,7 @@ mod paint_space_tests {
                 transform,
             },
             viewport_scroll,
+            PaintPixelGrid::new(1.0),
         )
     }
 
@@ -290,6 +296,42 @@ mod paint_space_tests {
         assert_eq!(
             scrolled_child.local_transform(),
             LayoutTransform2D::translation(0.875, 0.0)
+        );
+    }
+
+    #[test]
+    fn property_space_snaps_offsets_at_device_scale_and_keeps_fractional_scrolling() {
+        let grid = PaintPixelGrid::new(2.0);
+        let state = PaintSpace {
+            paint_offset: LayoutPoint::new(0.25, 0.25),
+            property_transform: LayoutTransform2D::IDENTITY,
+        };
+        let transform = LayoutTransform2D::scale(2.0, 1.0);
+        let scaled = establish_property_space(
+            state,
+            transform,
+            SubpixelPropagation::through_transform(transform),
+            grid,
+        );
+        assert_eq!(scaled.paint_offset, LayoutPoint::new(0.0, -0.25));
+        assert_eq!(
+            scaled.property_transform,
+            LayoutTransform2D::translation(0.5, 0.5).concatenate(transform)
+        );
+
+        let scrolled = establish_property_space(
+            state,
+            LayoutTransform2D::translation(-0.125, 0.0),
+            SubpixelPropagation::BOTH,
+            grid,
+        );
+        assert_eq!(
+            scrolled.property_transform,
+            LayoutTransform2D::translation(0.375, 0.5)
+        );
+        assert_eq!(
+            scrolled.local_transform(),
+            LayoutTransform2D::translation(0.125, 0.25)
         );
     }
 }

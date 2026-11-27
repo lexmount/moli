@@ -478,6 +478,55 @@ async fn queued_viewport_wheel_preserves_input_order_and_document_scope() -> Res
 }
 
 #[tokio::test]
+async fn viewport_wheel_zero_began_waits_for_a_scroll_direction() -> Result<()> {
+    let browser =
+        Browser::new(BrowserConfig::default().with_layout_policy(LayoutPolicy::Realtime))?;
+    let html = r#"<!doctype html><body style="height:1200px;margin:0">
+        <div id="inner" style="width:100px;height:100px;overflow:auto">
+            <div style="height:300px">Inner scroller</div>
+        </div>
+        <script>
+            window.deltas = [];
+            inner.addEventListener('wheel', event => deltas.push(event.deltaY));
+        </script>"#;
+    let mut page = browser.fetch(&html_url(html)).await?;
+    let mut frames = page
+        .subscribe_viewport_frames(
+            ViewportSurface {
+                inner_width: 160,
+                inner_height: 120,
+                ..Default::default()
+            },
+            1,
+        )
+        .await?;
+    let document = frame(&mut frames, |frame| frame.snapshot.is_some())
+        .await?
+        .document;
+    let began = RendererViewportWheelInput {
+        document,
+        viewport_revision: 1,
+        position: (16., 16.),
+        buttons: 0,
+        delta: (0., 0.),
+        modifiers: 0,
+        phase: RendererViewportWheelPhase::Started,
+        precise: true,
+    };
+    page.enqueue_viewport_wheel(began)?;
+    page.enqueue_viewport_wheel(RendererViewportWheelInput {
+        phase: RendererViewportWheelPhase::Moved,
+        delta: (0., 40.),
+        ..began
+    })?;
+    let result = page
+        .evaluate_runtime_expression_async("JSON.stringify([inner.scrollTop,scrollY,deltas])")
+        .await?;
+    assert_eq!(result["value"], "[40,0,[0,40]]");
+    Ok(())
+}
+
+#[tokio::test]
 async fn viewport_pointer_requires_a_current_rendered_document() -> Result<()> {
     let browser =
         Browser::new(BrowserConfig::default().with_layout_policy(LayoutPolicy::Realtime))?;
@@ -573,6 +622,84 @@ async fn viewport_pointer_requires_a_current_rendered_document() -> Result<()> {
         page.evaluate_runtime_expression_async("moves").await?["value"],
         1
     );
+    Ok(())
+}
+
+#[tokio::test]
+async fn viewport_pointer_events_keywords_restore_link_targeting() -> Result<()> {
+    let browser =
+        Browser::new(BrowserConfig::default().with_layout_policy(LayoutPolicy::Realtime))?;
+    let html = r##"<!doctype html><style>
+        body { margin: 0; }
+        #background, #sidebar { position: absolute; inset: 0; }
+        #sidebar { pointer-events: none; }
+        #next { display: block; width: 80px; height: 40px; pointer-events: POINTER_EVENTS_KEYWORD; }
+        #title { display: block; height: 100%; }
+    </style>
+    <div id="background"></div>
+    <div id="sidebar"><a id="next" href="#related"><span id="title">Next video</span></a></div>
+    <div id="related"></div>
+    <script>
+        document.addEventListener('click', event => {
+            window.clicked = [event.target.id, event.isTrusted];
+        });
+    </script>"##;
+    for keyword in [
+        "visiblePainted",
+        "visibleFill",
+        "visibleStroke",
+        "visible",
+        "painted",
+        "fill",
+        "stroke",
+        "all",
+    ] {
+        let html = html.replace("POINTER_EVENTS_KEYWORD", keyword);
+        let mut page = browser.fetch(&html_url(&html)).await?;
+        let mut frames = page
+            .subscribe_viewport_frames(ViewportSurface::default(), 1)
+            .await?;
+        let current = frame(&mut frames, |frame| frame.snapshot.is_some()).await?;
+
+        let hit = page
+            .evaluate_runtime_expression_async(&format!(
+                r#"[
+                    CSS.supports('pointer-events', '{keyword}'),
+                    getComputedStyle(document.getElementById('title')).pointerEvents,
+                    document.elementFromPoint(12, 12).id,
+                    document.elementFromPoint(120, 12).id
+                ].join('|')"#,
+            ))
+            .await?;
+        let expected_hit = format!("true|{}|title|background", keyword.to_ascii_lowercase());
+        assert_eq!(hit["value"], expected_hit, "pointer-events: {keyword}");
+
+        for (event, buttons) in [("mousedown", 1), ("mouseup", 0)] {
+            assert!(
+                page.dispatch_viewport_pointer(RendererViewportPointerInput {
+                    document: current.document,
+                    viewport_revision: current.viewport_revision,
+                    position: (12., 12.),
+                    event,
+                    button: 0,
+                    buttons,
+                    click_count: 1,
+                    modifiers: 0,
+                })
+                .await?
+                .is_some(),
+                "pointer-events: {keyword}"
+            );
+        }
+        let result = page
+            .evaluate_runtime_expression_async("JSON.stringify([window.clicked, location.hash])")
+            .await?;
+        assert_eq!(
+            result["value"], r##"[["title",true],"#related"]"##,
+            "pointer-events: {keyword}"
+        );
+        page.close_async().await?;
+    }
     Ok(())
 }
 
@@ -1195,6 +1322,54 @@ async fn viewport_frames_follow_realtime_animation_and_document_replacement() ->
     assert_eq!(resumed_surface.css_width, 410.);
     assert_eq!(resumed_surface.css_height, 250.);
     assert_eq!(resumed_surface.device_scale, 1.25);
+    Ok(())
+}
+
+#[tokio::test]
+async fn viewport_committed_document_uses_its_own_cookie_site() -> Result<()> {
+    let server = moli_test_support::FixtureServer::spawn().await?;
+    let browser =
+        Browser::new(BrowserConfig::default().with_layout_policy(LayoutPolicy::Realtime))?;
+    let mut page = browser.create_viewport_page(Default::default()).await?;
+    let mut states = page.subscribe_navigation_state().await?;
+    let pending = page.start_viewport_navigation(Some(server.url("/cookie-scope/check")))?;
+    assert!(page.finish_viewport_navigation(pending.wait().await?)?);
+    let first = page_state(&mut states, |state| {
+        state.navigation.url.path() == "/cookie-scope/check"
+    })
+    .await?;
+    browser
+        .wait_for_selector(&mut page, "main", Duration::from_secs(5))
+        .await?;
+    let response = page
+        .evaluate_runtime_expression_with_await_async(
+            r#"
+            new Promise((resolve, reject) => {
+                const xhr = new XMLHttpRequest();
+                xhr.open("GET", "/cookie-scope/set");
+                xhr.onload = () => resolve(xhr.status);
+                xhr.onerror = () => reject(new Error("cookie request failed"));
+                xhr.send();
+            })
+            "#,
+            true,
+        )
+        .await?;
+    assert_eq!(response["value"], 200);
+    page.evaluate_runtime_expression_async(
+        "history.replaceState(null, '', '?return=1#status'); location.reload();",
+    )
+    .await?;
+    let second = page_state(&mut states, |state| state.document != first.document).await?;
+    assert_eq!(second.navigation.url.query(), Some("return=1"));
+    assert_eq!(second.navigation.url.fragment(), Some("status"));
+    browser
+        .wait_for_selector(&mut page, "main", Duration::from_secs(5))
+        .await?;
+    let result = page
+        .evaluate_runtime_expression_async("document.querySelector('main').textContent")
+        .await?;
+    assert_eq!(result["value"], "scoped-cookie=seen");
     Ok(())
 }
 

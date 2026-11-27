@@ -8,6 +8,7 @@ use crate::{
     LayoutBox, LayoutBoxId, LayoutRect, LayoutTransform2D, PaintBrush, PaintColor, PaintFragment,
     PaintGlyph, PaintGlyphRun, PaintShape, PaintSnapshot, PaintTextDecoration, PaintTextShadow,
     inline::{InlineFormattingContext, InlinePaintBounds, InlineSelection, glyph_cluster_ranges},
+    stylo_to_parley::TextBrush,
 };
 
 const SELECTION_COLOR: PaintColor = PaintColor::new(180.0 / 255.0, 213.0 / 255.0, 1.0, 1.0);
@@ -118,7 +119,8 @@ fn project_text_phase<N>(
         phase,
         text,
     };
-    for (line_index, line) in text_layout.lines().enumerate() {
+    let visible_lines = context.visible_lines(text_layout.len());
+    for (line_index, line) in text_layout.lines().take(visible_lines).enumerate() {
         let mut mapped_run = None;
         let mut cluster_ranges = Vec::new().into_iter();
         metrics.text_line_count = metrics.text_line_count.saturating_add(1);
@@ -176,7 +178,31 @@ fn project_text_phase<N>(
             let vertical_offset = line_placement
                 .map(|placement| placement.item_offset(item_index))
                 .unwrap_or_default();
-            paint.project_run(&glyph_run, vertical_offset, clusters, snapshot);
+            let brush = context.paint_brush(
+                usize::from(glyph_run.style_index()),
+                &glyph_run.style().brush,
+            );
+            paint.project_run(&glyph_run, brush, vertical_offset, clusters, snapshot);
+        }
+        if line_index + 1 == visible_lines
+            && !matches!(mask_scope, Some(TextClipMaskScope::InlineBox(_)))
+            && let Some((marker, position)) =
+                context.clamp_marker(text_layout, &context.line_placements)
+            && let Some(line) = marker.get(0)
+        {
+            let marker_paint = TextRunPaint {
+                origin_x: origin_x + position.x,
+                origin_y: origin_y + position.y,
+                transform,
+                phase,
+                text: None,
+            };
+            let brush = layout_box.style.parley_text_style().brush;
+            for item in line.items() {
+                if let PositionedLayoutItem::GlyphRun(run) = item {
+                    marker_paint.project_run(&run, &brush, 0.0, Vec::new(), snapshot);
+                }
+            }
         }
     }
 }
@@ -193,6 +219,7 @@ impl TextRunPaint {
     fn project_run(
         &self,
         glyph_run: &parley::GlyphRun<'_, crate::stylo_to_parley::TextBrush>,
+        brush: &TextBrush,
         vertical_offset: f32,
         clusters: Vec<std::ops::Range<usize>>,
         snapshot: &mut PaintSnapshot,
@@ -211,16 +238,15 @@ impl TextRunPaint {
         let run = glyph_run.run();
         let font = snapshot.intern_font(&run.font().font);
         let synthesis = run.synthesis();
-        let glyph_embolden =
-            if glyph_run.style().brush.synthetic_bold && synthesis.embolden_with_threshold(0.0) {
-                let font_size = run.font_size().max(0.0);
-                crate::PaintPoint::new(
-                    (SYNTHETIC_EMBOLDEN_X_EM * font_size).min(MAX_SYNTHETIC_EMBOLDEN_PX),
-                    (SYNTHETIC_EMBOLDEN_Y_EM * font_size).min(MAX_SYNTHETIC_EMBOLDEN_PX),
-                )
-            } else {
-                crate::PaintPoint::ZERO
-            };
+        let glyph_embolden = if brush.synthetic_bold && synthesis.embolden_with_threshold(0.0) {
+            let font_size = run.font_size().max(0.0);
+            crate::PaintPoint::new(
+                (SYNTHETIC_EMBOLDEN_X_EM * font_size).min(MAX_SYNTHETIC_EMBOLDEN_PX),
+                (SYNTHETIC_EMBOLDEN_Y_EM * font_size).min(MAX_SYNTHETIC_EMBOLDEN_PX),
+            )
+        } else {
+            crate::PaintPoint::ZERO
+        };
         let owned_run = PaintGlyphRun {
             font,
             font_size: run.font_size(),
@@ -232,7 +258,7 @@ impl TextRunPaint {
             color: if self.phase == TextPaintPhase::ClipMask {
                 PaintColor::BLACK
             } else {
-                glyph_run.style().brush.color
+                brush.color
             },
             glyph_skew_radians: synthesis.skew().map(f32::to_radians),
             glyph_embolden,
@@ -244,14 +270,13 @@ impl TextRunPaint {
             transform: self.transform,
             // Text clipping uses both fill and stroke as opaque ink,
             // even when the authored stroke color is transparent.
-            stroke: glyph_run.style().brush.stroke.map(|mut stroke| {
+            stroke: brush.stroke.map(|mut stroke| {
                 if self.phase == TextPaintPhase::ClipMask {
                     stroke.color = PaintColor::BLACK;
                 }
                 stroke
             }),
         };
-        let brush = &glyph_run.style().brush;
         if self.phase == TextPaintPhase::Foreground {
             for shadow in brush.shadows.iter().rev() {
                 snapshot.push_fragment(PaintFragment::TextShadow(PaintTextShadow {
@@ -434,6 +459,7 @@ impl<'a> InlineTextPaint<'a> {
             .map_or(0.0, |line| line.item_offset(item_index));
         paint.project_run(
             glyphs,
+            context.paint_brush(usize::from(glyphs.style_index()), &glyphs.style().brush),
             vertical_offset,
             if paint.text.is_some() {
                 clusters
@@ -516,6 +542,9 @@ pub(super) fn range_selection_rects<N>(
     let anchor = Cursor::from_byte_index(text_layout, range.start, Affinity::Downstream);
     let focus = Cursor::from_byte_index(text_layout, range.end, Affinity::Downstream);
     Selection::new(anchor, focus).geometry_with(text_layout, |rect, line_index| {
+        if line_index >= context.visible_lines(text_layout.len()) {
+            return;
+        }
         let rect = selection_rect(
             context,
             line_index,
@@ -554,6 +583,9 @@ pub(super) fn caret_rect<N>(layout_box: &LayoutBox<N>) -> Option<LayoutRect> {
         .find(|(_, line)| line.text_range().contains(offset))
         .map(|(index, _)| index)
         .unwrap_or_else(|| text_layout.lines().count().saturating_sub(1));
+    if line_index >= context.visible_lines(text_layout.len()) {
+        return None;
+    }
     let rect = selection_rect(
         context,
         line_index,

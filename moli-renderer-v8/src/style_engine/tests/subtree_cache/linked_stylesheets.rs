@@ -154,7 +154,7 @@ fn removed_linked_stylesheet_owner_lifecycle_marks_owner_document_dirty() {
 
     let effects = host.remove_child_effects(document, link);
     engine.apply_stylesheet_owner_changes_with_host(&host, effects.stylesheet_owners().changes());
-    let style_effects = StyleMutationEffect::from_dom_mutation_effects(&host, &effects);
+    let style_effects = StyleMutationEffect::from_dom_mutation_effects(&effects);
     let media = crate::protocol_types::EmulatedMediaOverrides::default();
     engine.invalidate_for_mutations(&host, &style_effects, &media);
 
@@ -217,7 +217,7 @@ fn linked_stylesheet_owner_lifecycle_uses_final_remove_in_same_batch() {
     effects.merge(host.append_child_effects(document, link));
     effects.merge(host.remove_child_effects(document, link));
     engine.apply_stylesheet_owner_changes_with_host(&host, effects.stylesheet_owners().changes());
-    let style_effects = StyleMutationEffect::from_dom_mutation_effects(&host, &effects);
+    let style_effects = StyleMutationEffect::from_dom_mutation_effects(&effects);
     let media = crate::protocol_types::EmulatedMediaOverrides::default();
     engine.invalidate_for_mutations(&host, &style_effects, &media);
 
@@ -278,7 +278,7 @@ fn inactive_linked_stylesheet_owner_lifecycle_marks_owner_document_dirty() {
 
     let effects = host.set_attribute_effects(link, "rel", "preload");
     engine.apply_stylesheet_owner_changes_with_host(&host, effects.stylesheet_owners().changes());
-    let style_effects = StyleMutationEffect::from_dom_mutation_effects(&host, &effects);
+    let style_effects = StyleMutationEffect::from_dom_mutation_effects(&effects);
     let media = crate::protocol_types::EmulatedMediaOverrides::default();
     engine.invalidate_for_mutations(&host, &style_effects, &media);
 
@@ -671,6 +671,7 @@ fn unrelated_document_linked_source_does_not_disable_no_source_fast_path() {
         &host,
         &[StyleMutationEffect::Attribute {
             element: active,
+            namespace: None,
             name: "class".to_owned(),
             old_value: None,
             new_value: Some("active".to_owned()),
@@ -717,6 +718,7 @@ fn uninstalled_link_and_unrelated_url_do_not_disable_no_source_fast_path() {
         &host,
         &[StyleMutationEffect::Attribute {
             element: active,
+            namespace: None,
             name: "class".to_owned(),
             old_value: None,
             new_value: Some("active".to_owned()),

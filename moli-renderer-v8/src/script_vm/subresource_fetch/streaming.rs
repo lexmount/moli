@@ -769,6 +769,7 @@ impl ScriptVm {
                         *sequence,
                         started.internal_id,
                         false,
+                        None,
                     ),
                     PendingSubresourceContinuation::TextTrack {
                         track_handle,
@@ -1030,6 +1031,7 @@ impl ScriptVm {
                     *sequence,
                     started.internal_id,
                     crate::network_host::media_response_status_is_successful(started.head.status),
+                    None,
                 ),
                 PendingSubresourceContinuation::TextTrack {
                     track_handle,

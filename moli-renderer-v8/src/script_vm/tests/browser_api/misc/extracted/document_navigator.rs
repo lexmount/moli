@@ -1061,3 +1061,111 @@ fn dom_point_matrix_transform_validates_matrix_init_and_returns_in_the_function_
         "0|true|false|30,52,12,10|TypeError|TypeError|no throw|no throw"
     );
 }
+
+#[test]
+fn geometry_exposes_legacy_window_aliases_without_replacing_native_svg_rect() {
+    let mut vm = new_storage_test_vm("https://geometry-legacy-window-aliases.test/");
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const interfaces = ["SVGPoint", "SVGRect", "SVGMatrix", "WebKitCSSMatrix"];
+  const descriptorShape = name => {
+    const descriptor = Object.getOwnPropertyDescriptor(globalThis, name);
+    return [
+      descriptor.value === globalThis[name],
+      descriptor.writable,
+      descriptor.enumerable,
+      descriptor.configurable
+    ].join(",");
+  };
+  const point = new SVGPoint(1, 2);
+  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  const rect = svg.createSVGRect();
+  rect.x = 3;
+  rect.y = 4;
+  rect.width = 5;
+  rect.height = 6;
+  const matrix = svg.createSVGMatrix();
+  matrix.a = 2;
+  return JSON.stringify({
+    identities: [
+      SVGPoint === DOMPoint,
+      SVGRect === DOMRect,
+      SVGMatrix === DOMMatrix,
+      WebKitCSSMatrix === DOMMatrix
+    ].join(","),
+    point: [point instanceof DOMPoint, point.x, point.y, String(point)].join(","),
+    rect: [rect instanceof SVGRect, rect instanceof DOMRect, rect.x, rect.height, String(rect)].join(","),
+    matrix: [
+      matrix instanceof DOMMatrix,
+      matrix instanceof SVGMatrix,
+      DOMMatrix.prototype.isPrototypeOf(matrix),
+      matrix.a,
+      Object.prototype.toString.call(matrix)
+    ].join(","),
+    descriptors: interfaces.map(descriptorShape).join("|")
+  });
+})()
+"#,
+        )
+        .expect("Geometry legacy Window aliases should evaluate");
+
+    assert_eq!(
+        result,
+        concat!(
+            r#"{"identities":"true,false,true,true","point":"true,1,2,[object DOMPoint]","rect":"true,false,3,6,[object SVGRect]","matrix":"true,true,true,2,[object SVGMatrix]","descriptors":""#,
+            "true,true,false,true|true,true,false,true|",
+            "true,true,false,true|true,true,false,true\"}"
+        )
+    );
+}
+
+#[test]
+fn svg_transform_factories_convert_optional_dom_matrix_2d_init() {
+    let mut vm = new_storage_test_vm("https://svg-transform-dom-matrix-init.test/");
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const SVG_NS = "http://www.w3.org/2000/svg";
+  const svg = document.createElementNS(SVG_NS, "svg");
+  const group = document.createElementNS(SVG_NS, "g");
+  const fromElement = svg.createSVGTransformFromMatrix({a: 2, e: 5});
+  const defaultElement = svg.createSVGTransformFromMatrix();
+  const fromFactory = svg.createSVGTransformFromMatrix(svg.createSVGMatrix().translate(9, 10));
+  const transform = svg.createSVGTransform();
+  transform.setMatrix({b: 4, f: 6});
+  const fromList = group.transform.baseVal.createSVGTransformFromMatrix({c: 7, d: 8});
+  let mismatch;
+  try {
+    transform.setMatrix({a: 1, m11: 2});
+    mismatch = "none";
+  } catch (error) {
+    mismatch = error.name;
+  }
+  return JSON.stringify({
+    fromElement: [fromElement.matrix.a, fromElement.matrix.e].join(","),
+    defaultElement: [defaultElement.matrix.a, defaultElement.matrix.d].join(","),
+    fromFactory: [fromFactory.matrix.e, fromFactory.matrix.f].join(","),
+    setMatrix: [transform.matrix.b, transform.matrix.f].join(","),
+    fromList: [fromList.matrix.c, fromList.matrix.d].join(","),
+    mismatch,
+    lengths: [
+      SVGSVGElement.prototype.createSVGTransformFromMatrix.length,
+      SVGTransform.prototype.setMatrix.length,
+      SVGTransformList.prototype.createSVGTransformFromMatrix.length
+    ].join(",")
+  });
+})()
+"#,
+        )
+        .expect("SVG transform DOMMatrix2DInit conversion should evaluate");
+
+    assert_eq!(
+        result,
+        r#"{"fromElement":"2,5","defaultElement":"1,1","fromFactory":"9,10","setMatrix":"4,6","fromList":"7,8","mismatch":"TypeError","lengths":"0,0,0"}"#
+    );
+}

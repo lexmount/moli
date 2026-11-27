@@ -1210,7 +1210,7 @@ pub(super) fn svg_animated_string_setter<'s>(
     else {
         return;
     };
-    let Some(value) = crate::native_bridge::element::set_svg_animated_string_base_value(
+    let Some(()) = crate::native_bridge::element::set_svg_animated_string_base_value(
         scope,
         owner,
         &attribute,
@@ -1218,7 +1218,7 @@ pub(super) fn svg_animated_string_setter<'s>(
     ) else {
         return;
     };
-    set_svg_animated_string_values(scope, animated, &value);
+    sync_svg_animated_string_from_owner_attribute(scope, animated);
 }
 
 pub(super) fn svg_animated_length_getter<'s>(
@@ -3159,13 +3159,13 @@ pub(super) fn svg_transform_list_create_transform_from_matrix_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let Some(parsed) = webidl::parse_args::<SvgListItemArgs>(scope, &args) else {
+    let Some(components) = svg_dom_matrix_2d_init_arg(
+        scope,
+        &args,
+        "SVGTransformList.createSVGTransformFromMatrix",
+    ) else {
         return;
     };
-    let Some(matrix) = cloned_svg_matrix_value_or_throw(scope, parsed.item) else {
-        return;
-    };
-    let components = svg_matrix_components(scope, matrix);
     rv.set(build_svg_transform(scope, SvgTransform::matrix(components)).into());
 }
 
@@ -3237,13 +3237,10 @@ pub(super) fn svg_transform_set_matrix_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let Some(parsed) = webidl::parse_args::<SvgMatrixArg>(scope, &args) else {
+    let Some(components) = svg_dom_matrix_2d_init_arg(scope, &args, "SVGTransform.setMatrix")
+    else {
         return;
     };
-    let Some(matrix) = cloned_svg_matrix_value_or_throw(scope, parsed.matrix) else {
-        return;
-    };
-    let components = svg_matrix_components(scope, matrix);
     set_svg_transform_state(scope, args.this(), SvgTransform::matrix(components));
     reflect_svg_transform_item_to_owner_list(scope, args.this());
     rv.set_undefined();

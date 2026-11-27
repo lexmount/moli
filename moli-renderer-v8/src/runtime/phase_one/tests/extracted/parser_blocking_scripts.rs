@@ -748,6 +748,7 @@ fn parser_owner_boundary_with_live_backend_queues_document_turn_before_runtime_w
             layout_configuration: moli_page_types::LayoutConfiguration {
                 policy: moli_page_types::LayoutPolicy::default(),
                 scrollbars_hidden: false,
+                ..Default::default()
             },
             wpt_extensions_enabled: false,
             navigation_bootstrap_entry: None,
@@ -1036,6 +1037,7 @@ fn parser_connected_head_script_does_not_push_later_head_tokens_into_body() {
                     layout_configuration: moli_page_types::LayoutConfiguration {
                         policy: moli_page_types::LayoutPolicy::default(),
                         scrollbars_hidden: false,
+                        ..Default::default()
                     },
                     wpt_extensions_enabled: false,
                 navigation_bootstrap_entry: None,
@@ -1212,6 +1214,7 @@ fn parser_connected_external_head_script_with_live_head_and_body_mutation_keeps_
                     layout_configuration: moli_page_types::LayoutConfiguration {
                         policy: moli_page_types::LayoutPolicy::default(),
                         scrollbars_hidden: false,
+                        ..Default::default()
                     },
                     wpt_extensions_enabled: false,
                 navigation_bootstrap_entry: None,
@@ -1810,6 +1813,7 @@ fn parser_owner_body_stylesheet_pause_preserves_unconsumed_tail_on_live_page_vm(
                 layout_configuration: moli_page_types::LayoutConfiguration {
                     policy: moli_page_types::LayoutPolicy::default(),
                     scrollbars_hidden: false,
+                    ..Default::default()
                 },
                 wpt_extensions_enabled: false,
                 navigation_bootstrap_entry: None,

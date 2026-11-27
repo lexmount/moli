@@ -2,17 +2,13 @@ use std::collections::HashSet;
 
 use indexmap::IndexSet;
 use moli_selector::StyloDomStyleAdapter;
+use style::invalidation::element::restyle_hints::RestyleHint;
 
 use crate::{document_runtime::DomHandle, dom::native::DomHost};
 
 use super::{
-    cache::PseudoStyleCache,
-    invalidation::handle_is_in_style_subtrees,
-    outcome::{
-        FinalizedStyleInvalidationResult, StyleInvalidationCleanupApplicationContext,
-        StyleInvalidationCleanupApplicationSink, StyleInvalidationCleanupApplicationSubtrees,
-    },
-    state::StyleDocumentState,
+    cache::PseudoStyleCache, invalidation::handle_is_in_style_subtrees, state::StyleDocumentState,
+    style_paths::StyleInvalidationScope,
 };
 
 pub(super) struct StyleInvalidationCleanup<'a> {
@@ -38,26 +34,39 @@ impl<'a> StyleInvalidationCleanup<'a> {
     }
 
     pub(super) fn clear_for_retained_style_system_rebuild(&self) {
-        self.document_state
-            .clear_invalidation_clear_all_fallback_reasons();
         self.clear_shadow_cascade_data_for_document_world();
-        self.clear_document_element_side_tables();
+        self.dom_adapter
+            .clear_element_data_for_document(self.document);
         self.pseudo_style_cache.clear();
         self.document_state.clear_selector_caches();
         self.document_state.bump_computed_cache_generation();
-        self.document_state.lazy_invalidation_roots.clear();
+        self.document_state.style_paths.clear();
     }
 
-    /// Retains Stylo's top-most dirty elements as lazy subtree roots.
-    /// Descendants inherit the root generation when they are next observed;
-    /// no document-wide published-style scan is performed here.
-    pub(super) fn retain_stylesheet_invalidation_roots(
+    /// The adapter already set the native hints. Publish their affected scopes
+    /// to the demand-driven scheduler and keep the original cascade modes.
+    pub(super) fn retain_native_invalidation_targets(
         &self,
         host: &DomHost,
-        roots: impl IntoIterator<Item = DomHandle>,
+        targets: Vec<(DomHandle, RestyleHint)>,
     ) {
-        let roots = self.existing_subtree_roots(host, roots);
-        self.record_lazy_invalidation_roots(host, &roots);
+        if targets.is_empty() {
+            return;
+        }
+        self.document_state.record_style_targets(
+            host,
+            self.dom_adapter,
+            self.document,
+            targets.iter().map(|&(handle, hint)| {
+                let scope = if hint.contains(RestyleHint::RESTYLE_DESCENDANTS) {
+                    StyleInvalidationScope::Subtree
+                } else {
+                    StyleInvalidationScope::Element
+                };
+                (handle, scope)
+            }),
+        );
+        self.invalidate_target_caches(targets.into_iter().map(|(handle, _)| handle));
     }
 
     pub(super) fn invalidate_detached_subtrees(
@@ -65,8 +74,6 @@ impl<'a> StyleInvalidationCleanup<'a> {
         host: &DomHost,
         roots: impl IntoIterator<Item = DomHandle>,
     ) -> bool {
-        self.document_state
-            .clear_invalidation_clear_all_fallback_reasons();
         let roots = self.existing_subtree_roots(host, roots);
         let selector_flag_handles = self.handles_in_style_subtrees(
             host,
@@ -74,25 +81,28 @@ impl<'a> StyleInvalidationCleanup<'a> {
             self.dom_adapter
                 .element_selector_flag_handles_for_document(self.document),
         );
-        let eagerly_invalidated_roots = self.record_lazy_invalidation_roots(host, &roots);
+        let eagerly_invalidated_roots = self.record_style_paths(host, &roots);
         let cleared = eagerly_invalidated_roots.is_some();
         if eagerly_invalidated_roots.is_some() {
             for &handle in &selector_flag_handles {
                 self.dom_adapter.clear_element_selector_flags(handle);
             }
-            self.clear_shadow_cascade_data_in_subtrees(host, &roots);
+            self.clear_shadow_cascade_data_in_subtrees(host, roots.iter().copied());
         }
         cleared
     }
 
-    pub(super) fn invalidate_inline_style_subtree(&self, host: &DomHost, root: DomHandle) -> bool {
-        self.document_state
-            .clear_invalidation_clear_all_fallback_reasons();
+    pub(super) fn invalidate_inline_style(
+        &self,
+        host: &DomHost,
+        root: DomHandle,
+        hint: RestyleHint,
+    ) -> bool {
         let roots = self.existing_subtree_roots(host, [root]);
         if roots.is_empty() {
             return false;
         }
-        self.record_lazy_invalidation_roots(host, &roots);
+        self.record_style_paths_targets(host, &roots, |_| StyleInvalidationScope::Element, hint);
         self.dom_adapter.clear_inline_style_attribute(root);
         true
     }
@@ -102,10 +112,8 @@ impl<'a> StyleInvalidationCleanup<'a> {
         host: &DomHost,
         roots: impl IntoIterator<Item = DomHandle>,
     ) -> bool {
-        self.document_state
-            .clear_invalidation_clear_all_fallback_reasons();
         let roots = self.existing_subtree_roots(host, roots);
-        self.record_lazy_invalidation_roots(host, &roots).is_some()
+        self.record_style_paths(host, &roots).is_some()
     }
 
     pub(super) fn invalidate_subtrees_and_shadow_cascade_data(
@@ -113,79 +121,12 @@ impl<'a> StyleInvalidationCleanup<'a> {
         host: &DomHost,
         roots: impl IntoIterator<Item = DomHandle>,
     ) -> bool {
-        self.document_state
-            .clear_invalidation_clear_all_fallback_reasons();
         let roots = self.existing_subtree_roots(host, roots);
-        let cleared = self.record_lazy_invalidation_roots(host, &roots).is_some();
+        let cleared = self.record_style_paths(host, &roots).is_some();
         if cleared {
-            self.clear_shadow_cascade_data_in_subtrees(host, &roots);
+            self.clear_shadow_cascade_data_in_subtrees(host, roots.iter().copied());
         }
         cleared
-    }
-
-    pub(super) fn apply_finalized_result(
-        &self,
-        host: &DomHost,
-        finalized_result: FinalizedStyleInvalidationResult,
-    ) -> bool {
-        let cleanup_application = finalized_result.into_cleanup_application();
-        cleanup_application.apply_to(host, self)
-    }
-
-    fn apply_subtree_cleanup_target(
-        &self,
-        host: &DomHost,
-        subtrees: StyleInvalidationCleanupApplicationSubtrees,
-        context: &StyleInvalidationCleanupApplicationContext,
-    ) -> bool {
-        let generations_before = self.document_state.generation_snapshot();
-        self.document_state
-            .clear_invalidation_clear_all_fallback_reasons();
-        let (affected_roots, shadow_cascade_scope_roots) = subtrees.into_root_sets();
-        let eagerly_invalidated_roots = self
-            .record_lazy_invalidation_roots(host, &affected_roots)
-            .expect("subtree cleanup application should carry an existing root");
-        let cleared_shadow_cascade_roots =
-            if context.clears_shadow_cascade_data_for_cleanup_target() {
-                self.clear_shadow_cascade_data_in_subtrees(host, &shadow_cascade_scope_roots)
-            } else {
-                IndexSet::new()
-            };
-        let generations_after = self.document_state.generation_snapshot();
-        context.trace_scoped_fallback(
-            self.document,
-            &affected_roots,
-            &eagerly_invalidated_roots,
-            &cleared_shadow_cascade_roots,
-            generations_before,
-            generations_after,
-        );
-        true
-    }
-
-    fn clear_all_for_invalidation_fallback(
-        &self,
-        context: &StyleInvalidationCleanupApplicationContext,
-    ) {
-        let generations_before = self.document_state.generation_snapshot();
-        self.document_state
-            .record_invalidation_clear_all_fallback_reasons(
-                context
-                    .clear_all_reasons()
-                    .expect("clear-all fallback cleanup should carry reasons")
-                    .iter()
-                    .copied(),
-            );
-        self.clear_document_element_side_tables();
-        if context.clears_shadow_cascade_data_for_cleanup_target() {
-            self.clear_shadow_cascade_data_for_document_world();
-        }
-        self.pseudo_style_cache.clear();
-        self.document_state.clear_selector_caches();
-        self.document_state.lazy_invalidation_roots.clear();
-        self.document_state.bump_computed_context_epoch();
-        let generations_after = self.document_state.generation_snapshot();
-        context.trace_clear_all_fallback(self.document, generations_before, generations_after);
     }
 
     pub(in crate::style_engine) fn clear_shadow_cascade_data_for_document_world(&self) {
@@ -196,12 +137,12 @@ impl<'a> StyleInvalidationCleanup<'a> {
     fn clear_shadow_cascade_data_in_subtrees(
         &self,
         host: &DomHost,
-        roots: &IndexSet<DomHandle>,
+        roots: impl IntoIterator<Item = DomHandle>,
     ) -> IndexSet<DomHandle> {
-        if roots.is_empty() {
+        let root_set = roots.into_iter().collect::<HashSet<_>>();
+        if root_set.is_empty() {
             return IndexSet::new();
         }
-        let root_set = roots.iter().copied().collect::<HashSet<_>>();
         let shadow_roots = self
             .dom_adapter
             .shadow_cascade_roots_for_document(self.document)
@@ -213,13 +154,6 @@ impl<'a> StyleInvalidationCleanup<'a> {
                 .clear_shadow_cascade_data_for_roots(shadow_roots.iter().copied());
         }
         shadow_roots
-    }
-
-    fn clear_document_element_side_tables(&self) {
-        self.dom_adapter
-            .clear_element_data_for_document(self.document);
-        self.dom_adapter
-            .clear_inline_style_attributes_for_document(self.document);
     }
 
     fn existing_subtree_roots(
@@ -249,18 +183,34 @@ impl<'a> StyleInvalidationCleanup<'a> {
             .collect()
     }
 
-    fn record_lazy_invalidation_roots(
+    fn record_style_paths(
         &self,
         host: &DomHost,
         roots: &IndexSet<DomHandle>,
     ) -> Option<IndexSet<DomHandle>> {
+        self.record_style_paths_targets(
+            host,
+            roots,
+            |_| StyleInvalidationScope::Subtree,
+            RestyleHint::RESTYLE_SELF,
+        )
+    }
+
+    fn record_style_paths_targets(
+        &self,
+        host: &DomHost,
+        roots: &IndexSet<DomHandle>,
+        scope: impl Fn(DomHandle) -> StyleInvalidationScope,
+        hint: RestyleHint,
+    ) -> Option<IndexSet<DomHandle>> {
         if roots.is_empty() {
             return None;
         }
-        self.document_state.lazy_invalidation_roots.record_roots(
+        self.document_state.record_style_targets(
             host,
+            self.dom_adapter,
             self.document,
-            roots.iter().copied(),
+            roots.iter().copied().map(|root| (root, scope(root))),
         );
 
         // Dirty the roots themselves immediately. Descendants are handled
@@ -273,37 +223,15 @@ impl<'a> StyleInvalidationCleanup<'a> {
         let immediately_invalidated = roots
             .iter()
             .copied()
-            .filter(|handle| self.dom_adapter.mark_element_style_dirty(*handle))
+            .filter(|handle| self.dom_adapter.mark_element_style_dirty(*handle, hint))
             .collect::<IndexSet<_>>();
-        self.pseudo_style_cache
-            .invalidate_handles(roots.iter().copied());
-        self.document_state.clear_selector_caches();
-        self.document_state.bump_computed_context_epoch();
+        self.invalidate_target_caches(roots.iter().copied());
         Some(immediately_invalidated)
     }
-}
 
-impl StyleInvalidationCleanupApplicationSink for StyleInvalidationCleanup<'_> {
-    fn apply_noop_cleanup_application(&self) -> bool {
-        self.document_state
-            .clear_invalidation_clear_all_fallback_reasons();
-        false
-    }
-
-    fn apply_clear_all_cleanup_application(
-        &self,
-        context: &StyleInvalidationCleanupApplicationContext,
-    ) -> bool {
-        self.clear_all_for_invalidation_fallback(context);
-        true
-    }
-
-    fn apply_subtree_roots_cleanup_application(
-        &self,
-        host: &DomHost,
-        subtrees: StyleInvalidationCleanupApplicationSubtrees,
-        context: &StyleInvalidationCleanupApplicationContext,
-    ) -> bool {
-        self.apply_subtree_cleanup_target(host, subtrees, context)
+    fn invalidate_target_caches(&self, handles: impl IntoIterator<Item = DomHandle>) {
+        self.pseudo_style_cache.invalidate_handles(handles);
+        self.document_state.clear_selector_caches();
+        self.document_state.bump_computed_context_epoch();
     }
 }

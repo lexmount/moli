@@ -269,6 +269,7 @@ pub enum InputAction {
     InsertText,
     DispatchTouchEvent,
     EmulateTouchFromMouseEvent,
+    SynthesizeScrollGesture,
     SynthesizeTapGesture,
 }
 
@@ -282,6 +283,7 @@ impl InputAction {
                 | Self::InsertText
                 | Self::DispatchTouchEvent
                 | Self::EmulateTouchFromMouseEvent
+                | Self::SynthesizeScrollGesture
                 | Self::SynthesizeTapGesture
         )
     }

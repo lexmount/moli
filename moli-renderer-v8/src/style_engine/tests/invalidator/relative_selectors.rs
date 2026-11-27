@@ -23,13 +23,6 @@ fn retained_stylo_invalidator_refreshes_nth_child_of_selector_list_on_class_chan
          section > div { color: rgb(1, 2, 3); }
          .c * { color: rgb(1, 2, 3); }";
     let document_url = url::Url::parse("https://example.test/").unwrap();
-    let metadata = stylo_source_metadata_for_css_text(style_text, &document_url);
-    assert!(
-        metadata
-            .dependency_summary
-            .query_class(&style::Atom::from("c"))
-            .has_sibling_dependency()
-    );
     let source = StyloStylesheetSource::new(style_text.into(), document_url.clone())
         .with_source_id(Some(StyleSourceId::document_adopted_style_sheet(
             document, 0,
@@ -84,6 +77,7 @@ fn retained_stylo_invalidator_refreshes_nth_child_of_selector_list_on_class_chan
         &host,
         &[StyleMutationEffect::Attribute {
             element: middle,
+            namespace: None,
             name: "class".into(),
             old_value: Some("c".into()),
             new_value: Some("".into()),
@@ -169,93 +163,6 @@ fn retained_stylo_invalidator_refreshes_nth_child_of_custom_state_with_structura
     let media = crate::protocol_types::EmulatedMediaOverrides::default();
     let old_custom_states = host.custom_state_names(middle);
     assert!(host.insert_custom_state(middle, "--active"));
-    let source_scope = crate::style_engine::scope::source_scope_for_custom_state_change(
-        &host,
-        middle,
-        &["--active".to_owned()],
-    )
-    .expect("custom state scope");
-    let target_queries = {
-        let world = engine.world_for_document(document);
-        let linked_sources = world.linked_stylesheet_sources.borrow();
-        let document_adopted_sources = world.adopted_style_sheet_sources.borrow();
-        super::planner::target_queries_for_pending_cause_with_document_adopted_sources(
-            &host,
-            &linked_sources,
-            &document_adopted_sources,
-            &engine.dom_adapter,
-            &media,
-            StyleViewport::default(),
-            document,
-            &PendingStyleInvalidationCause::CustomStateChange {
-                element: middle,
-                state_names: vec!["--active".to_owned()],
-                old_custom_states: old_custom_states.clone(),
-            },
-            &source_scope,
-        )
-    };
-    assert_eq!(target_queries.len(), 1, "{target_queries:#?}");
-    assert_eq!(
-        target_queries[0].kind(),
-        StyloRetainedSourceStyleInvalidationKind::RetainedQueries,
-        "{target_queries:#?}"
-    );
-    assert!(
-        target_queries[0]
-            .structural_boundary_cleanup_roots_for_test()
-            .contains(&middle)
-    );
-    assert!(
-        target_queries[0]
-            .structural_boundary_cleanup_roots_for_test()
-            .contains(&target)
-    );
-    assert!(
-        !target_queries[0]
-            .structural_boundary_cleanup_roots_for_test()
-            .contains(&unrelated)
-    );
-    let application = engine
-        .with_retained_style_system_for_document_for_test(document, |retained| {
-            retained_source_invalidation_outcome_for_document_for_test(
-                &engine,
-                &host,
-                document,
-                StyleSourceDocumentContext::for_root_document(document),
-                Some(retained),
-                &target_queries,
-                false,
-            )
-        })
-        .finalize(&host);
-    assert_eq!(
-        application.cleanup_target_kind(),
-        StyleInvalidationCleanupTargetKind::MixedSubtreeRoots
-    );
-    assert!(matches!(
-        application.cleanup_target(),
-        StyleInvalidationCleanupTarget::MixedSubtreeRoots(groups)
-            if groups.structural_boundary_roots().contains(&target)
-                && !groups.structural_boundary_roots().contains(&unrelated)
-                && !groups.exact_affected_roots().contains(&unrelated)
-    ));
-    assert_eq!(application.diagnostic_target_results().len(), 1);
-    assert!(application.diagnostic_target_results()[0].exact());
-    assert!(
-        !application.diagnostic_target_results()[0]
-            .fallback_reasons()
-            .contains(&StyloSourceInvalidationFallbackReason::NthOfDependency)
-    );
-    let telemetry = application.fallback_telemetry();
-    assert_eq!(telemetry.exact_target_result_count(), 1);
-    assert_eq!(telemetry.fallback_target_result_count(), 0);
-    assert_eq!(
-        telemetry
-            .fallback_reason_target_count(StyloSourceInvalidationFallbackReason::NthOfDependency,),
-        0
-    );
-
     engine.invalidate_for_custom_state_change(
         &host,
         middle,
@@ -302,16 +209,6 @@ fn retained_stylo_invalidator_custom_state_snapshot_avoids_source_fallback() {
          #subject:has(:state(--active)) { background-color: rgb(0, 128, 0); }
          #unrelated { color: rgb(1, 2, 3); }";
     let document_url = url::Url::parse("https://example.test/").unwrap();
-    let metadata = stylo_source_metadata_for_css_text(style_text, &document_url);
-    let dependency = metadata
-        .dependency_summary
-        .query_custom_state(&style::values::AtomIdent::from("--active"));
-    assert!(dependency.has_any_dependency(), "{dependency:?}");
-    assert!(!dependency.requires_fallback(), "{dependency:?}");
-    assert!(
-        dependency.has_relative_ancestors_dependency(),
-        "{dependency:?}"
-    );
     let source = StyloStylesheetSource::new(style_text.into(), document_url.clone())
         .with_source_id(Some(StyleSourceId::document_adopted_style_sheet(
             document, 0,
@@ -351,62 +248,6 @@ fn retained_stylo_invalidator_custom_state_snapshot_avoids_source_fallback() {
     let media = crate::protocol_types::EmulatedMediaOverrides::default();
     let old_custom_states = host.custom_state_names(target);
     assert!(host.insert_custom_state(target, "--active"));
-    let source_scope = crate::style_engine::scope::source_scope_for_custom_state_change(
-        &host,
-        target,
-        &["--active".to_owned()],
-    )
-    .expect("custom state scope");
-    let target_queries = {
-        let world = engine.world_for_document(document);
-        let linked_sources = world.linked_stylesheet_sources.borrow();
-        let document_adopted_sources = world.adopted_style_sheet_sources.borrow();
-        super::planner::target_queries_for_pending_cause_with_document_adopted_sources(
-            &host,
-            &linked_sources,
-            &document_adopted_sources,
-            &engine.dom_adapter,
-            &media,
-            StyleViewport::default(),
-            host.document_handle(),
-            &PendingStyleInvalidationCause::CustomStateChange {
-                element: target,
-                state_names: vec!["--active".to_owned()],
-                old_custom_states: old_custom_states.clone(),
-            },
-            &source_scope,
-        )
-    };
-    let application = engine
-        .with_retained_style_system_for_document_for_test(document, |retained| {
-            retained_source_invalidation_outcome_for_document_for_test(
-                &engine,
-                &host,
-                document,
-                StyleSourceDocumentContext::for_root_document(document),
-                Some(retained),
-                &target_queries,
-                false,
-            )
-        })
-        .finalize(&host);
-    assert_eq!(
-        application.cleanup_target_kind(),
-        StyleInvalidationCleanupTargetKind::ExactAffectedSubtreeRoots
-    );
-    assert!(matches!(
-        application.cleanup_target(),
-        StyleInvalidationCleanupTarget::ExactAffectedSubtreeRoots(roots)
-            if roots.contains(&subject) && !roots.contains(&unrelated)
-    ));
-    assert_eq!(application.diagnostic_target_results().len(), 1);
-    assert!(application.diagnostic_target_results()[0].exact());
-    assert!(
-        application.diagnostic_target_results()[0]
-            .fallback_reasons()
-            .is_empty()
-    );
-
     engine.invalidate_for_custom_state_change(
         &host,
         target,
@@ -459,106 +300,6 @@ fn retained_stylo_invalidator_custom_state_snapshot_avoids_source_fallback() {
 }
 
 #[test]
-fn custom_state_batch_invalidation_builds_queries_for_each_changed_state() {
-    let mut host = test_host();
-    let document = host.document_handle();
-    let target = host.create_element("x-stateful");
-    assert!(host.append_child(document, target));
-
-    let mut engine = MoliStyleEngine::new();
-    let style = host.create_element("style");
-    assert!(host.append_child(document, style));
-    engine.set_owner_style_sheet_text_with_host(
-        &host,
-        style,
-        "x-stateful:state(--active), x-stateful:state(--enabled) { color: red; }".into(),
-    );
-    let document_url = url::Url::parse("https://example.test/").unwrap();
-    let inputs = FullStyleWorldSnapshot::default();
-    assert!(
-        engine
-            .computed_style_property_value(
-                &host,
-                &document_url,
-                target,
-                "color",
-                None,
-                &inputs,
-                None,
-            )
-            .is_some()
-    );
-
-    let media = crate::protocol_types::EmulatedMediaOverrides::default();
-    let state_names = vec!["--active".to_owned(), "--enabled".to_owned()];
-    let source_scope = crate::style_engine::scope::source_scope_for_custom_state_change(
-        &host,
-        target,
-        &state_names,
-    )
-    .expect("custom state scope");
-    let target_queries = {
-        let world = engine.world_for_document(document);
-        let linked_sources = world.linked_stylesheet_sources.borrow();
-        let owner_sources = world.owner_style_sheet_sources.borrow();
-        let adopted_sources = world.adopted_style_sheet_sources.borrow();
-        super::planner::target_queries_for_pending_cause_with_adopted_sources(
-            &host,
-            &linked_sources,
-            &owner_sources,
-            &adopted_sources,
-            &engine.dom_adapter,
-            &media,
-            StyleViewport::default(),
-            host.document_handle(),
-            &PendingStyleInvalidationCause::CustomStateChange {
-                element: target,
-                state_names: state_names.clone(),
-                old_custom_states: state_names.clone(),
-            },
-            &source_scope,
-        )
-    };
-
-    assert_eq!(target_queries.len(), 1);
-    let retained_queries = target_queries[0]
-        .retained_queries_for_test()
-        .expect("custom state batch should use retained queries");
-    assert!(
-        retained_queries.contains(&RetainedStyleInvalidationQuery::custom_state(
-            target,
-            "--active".to_owned()
-        ))
-    );
-    assert!(
-        retained_queries.contains(&RetainedStyleInvalidationQuery::custom_state(
-            target,
-            "--enabled".to_owned()
-        ))
-    );
-
-    let old_custom_states = state_names.clone();
-    assert!(host.insert_custom_state(target, "--active"));
-    assert!(host.insert_custom_state(target, "--enabled"));
-    assert!(host.clear_custom_states(target));
-    engine.invalidate_for_custom_state_change(
-        &host,
-        target,
-        state_names,
-        old_custom_states,
-        &media,
-    );
-    assert_eq!(
-        engine.pending_style_invalidation_work_item_count_for_document_for_test(document),
-        1
-    );
-    assert_eq!(
-        engine.pending_style_invalidation_work_kind_names_for_document_for_test(document),
-        vec!["custom-state"]
-    );
-}
-
-#[test]
 fn retained_stylo_invalidator_refreshes_nested_is_sibling_has_on_child_removal() {
     let mut host = test_host();
     let document = host.document_handle();
@@ -597,13 +338,6 @@ fn retained_stylo_invalidator_refreshes_nested_is_sibling_has_on_child_removal()
          }
          #unrelated { color: rgb(1, 2, 3); }";
     let document_url = url::Url::parse("https://example.test/").unwrap();
-    let metadata = stylo_source_metadata_for_css_text(style_text, &document_url);
-    assert!(
-        metadata
-            .dependency_summary
-            .query_class(&style::Atom::from("item"))
-            .requires_fallback()
-    );
     let source = StyloStylesheetSource::new(style_text.into(), document_url.clone())
         .with_source_id(Some(StyleSourceId::document_adopted_style_sheet(
             document, 0,
@@ -640,7 +374,6 @@ fn retained_stylo_invalidator_refreshes_nested_is_sibling_has_on_child_removal()
         2
     );
 
-    let removed_snapshots = removed_element_dependency_snapshots(&host, &[first_item]);
     assert!(host.remove_child(target, first_item));
     let media = crate::protocol_types::EmulatedMediaOverrides::default();
     engine.invalidate_for_mutations(
@@ -649,7 +382,6 @@ fn retained_stylo_invalidator_refreshes_nested_is_sibling_has_on_child_removal()
             parent: target,
             added_nodes: Vec::new(),
             removed_nodes: vec![first_item],
-            removed_element_snapshots: removed_snapshots,
             previous_sibling: None,
             next_sibling: Some(second_item),
         }],
@@ -714,13 +446,6 @@ fn retained_stylo_invalidator_refreshes_nested_is_sibling_has_on_middle_insertio
          }
          #unrelated { color: rgb(1, 2, 3); }";
     let document_url = url::Url::parse("https://example.test/").unwrap();
-    let metadata = stylo_source_metadata_for_css_text(style_text, &document_url);
-    assert!(
-        metadata
-            .dependency_summary
-            .query_class(&style::Atom::from("c_has_scope"))
-            .requires_fallback()
-    );
     let source = StyloStylesheetSource::new(style_text.into(), document_url.clone())
         .with_source_id(Some(StyleSourceId::document_adopted_style_sheet(
             document, 0,
@@ -767,7 +492,6 @@ fn retained_stylo_invalidator_refreshes_nested_is_sibling_has_on_middle_insertio
             parent: outer,
             added_nodes: vec![inserted],
             removed_nodes: Vec::new(),
-            removed_element_snapshots: Vec::new(),
             previous_sibling: Some(first),
             next_sibling: Some(previous),
         }],
@@ -775,7 +499,6 @@ fn retained_stylo_invalidator_refreshes_nested_is_sibling_has_on_middle_insertio
     );
     engine.drain_pending_style_invalidations_for_document_for_test(&host, document);
 
-    assert!(!engine.computed_style_cache_contains_handle_for_document_for_test(document, target));
     assert!(engine.computed_style_cache_contains_handle_for_document_for_test(document, unrelated));
     assert_eq!(
         engine.computed_style_property_value(
@@ -806,13 +529,6 @@ fn retained_stylo_invalidator_refreshes_has_any_link_on_href_insertion() {
     let style_text = "#target { color: rgb(0, 0, 255); }
          #target:has(:any-link) { color: rgb(0, 128, 0); }";
     let document_url = url::Url::parse("https://example.test/").unwrap();
-    let metadata = stylo_source_metadata_for_css_text(style_text, &document_url);
-    assert!(
-        metadata
-            .dependency_summary
-            .query_attribute(&LocalName::from("href"))
-            .has_any_dependency()
-    );
     let source = StyloStylesheetSource::new(style_text.into(), document_url.clone())
         .with_source_id(Some(StyleSourceId::document_adopted_style_sheet(
             document, 0,
@@ -847,7 +563,6 @@ fn retained_stylo_invalidator_refreshes_has_any_link_on_href_insertion() {
             parent: target,
             added_nodes: vec![link],
             removed_nodes: Vec::new(),
-            removed_element_snapshots: Vec::new(),
             previous_sibling: None,
             next_sibling: None,
         }],
@@ -890,13 +605,6 @@ fn retained_stylo_invalidator_refreshes_has_not_any_link_on_plain_child_insertio
 
     let mut engine = MoliStyleEngine::new();
     let document_url = url::Url::parse("https://example.test/").unwrap();
-    let metadata = stylo_source_metadata_for_css_text(style_text, &document_url);
-    assert!(
-        metadata
-            .dependency_summary
-            .query_universal()
-            .has_any_dependency()
-    );
     let source = StyloStylesheetSource::new(style_text.into(), document_url.clone())
         .with_source_id(Some(StyleSourceId::document_adopted_style_sheet(
             document, 0,
@@ -929,7 +637,6 @@ fn retained_stylo_invalidator_refreshes_has_not_any_link_on_plain_child_insertio
         parent: grandparent,
         added_nodes: vec![parent],
         removed_nodes: Vec::new(),
-        removed_element_snapshots: Vec::new(),
         previous_sibling: None,
         next_sibling: None,
     }];

@@ -1,3 +1,5 @@
+use std::{cell::Cell, ptr::NonNull};
+
 use super::super::image_data::new_uint8_clamped_array_from_bytes;
 use super::{OFFSCREEN_CANVAS_HEIGHT_SLOT, OFFSCREEN_CANVAS_WIDTH_SLOT};
 use crate::util::{get_private_object, get_private_value, set_private_value};
@@ -10,6 +12,7 @@ use moli_canvas::{byte_len as canvas_byte_len, encode_data_url};
 use moli_webapi_declare::WebApiObject;
 
 use moli_webapi::canvas_context_values::CANVAS_BACKING_STORE_SLOT;
+const CANVAS_ORIGIN_CLEAN_SLOT: &str = "__moliCanvasOriginClean";
 const CANVAS_OWNER_SLOT: &str = "__moliCanvasOwner";
 const CANVAS_HAS_CONTEXT_SLOT: &str = "__moliCanvasHasContext";
 const CANVAS_2D_CONTEXT_SLOT: &str = "__moliCanvas2DContext";
@@ -55,10 +58,28 @@ pub(super) fn canvas_like_has_context<'s>(
         .is_some_and(|value| value.boolean_value(scope))
 }
 
+pub(super) fn canvas_like_origin_clean<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    canvas: v8::Local<'s, v8::Object>,
+) -> bool {
+    get_private_value(scope, canvas, CANVAS_ORIGIN_CLEAN_SLOT)
+        .is_none_or(|value| value.boolean_value(scope))
+}
+
+pub(super) fn set_canvas_like_origin_clean<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    canvas: v8::Local<'s, v8::Object>,
+    clean: bool,
+) {
+    let value = v8::Boolean::new(scope, clean);
+    set_private_value(scope, canvas, CANVAS_ORIGIN_CLEAN_SLOT, value.into());
+}
+
 pub(crate) fn reset_canvas_like_backing_store<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     canvas: v8::Local<'s, v8::Object>,
 ) {
+    set_canvas_like_origin_clean(scope, canvas, true);
     if let Some(context) = canvas_2d_context(scope, canvas) {
         super::context2d::reset_canvas_context_state(scope, context);
     }
@@ -75,7 +96,9 @@ pub(crate) fn reset_canvas_like_backing_store<'s>(
         return;
     };
     set_private_value(scope, canvas, CANVAS_BACKING_STORE_SLOT, bytes.into());
-    replace_html_canvas_pixels(scope, canvas, width, height, vec![0; len]);
+    if let Some(storage) = CanvasPixels::from_view(scope, bytes, width, height) {
+        replace_html_canvas_pixels(scope, canvas, storage);
+    }
 }
 
 pub(super) fn canvas_2d_context<'s>(
@@ -115,8 +138,30 @@ pub(crate) fn canvas_like_to_data_url<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     canvas: v8::Local<'s, v8::Object>,
 ) -> Option<String> {
+    if !canvas_like_origin_clean(scope, canvas) {
+        webidl::throw_dom_exception(scope, "SecurityError", "Canvas is not origin-clean.");
+        return None;
+    }
     let (bytes, width, height) = canvas_like_pixels_copy(scope, canvas)?;
     encode_data_url(&bytes, width, height)
+}
+
+pub(crate) fn canvas_like_to_blob<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    canvas: v8::Local<'s, v8::Object>,
+) -> Option<v8::Local<'s, v8::Value>> {
+    if !canvas_like_origin_clean(scope, canvas) {
+        webidl::throw_dom_exception(scope, "SecurityError", "Canvas is not origin-clean.");
+        return None;
+    }
+    let blob = canvas_like_pixels_copy(scope, canvas)
+        .filter(|(_, width, height)| *width != 0 && *height != 0)
+        .and_then(|(bytes, width, height)| moli_image::encode_png_rgba8(width, height, &bytes).ok())
+        .and_then(|png| super::build_blob_object(scope, png.bytes, "image/png".to_owned()));
+    Some(
+        blob.map(Into::into)
+            .unwrap_or_else(|| v8::null(scope).into()),
+    )
 }
 
 pub(super) fn canvas_owner_from_context<'s>(
@@ -134,38 +179,113 @@ pub(super) fn with_canvas_like_pixels_mut<'s, F>(
 where
     F: FnOnce(&mut [u8], u32, u32),
 {
-    let Some((view, width, height)) = canvas_like_pixel_view(scope, canvas) else {
+    let Some(storage) = canvas_like_pixels(scope, canvas) else {
         return false;
     };
-    let mut bytes = vec![0; view.byte_length()];
-    let written = view.copy_contents(&mut bytes);
-    bytes.truncate(written);
-    mutate(&mut bytes, width, height);
-    if write_bytes_to_view(scope, view, &bytes).is_none() {
-        return false;
-    }
-    replace_html_canvas_pixels(scope, canvas, width, height, bytes);
+    // The backing store is private to the canvas and belongs to this isolate.
+    // The pixel operation runs on the owner thread without calling JavaScript.
+    let pixels = unsafe { std::slice::from_raw_parts_mut(storage.data().as_ptr(), storage.len()) };
+    mutate(pixels, storage.width, storage.height);
+    replace_html_canvas_pixels(scope, canvas, storage);
     true
+}
+
+/// Private, fixed-size canvas storage. Only immutable snapshots leave the
+/// renderer thread. Multiple views in this thread may own the same backing.
+#[derive(Clone)]
+pub(crate) struct CanvasPixels {
+    backing: v8::SharedRef<v8::BackingStore>,
+    pub(crate) width: u32,
+    pub(crate) height: u32,
+}
+
+impl CanvasPixels {
+    fn from_view<'s>(
+        scope: &mut v8::PinScope<'s, '_>,
+        view: v8::Local<'s, v8::Uint8ClampedArray>,
+        width: u32,
+        height: u32,
+    ) -> Option<Self> {
+        let backing = view.buffer(scope)?.get_backing_store();
+        if view.byte_offset() != 0
+            || view.byte_length() != canvas_byte_len(width, height)?
+            || view.byte_length() != backing.byte_length()
+            || backing.is_shared()
+            || backing.is_resizable_by_user_javascript()
+        {
+            return None;
+        }
+        Some(Self {
+            backing,
+            width,
+            height,
+        })
+    }
+
+    pub(crate) fn len(&self) -> usize {
+        self.backing.byte_length()
+    }
+
+    fn data(&self) -> NonNull<u8> {
+        self.backing
+            .data()
+            .map(NonNull::cast)
+            .unwrap_or_else(NonNull::dangling)
+    }
+
+    pub(crate) fn same_storage(&self, other: &Self) -> bool {
+        std::ptr::eq(&*self.backing, &*other.backing)
+            && self.width == other.width
+            && self.height == other.height
+    }
+
+    pub(crate) fn pixels_copy(&self) -> Vec<u8> {
+        self.backing.iter().map(Cell::get).collect()
+    }
+
+    /// The caller must keep the isolate and the source allocation quiescent
+    /// until the returned slice is dropped.
+    pub(super) unsafe fn draw_source<'a>(
+        &'a self,
+        destination: &[u8],
+    ) -> std::borrow::Cow<'a, [u8]> {
+        if self.data().as_ptr().cast_const() == destination.as_ptr() {
+            // A self draw must finish sampling the old pixels before writing.
+            std::borrow::Cow::Owned(destination.to_vec())
+        } else {
+            // Canvas backings are disjoint allocations. The Canvas drawing
+            // callback performs no script calls while it holds this borrow.
+            let bytes = unsafe { std::slice::from_raw_parts(self.data().as_ptr(), self.len()) };
+            std::borrow::Cow::Borrowed(bytes)
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn from_owned(width: u32, height: u32, rgba: Vec<u8>) -> Self {
+        assert_eq!(Some(rgba.len()), canvas_byte_len(width, height));
+        Self {
+            backing: v8::ArrayBuffer::new_backing_store_from_vec(rgba).make_shared(),
+            width,
+            height,
+        }
+    }
 }
 
 pub(super) fn canvas_like_pixels_copy<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     canvas: v8::Local<'s, v8::Object>,
 ) -> Option<(Vec<u8>, u32, u32)> {
-    let (view, width, height) = canvas_like_pixel_view(scope, canvas)?;
-    let mut bytes = vec![0; view.byte_length()];
-    let written = view.copy_contents(&mut bytes);
-    bytes.truncate(written);
-    Some((bytes, width, height))
+    let storage = canvas_like_pixels(scope, canvas)?;
+    Some((storage.pixels_copy(), storage.width, storage.height))
 }
 
-fn canvas_like_pixel_view<'s>(
+pub(super) fn canvas_like_pixels<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     canvas: v8::Local<'s, v8::Object>,
-) -> Option<(v8::Local<'s, v8::Uint8ClampedArray>, u32, u32)> {
+) -> Option<CanvasPixels> {
     let (width, height) = canvas_like_dimensions(scope, canvas)?;
     let view = ensure_canvas_like_backing_store(scope, canvas)?;
-    Some((view, width, height))
+    CanvasPixels::from_view(scope, view, width, height)
 }
 
 fn ensure_canvas_like_backing_store<'s>(
@@ -182,7 +302,9 @@ fn ensure_canvas_like_backing_store<'s>(
     }
     let bytes = new_uint8_clamped_array_from_bytes(scope, vec![0; expected_len])?;
     set_private_value(scope, canvas, CANVAS_BACKING_STORE_SLOT, bytes.into());
-    replace_html_canvas_pixels(scope, canvas, width, height, vec![0; expected_len]);
+    if let Some(storage) = CanvasPixels::from_view(scope, bytes, width, height) {
+        replace_html_canvas_pixels(scope, canvas, storage);
+    }
     Some(bytes)
 }
 
@@ -201,14 +323,12 @@ fn html_canvas_identity<'s>(
 fn replace_html_canvas_pixels<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     canvas: v8::Local<'s, v8::Object>,
-    width: u32,
-    height: u32,
-    rgba: Vec<u8>,
+    storage: CanvasPixels,
 ) {
     let Some((runtime_ptr, handle)) = html_canvas_identity(scope, canvas) else {
         return;
     };
-    let _ = unsafe { &mut *runtime_ptr }.replace_canvas_pixels(handle, width, height, rgba);
+    let _ = unsafe { &mut *runtime_ptr }.replace_canvas_pixels(handle, storage);
 }
 
 fn remove_html_canvas_pixels<'s>(
@@ -241,22 +361,4 @@ fn canvas_like_dimension<'s>(
         .or_else(|| webidl::optional_number_property(scope, canvas, public_name))
         .unwrap_or(0.0);
     Some(value.max(0.0).trunc() as u32)
-}
-
-fn write_bytes_to_view<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    view: v8::Local<'s, v8::Uint8ClampedArray>,
-    bytes: &[u8],
-) -> Option<()> {
-    if view.byte_length() != bytes.len() {
-        return None;
-    }
-    let backing_store = view.buffer(scope)?;
-    let data = backing_store.data()?;
-    let ptr = data.as_ptr() as *mut u8;
-    let byte_offset = view.byte_offset();
-    unsafe {
-        std::ptr::copy_nonoverlapping(bytes.as_ptr(), ptr.add(byte_offset), bytes.len());
-    }
-    Some(())
 }

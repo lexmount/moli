@@ -4,6 +4,9 @@ version = "0.1.0"
 edition = "2024"
 license = "MIT OR Apache-2.0"
 
+[features]
+molio = []
+
 [dependencies]
 krilla = { git = "https://github.com/lexmount/krilla", rev = "c1f42beeb7fcefd958c27e3a72c5f120eba071b7", default-features = false, features = ["raster-images"] }
 skrifa = "0.44.0"
@@ -15,7 +18,15 @@ moli-layout = { path = "../moli-layout" }
 peniko = "0.6.0"
 
 [dev-dependencies]
+glifo = { version = "0.3.0", default-features = false }
 lopdf = { version = "0.45.0", default-features = false }
+
+[target.aarch64-apple-ios.dependencies]
+glifo = { version = "0.3.0", default-features = false }
+moli-system-fonts = { path = "../moli-system-fonts" }
+objc2-core-foundation = { version = "0.3.2", default-features = false, features = ["alloc", "CFString"] }
+objc2-core-graphics = { version = "0.3.2", default-features = false, features = ["CGAffineTransform", "CGFont", "CGPath"] }
+objc2-core-text = { version = "0.3.2", default-features = false, features = ["CTFont", "objc2-core-graphics"] }
 
 [lints]
 workspace = true

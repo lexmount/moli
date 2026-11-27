@@ -27,7 +27,7 @@ impl ScriptVm {
         };
         self.with_default_context_scope(|scope, host_ptr| {
             Ok(
-                unsafe { &mut *host_ptr }.navigate_child_browsing_context_to_url(
+                unsafe { &mut *host_ptr }.navigate_child_browsing_context_from_browser(
                     scope,
                     child_handle,
                     url,

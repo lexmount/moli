@@ -68,6 +68,87 @@ fn synthetic_document_context_preserves_its_inherited_origin() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn file_display_access_is_bound_to_a_committed_document_and_its_inheritors()
+-> anyhow::Result<()> {
+    use super::DocumentResourceAuthoritySource;
+    use crate::network::navigation::NavigationResourceLoader;
+    use moli_fetch::{BrowserRequestMetadata, LocalFileNavigationAccess, Request, RequestMode};
+
+    let directory = tempfile::tempdir()?;
+    let file = directory.path().join("page.html");
+    std::fs::write(&file, "<p>file fixture</p>")?;
+    std::fs::write(directory.path().join("style.css"), "p { color: green }")?;
+    let url = Url::from_file_path(file).expect("temporary path is absolute");
+    let style = url.join("style.css")?;
+    let stylesheet = Request::new_browser_bytes(
+        "GET",
+        style.as_str(),
+        None,
+        vec![],
+        moli_url::WebOrigin::Opaque,
+    )?
+    .with_initiator_url(&url)
+    .with_request_mode(RequestMode::NoCors)
+    .with_browser_request_metadata(BrowserRequestMetadata::Style);
+
+    let client = ResourceRequestClient::new(&FetchConfig::default())?;
+    let synthetic = document_loader(client.handle(), 1, url.as_str());
+    assert!(
+        synthetic
+            .request_client()
+            .fetch_text_stream(stylesheet.clone())
+            .await
+            .is_err()
+    );
+
+    let navigation =
+        NavigationResourceLoader::new(client.handle(), url.clone(), resource_task_runner());
+    let request = Request::new_browser_bytes(
+        "GET",
+        url.as_str(),
+        None,
+        vec![],
+        moli_url::WebOrigin::Opaque,
+    )?
+    .with_request_mode(RequestMode::Navigate)
+    .with_local_file_navigation_access(LocalFileNavigationAccess::BrowserGranted);
+    navigation.fetch(request).await?;
+    let source = DocumentResourceAuthoritySource::Navigation(navigation.commit(url.clone())?);
+    let document = DocumentResourceLoader::for_committed_document(context(2, url.as_str()), source);
+    let inherited = document.fork_for_document(context(3, "about:srcdoc"));
+    let replacement = document.fork_for_document(context(4, "https://example.test/"));
+    for loader in [&document, &inherited] {
+        let response = loader
+            .request_client()
+            .fetch_text_stream(stylesheet.clone())
+            .await?;
+        assert_eq!(response.body_text(), "p { color: green }");
+        let script_read = stylesheet
+            .clone()
+            .with_browser_request_metadata(BrowserRequestMetadata::Fetch);
+        assert!(
+            loader
+                .request_client()
+                .fetch_text_stream(script_read)
+                .await
+                .is_err()
+        );
+    }
+    assert!(
+        replacement
+            .request_client()
+            .fetch_text_stream(stylesheet.clone())
+            .await
+            .is_err()
+    );
+
+    let frozen = document.frozen_request_client();
+    document.begin_detach();
+    assert!(frozen.fetch_text_stream(stylesheet).await.is_err());
+    Ok(())
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn document_authorities_share_backend_but_not_lifecycle() {
     let transport =
         ResourceRequestClient::new(&FetchConfig::default()).expect("resource transport");

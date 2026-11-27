@@ -1420,7 +1420,7 @@ fn binary_dump_modes_require_layout() -> Result<()> {
         );
         let stderr = String::from_utf8_lossy(&output.stderr);
         assert!(
-            stderr.contains(&format!("--dump {dump} requires --layout")),
+            stderr.contains(&format!("--dump {dump} requires --lazy")),
             "stderr={stderr}"
         );
     }

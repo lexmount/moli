@@ -80,7 +80,6 @@ fn nth_of_child_list_insertion_invalidates_only_changed_and_following_sibling_su
             parent: container,
             added_nodes: vec![inserted],
             removed_nodes: Vec::new(),
-            removed_element_snapshots: Vec::new(),
             previous_sibling: Some(first),
             next_sibling: Some(target),
         }],
@@ -190,7 +189,6 @@ fn nth_of_child_list_removal_invalidates_only_following_sibling_subtrees() {
         Some("rgb(1, 2, 3)".into())
     );
 
-    let removed_snapshots = removed_element_dependency_snapshots(&host, &[removed]);
     assert!(host.remove_child(container, removed));
     let media = crate::protocol_types::EmulatedMediaOverrides::default();
     engine.invalidate_for_mutations(
@@ -199,7 +197,6 @@ fn nth_of_child_list_removal_invalidates_only_following_sibling_subtrees() {
             parent: container,
             added_nodes: Vec::new(),
             removed_nodes: vec![removed],
-            removed_element_snapshots: removed_snapshots,
             previous_sibling: Some(first),
             next_sibling: Some(target),
         }],
@@ -289,7 +286,6 @@ fn retained_stylo_invalidator_narrows_child_list_inserted_sibling_invalidation()
             parent: document,
             added_nodes: vec![inserted],
             removed_nodes: Vec::new(),
-            removed_element_snapshots: Vec::new(),
             previous_sibling: Some(previous),
             next_sibling: Some(target),
         }],
@@ -304,6 +300,66 @@ fn retained_stylo_invalidator_narrows_child_list_inserted_sibling_invalidation()
     assert!(!engine.computed_style_cache_contains_handle_for_document_for_test(document, target));
     assert!(engine.computed_style_cache_contains_handle_for_document_for_test(document, unrelated));
     assert!(!engine.computed_style_cache_contains_handle_for_document_for_test(document, previous));
+}
+
+#[test]
+fn ordinary_sibling_selectors_do_not_invalidate_an_unrelated_relative_anchor() {
+    let mut host = test_host();
+    let document = host.document_handle();
+    let body = host.create_element("body");
+    let list = host.create_element("div");
+    let first = host.create_element("span");
+    let second = host.create_element("span");
+    let inserted = host.create_element("span");
+    let unrelated = host.create_element("section");
+    assert!(host.append_child(document, body));
+    assert!(host.append_child(body, list));
+    assert!(host.append_child(body, unrelated));
+    for item in [first, second, inserted] {
+        assert!(host.set_attribute(item, "class", "item"));
+    }
+    assert!(host.append_child(list, first));
+    assert!(host.append_child(list, second));
+
+    let mut engine = MoliStyleEngine::new();
+    let document_url = url::Url::parse("https://example.test/").unwrap();
+    let source = StyloStylesheetSource::new(
+        ".item + .item { color: blue; } body:has(.never) { color: red; }".into(),
+        document_url.clone(),
+    );
+    engine.set_document_adopted_style_sheet_sources(document, vec![source.clone()]);
+    let mut inputs = FullStyleWorldSnapshot::default();
+    inputs.document_stylesheet_sources.push(source);
+    for (element, color) in [(second, "rgb(0, 0, 255)"), (unrelated, "rgb(0, 0, 0)")] {
+        assert_eq!(
+            engine.computed_style_property_value(
+                &host,
+                &document_url,
+                element,
+                "color",
+                None,
+                &inputs,
+                None,
+            ),
+            Some(color.into()),
+        );
+    }
+
+    assert!(host.append_child(list, inserted));
+    engine.invalidate_for_mutations(
+        &host,
+        &[StyleMutationEffect::ChildList {
+            parent: list,
+            added_nodes: vec![inserted],
+            removed_nodes: Vec::new(),
+            previous_sibling: Some(second),
+            next_sibling: None,
+        }],
+        &crate::protocol_types::EmulatedMediaOverrides::default(),
+    );
+    engine.drain_pending_style_invalidations_for_document_for_test(&host, document);
+
+    assert!(engine.computed_style_cache_contains_handle_for_document_for_test(document, unrelated));
 }
 
 #[test]
@@ -377,7 +433,6 @@ fn reordered_summary_invalidates_ua_styles_when_author_source_has_no_target() {
                 parent: details,
                 added_nodes: Vec::new(),
                 removed_nodes: vec![second],
-                removed_element_snapshots: removed_element_dependency_snapshots(&host, &[second]),
                 previous_sibling: Some(first),
                 next_sibling: None,
             },
@@ -385,7 +440,6 @@ fn reordered_summary_invalidates_ua_styles_when_author_source_has_no_target() {
                 parent: details,
                 added_nodes: vec![second],
                 removed_nodes: Vec::new(),
-                removed_element_snapshots: Vec::new(),
                 previous_sibling: None,
                 next_sibling: Some(first),
             },
@@ -397,14 +451,22 @@ fn reordered_summary_invalidates_ua_styles_when_author_source_has_no_target() {
     // Reordering uses lazy source-scope invalidation, not eager eviction of
     // exact sibling targets. Both cached styles must be stale before a read.
     let world = engine.world_for_document(document);
-    let invalidation = &world.document_state.lazy_invalidation_roots;
+    let invalidation = &world.document_state.style_paths;
     for handle in [first, second] {
+        let generation = std::iter::successors(Some(handle), |&node| host.parent_node(node))
+            .map(|node| invalidation.subtree_generation(node))
+            .max()
+            .unwrap();
         assert!(
-            invalidation
-                .validation_path(&host, document, handle)
-                .iter()
-                .any(|entry| entry.element == handle
-                    && !invalidation.element_is_current(handle, entry.required_generation))
+            engine
+                .dom_adapter
+                .style_path(document, handle)
+                .map_or(0, |path| path.observed_at)
+                < generation
+                || engine
+                    .dom_adapter
+                    .clone_clean_element_styles(document, handle, 0)
+                    .is_none()
         );
     }
     assert!(engine.computed_style_cache_contains_handle_for_document_for_test(document, unrelated));
@@ -474,23 +536,14 @@ fn retained_stylo_invalidator_uses_user_agent_attribute_dependencies() {
         ),
         Some("none".into())
     );
-    let source_scope = StyleSourceScope::for_document_and_connected_shadow_roots(&host, document);
     let media = crate::protocol_types::EmulatedMediaOverrides::default();
-    let dependency_sources = engine.matching_dependency_source_targets_for_document_for_test(
-        &host,
-        document,
-        &source_scope,
-        &media,
-    );
-    assert_eq!(dependency_sources.len(), 1);
-    assert!(dependency_sources[0].0.is_user_agent());
-    assert!(dependency_sources[0].1.contains(&document));
 
     assert!(host.set_attribute(dialog, "open", ""));
     engine.invalidate_for_mutations(
         &host,
         &[StyleMutationEffect::Attribute {
             element: dialog,
+            namespace: None,
             name: "open".into(),
             old_value: None,
             new_value: Some(String::new()),
@@ -571,7 +624,6 @@ fn retained_stylo_invalidator_clears_relative_previous_sibling_for_middle_insert
             parent: document,
             added_nodes: vec![inserted],
             removed_nodes: Vec::new(),
-            removed_element_snapshots: Vec::new(),
             previous_sibling: Some(subject),
             next_sibling: Some(old_next),
         }],
@@ -664,7 +716,6 @@ fn retained_stylo_invalidator_refreshes_has_side_effect_siblings() {
         3
     );
 
-    let removed_snapshots = removed_element_dependency_snapshots(&host, &[blocker]);
     assert!(host.remove_child(main, blocker));
     let media = crate::protocol_types::EmulatedMediaOverrides::default();
     engine.invalidate_for_mutations(
@@ -673,7 +724,6 @@ fn retained_stylo_invalidator_refreshes_has_side_effect_siblings() {
             parent: main,
             added_nodes: Vec::new(),
             removed_nodes: vec![blocker],
-            removed_element_snapshots: removed_snapshots,
             previous_sibling: Some(subject),
             next_sibling: Some(next),
         }],
@@ -721,7 +771,6 @@ fn retained_stylo_invalidator_refreshes_has_side_effect_siblings() {
             parent: main,
             added_nodes: vec![blocker],
             removed_nodes: Vec::new(),
-            removed_element_snapshots: Vec::new(),
             previous_sibling: Some(subject),
             next_sibling: Some(next),
         }],
@@ -810,7 +859,6 @@ fn retained_stylo_invalidator_clears_previous_sibling_for_inserted_last_child_ch
             parent,
             added_nodes: vec![first_inserted, second_inserted],
             removed_nodes: Vec::new(),
-            removed_element_snapshots: Vec::new(),
             previous_sibling: Some(previous),
             next_sibling: None,
         }],
@@ -877,7 +925,6 @@ fn retained_stylo_invalidator_merges_inserted_last_child_batches() {
             parent,
             added_nodes: vec![first_inserted],
             removed_nodes: Vec::new(),
-            removed_element_snapshots: Vec::new(),
             previous_sibling: Some(previous),
             next_sibling: None,
         }],
@@ -890,7 +937,6 @@ fn retained_stylo_invalidator_merges_inserted_last_child_batches() {
             parent,
             added_nodes: vec![second_inserted],
             removed_nodes: Vec::new(),
-            removed_element_snapshots: Vec::new(),
             previous_sibling: Some(first_inserted),
             next_sibling: None,
         }],
@@ -962,7 +1008,6 @@ fn retained_stylo_invalidator_defers_large_child_list_batches_until_drain() {
                 parent: container,
                 added_nodes: vec![span],
                 removed_nodes: Vec::new(),
-                removed_element_snapshots: Vec::new(),
                 previous_sibling,
                 next_sibling: None,
             }],
@@ -987,8 +1032,8 @@ fn retained_stylo_invalidator_defers_large_child_list_batches_until_drain() {
         0
     );
     assert!(
-        engine.computed_style_cache_contains_handle_for_document_for_test(document, subject),
-        "the coalesced broad invalidation must not enumerate its published descendants"
+        !engine.computed_style_cache_contains_handle_for_document_for_test(document, subject),
+        "the native relative invalidator should reach the affected subject"
     );
     assert_eq!(
         engine.computed_style_property_value(
@@ -1047,7 +1092,6 @@ fn retained_stylo_invalidator_clears_previous_sibling_for_removed_last_child_cha
         2
     );
 
-    let removed_snapshots = removed_element_dependency_snapshots(&host, &[removed]);
     assert!(host.remove_child(parent, removed));
     let media = crate::protocol_types::EmulatedMediaOverrides::default();
     engine.invalidate_for_mutations(
@@ -1056,7 +1100,6 @@ fn retained_stylo_invalidator_clears_previous_sibling_for_removed_last_child_cha
             parent,
             added_nodes: Vec::new(),
             removed_nodes: vec![removed],
-            removed_element_snapshots: removed_snapshots,
             previous_sibling: Some(previous),
             next_sibling: None,
         }],
@@ -1126,7 +1169,6 @@ fn retained_stylo_invalidator_narrows_child_list_removed_sibling_invalidation() 
             parent: document,
             added_nodes: Vec::new(),
             removed_nodes: vec![removed],
-            removed_element_snapshots: removed_element_dependency_snapshots(&host, &[removed]),
             previous_sibling: Some(previous),
             next_sibling: Some(target),
         }],
@@ -1199,7 +1241,6 @@ fn retained_stylo_invalidator_narrows_child_list_replacement_sibling_invalidatio
             parent: document,
             added_nodes: vec![inserted],
             removed_nodes: vec![removed],
-            removed_element_snapshots: removed_element_dependency_snapshots(&host, &[removed]),
             previous_sibling: Some(previous),
             next_sibling: Some(target),
         }],

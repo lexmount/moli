@@ -1,21 +1,37 @@
 mod container_feedback;
 mod inline_svg;
+mod screen_styles;
 #[cfg(test)]
 pub(crate) use inline_svg::parse_count as svg_parse_count;
+#[cfg(feature = "devtools")]
+pub(crate) use inline_svg::prepare_svg_paint;
+pub(crate) use inline_svg::{
+    SvgGeometry, decode_geometry as decode_frozen_svg_geometry, pending_svg_geometry,
+    prepare_svg_geometry,
+};
+pub(crate) use screen_styles::screen_targets_allow_layout_reuse;
 mod source_view;
+#[cfg(feature = "devtools")]
+pub(crate) use source_view::native_replaced_image;
 pub(crate) use source_view::native_scroll_offset;
 mod style_resolver;
 
-use std::collections::HashMap;
+use std::{cell::RefCell, collections::HashMap};
 
 use moli_layout::{
     DocumentLayoutServices, EmbeddedFrameRenderer, LayoutPassRequest, LayoutPassResult,
-    LayoutViewport, finish_measured_layout_pass, measure_prepared_layout_pass, prepare_layout_pass,
+    LayoutViewport, RetainedLayoutWorld, finish_measured_layout_pass, measure_prepared_layout_pass,
+    prepare_layout_pass_reusing,
 };
 use moli_page_types::ViewportSurface;
 use moli_selector::QueryContainerSizes;
+use style::{properties::ComputedValues, servo_arc::Arc as ServoArc};
 
-use crate::{document_runtime::DomHandle, native_bridge::PageScriptHost};
+use crate::{
+    document_runtime::DomHandle,
+    native_bridge::{CssImagePaintSnapshot, PageScriptHost},
+    style_engine::ScreenStyleCoverage,
+};
 use container_feedback::ContainerQueryFeedback;
 
 pub(crate) fn layout_viewport_for_surface(surface: ViewportSurface) -> LayoutViewport {
@@ -30,23 +46,44 @@ pub(crate) fn layout_viewport_for_surface(surface: ViewportSurface) -> LayoutVie
 
 /// Measured sizes are provisional until a Realtime screen pass publishes.
 /// Captures and failed passes restore the previous tables for CSSOM reads.
-pub(crate) struct ContainerSizeFeedback<'a> {
+pub(crate) struct LayoutPassFeedback<'a> {
     host: &'a PageScriptHost,
     previous: HashMap<DomHandle, QueryContainerSizes>,
+    screen_style_coverage: Option<HashMap<DomHandle, ScreenStyleCoverage>>,
+    frame_owner_styles: Option<FrameOwnerStyles>,
 }
 
-impl ContainerSizeFeedback<'_> {
-    pub(crate) fn commit(mut self) {
+pub(crate) type FrameOwnerStyles = HashMap<DomHandle, ServoArc<ComputedValues>>;
+
+impl LayoutPassFeedback<'_> {
+    pub(crate) fn commit(mut self) -> HashMap<DomHandle, ScreenStyleCoverage> {
         self.previous.clear();
+        self.take_screen_style_coverage()
+    }
+
+    pub(crate) fn take_screen_style_coverage(&mut self) -> HashMap<DomHandle, ScreenStyleCoverage> {
+        self.screen_style_coverage.take().unwrap_or_default()
+    }
+
+    pub(crate) fn take_frame_owner_styles(&mut self) -> FrameOwnerStyles {
+        self.frame_owner_styles.take().unwrap_or_default()
     }
 }
 
-impl Drop for ContainerSizeFeedback<'_> {
+impl Drop for LayoutPassFeedback<'_> {
     fn drop(&mut self) {
         for (document, sizes) in self.previous.drain() {
             let _ = self.host.replace_layout_container_sizes(document, sizes);
         }
     }
+}
+
+/// Layout consumers choose how SVG and style inputs survive the pass.
+#[derive(Clone, Copy, Eq, PartialEq)]
+pub(crate) enum LayoutInputRetention {
+    Transient,
+    Frozen,
+    Realtime,
 }
 
 pub(crate) fn build_native_layout_pass<'a>(
@@ -56,20 +93,32 @@ pub(crate) fn build_native_layout_pass<'a>(
     embedded_document_services: &mut HashMap<DomHandle, DocumentLayoutServices>,
     request: LayoutPassRequest,
     environment_override: Option<crate::style_engine::StyloStyleEnvironment>,
-) -> Result<(LayoutPassResult<DomHandle>, ContainerSizeFeedback<'a>), moli_layout::LayoutError> {
-    let mut feedback = ContainerSizeFeedback {
+    inputs: LayoutInputRetention,
+    retained: Option<Box<RetainedLayoutWorld<DomHandle>>>,
+) -> Result<(LayoutPassResult<DomHandle>, LayoutPassFeedback<'a>), moli_layout::LayoutError> {
+    let mut feedback = LayoutPassFeedback {
         host: runtime,
         previous: HashMap::new(),
+        screen_style_coverage: (inputs != LayoutInputRetention::Transient).then(HashMap::new),
+        frame_owner_styles: (inputs == LayoutInputRetention::Frozen).then(HashMap::new),
     };
+    let css_images = request
+        .requests_paint()
+        .then(|| runtime.css_image_paint_snapshot());
     let pass = build_native_layout_pass_recursive(
         runtime,
         root,
         services,
         embedded_document_services,
         request,
+        css_images.as_ref(),
         environment_override,
         &mut Vec::new(),
         &mut feedback.previous,
+        &mut feedback.screen_style_coverage,
+        &mut feedback.frame_owner_styles,
+        inputs == LayoutInputRetention::Frozen,
+        retained,
     )?;
     Ok((pass, feedback))
 }
@@ -80,9 +129,14 @@ fn build_native_layout_pass_recursive(
     services: &mut DocumentLayoutServices,
     embedded_document_services: &mut HashMap<DomHandle, DocumentLayoutServices>,
     request: LayoutPassRequest,
+    css_images: Option<&CssImagePaintSnapshot>,
     environment_override: Option<crate::style_engine::StyloStyleEnvironment>,
     document_stack: &mut Vec<DomHandle>,
     original_container_sizes: &mut HashMap<DomHandle, QueryContainerSizes>,
+    screen_style_coverage: &mut Option<HashMap<DomHandle, ScreenStyleCoverage>>,
+    frame_owner_styles: &mut Option<FrameOwnerStyles>,
+    freeze_svg_inputs: bool,
+    mut retained: Option<Box<RetainedLayoutWorld<DomHandle>>>,
 ) -> Result<LayoutPassResult<DomHandle>, moli_layout::LayoutError> {
     let profile_started = moli_trace::cpu_profile_enabled().then(std::time::Instant::now);
     let document = runtime
@@ -103,9 +157,15 @@ fn build_native_layout_pass_recursive(
             environment_override,
         ),
         request.requests_paint() || request.retains_screen_paint(),
+        css_images,
     );
     let source_ready = profile_started.map(|_| std::time::Instant::now());
     let mut styles_ready = None;
+    let collect_screen_styles = screen_style_coverage.is_some();
+    let mut document_coverage = collect_screen_styles.then(ScreenStyleCoverage::default);
+    let mut retained_frames = retained
+        .as_deref_mut()
+        .map_or_else(HashMap::new, RetainedLayoutWorld::take_embedded_layouts);
     let result = (|| {
         let mut prepare = || {
             style_resolver::with_layout_styles(
@@ -113,11 +173,26 @@ fn build_native_layout_pass_recursive(
                 document,
                 request.viewport,
                 environment_override,
+                document_coverage.as_mut(),
                 |styles| {
                     if profile_started.is_some() && styles_ready.is_none() {
                         styles_ready = Some(std::time::Instant::now());
                     }
-                    prepare_layout_pass(&source, styles, request)
+                    let changes = if retained.is_some() && !source.has_text_selection() {
+                        runtime.retained_box_tree_changes(document)
+                    } else {
+                        None
+                    };
+                    if collect_screen_styles {
+                        runtime.begin_screen_style_layout(document);
+                    }
+                    prepare_layout_pass_reusing(
+                        &source,
+                        styles,
+                        request,
+                        retained.take(),
+                        changes.as_deref(),
+                    )
                 },
             )
         };
@@ -125,15 +200,19 @@ fn build_native_layout_pass_recursive(
         let mut frames = NativeEmbeddedFrameRenderer {
             runtime,
             reason: request.reason,
-            capture_paint: request.requests_paint(),
-            include_backgrounds: request.includes_backgrounds(),
+            css_images,
             environment_override,
             frame_coverage: request.frame_coverage(),
             retain_scroll_projection: request.retains_scroll_projection(),
             retain_screen_paint: request.retains_screen_paint(),
+            freeze_svg_inputs,
+            retain_layout_world: request.retains_layout_world(),
+            retained_frames: &mut retained_frames,
             document_stack,
             embedded_document_services,
             original_container_sizes,
+            screen_style_coverage,
+            frame_owner_styles,
         };
         let finish = |services: &mut DocumentLayoutServices| {
             let mut measured = measure_prepared_layout_pass(prepared, services)?;
@@ -172,7 +251,49 @@ fn build_native_layout_pass_recursive(
                 measured =
                     measured.remeasure(services, &feedback.frozen_scrollbars, &mut prepare)?;
             }
-            finish_measured_layout_pass(measured, &source, &mut frames)
+            let freeze_input = |node, style: &moli_layout::ResolvedLayoutStyle, size| {
+                source.svg_input(node, style, size)
+            };
+            let paint_geometry = RefCell::new(Vec::new());
+            let publishes_geometry = freeze_svg_inputs || collect_screen_styles;
+            let svg_image =
+                |_,
+                 _,
+                 node,
+                 style: &moli_layout::ResolvedLayoutStyle,
+                 size,
+                 input: Option<&moli_layout::InlineSvgInput<DomHandle>>| {
+                    let decode =
+                        |input| inline_svg::decode_paint(node, input, size, publishes_geometry);
+                    let decoded = if let Some(input) = input {
+                        decode(input)
+                    } else {
+                        source
+                            .svg_input(node, style, size)
+                            .as_ref()
+                            .and_then(decode)
+                    };
+                    let (image, objects) = decoded.map_or_else(
+                        || (None, Vec::new()),
+                        |(image, objects)| (Some(image), objects),
+                    );
+                    // A screen geometry query can reuse the scene parsed for paint.
+                    if publishes_geometry {
+                        paint_geometry.borrow_mut().push((node, objects));
+                    }
+                    image
+                };
+            let mut pass = finish_measured_layout_pass(
+                measured,
+                &source,
+                &mut frames,
+                moli_layout::InlineSvgConsumers {
+                    freeze: freeze_svg_inputs.then_some(&freeze_input),
+                    paint: Some(&svg_image),
+                },
+            )?;
+            pass.record_painted_svg_geometry(paint_geometry.into_inner());
+            Ok(pass)
         };
         if services.has_stylesheet_web_fonts() {
             let resources = runtime
@@ -198,6 +319,12 @@ fn build_native_layout_pass_recursive(
             finish(services)
         }
     })();
+    if result.is_ok()
+        && let (Some(coverage), Some(document_coverage)) =
+            (screen_style_coverage.as_mut(), document_coverage)
+    {
+        coverage.insert(document, document_coverage);
+    }
     if let (Some(started), Some(source_ready), Some(styles_ready)) =
         (profile_started, source_ready, styles_ready)
     {
@@ -223,22 +350,45 @@ fn build_native_layout_pass_recursive(
 struct NativeEmbeddedFrameRenderer<'a> {
     runtime: &'a PageScriptHost,
     reason: moli_layout::LayoutFlushReason,
-    capture_paint: bool,
-    include_backgrounds: bool,
+    css_images: Option<&'a CssImagePaintSnapshot>,
     environment_override: Option<crate::style_engine::StyloStyleEnvironment>,
     frame_coverage: moli_layout::LayoutFrameCoverage,
     retain_scroll_projection: bool,
     retain_screen_paint: bool,
+    freeze_svg_inputs: bool,
+    retain_layout_world: bool,
+    retained_frames: &'a mut HashMap<
+        DomHandle,
+        (
+            moli_layout::LayoutBoxId,
+            Box<RetainedLayoutWorld<DomHandle>>,
+        ),
+    >,
     document_stack: &'a mut Vec<DomHandle>,
     embedded_document_services: &'a mut HashMap<DomHandle, DocumentLayoutServices>,
     original_container_sizes: &'a mut HashMap<DomHandle, QueryContainerSizes>,
+    screen_style_coverage: &'a mut Option<HashMap<DomHandle, ScreenStyleCoverage>>,
+    frame_owner_styles: &'a mut Option<FrameOwnerStyles>,
 }
 
 impl EmbeddedFrameRenderer<DomHandle> for NativeEmbeddedFrameRenderer<'_> {
+    fn record_frame_owner_style(
+        &mut self,
+        source: DomHandle,
+        style: &moli_layout::ResolvedLayoutStyle,
+    ) {
+        if let Some(styles) = self.frame_owner_styles.as_mut()
+            && let Some(computed) = style.stylo_computed_values()
+        {
+            styles.insert(source, computed.clone());
+        }
+    }
+
     fn render_embedded_frame(
         &mut self,
         frame: DomHandle,
         viewport: LayoutViewport,
+        paint: Option<moli_layout::EmbeddedFramePaintRequest>,
     ) -> Result<Option<moli_layout::EmbeddedFrameSnapshot<DomHandle>>, moli_layout::LayoutError>
     {
         const MAX_EMBEDDED_DOCUMENT_DEPTH: usize = 32;
@@ -271,11 +421,17 @@ impl EmbeddedFrameRenderer<DomHandle> for NativeEmbeddedFrameRenderer<'_> {
             .unwrap_or_default();
         // A zero viewport has observable descendant geometry but no paint
         // surface. Preserve the recursive coverage without allocating one.
-        let request = if self.capture_paint && viewport.css_width > 0 && viewport.css_height > 0 {
-            let mut capture = moli_layout::PaintCaptureRequest::viewport();
-            capture.include_backgrounds = self.include_backgrounds;
-            capture.base_background_color = moli_layout::PaintColor::TRANSPARENT;
+        let request = if let Some(paint) = paint
+            && viewport.css_width > 0
+            && viewport.css_height > 0
+        {
+            let capture = moli_layout::PaintCaptureRequest {
+                include_backgrounds: paint.include_backgrounds,
+                base_background_color: moli_layout::PaintColor::TRANSPARENT,
+                ..moli_layout::PaintCaptureRequest::viewport()
+            };
             LayoutPassRequest::with_capture(viewport, self.reason, capture)
+                .with_paint_cull_rect(paint.cull_rect)
         } else {
             LayoutPassRequest::new(viewport, self.reason)
         }
@@ -284,15 +440,29 @@ impl EmbeddedFrameRenderer<DomHandle> for NativeEmbeddedFrameRenderer<'_> {
         .with_screen_paint(
             self.retain_screen_paint && viewport.css_width > 0 && viewport.css_height > 0,
         );
+        let request = if self.retain_layout_world {
+            request.with_retained_layout_world()
+        } else {
+            request
+        };
+        let retained = self
+            .retained_frames
+            .remove(&frame)
+            .map(|(_, layout)| layout);
         let result = build_native_layout_pass_recursive(
             self.runtime,
             root,
             &mut services,
             self.embedded_document_services,
             request,
+            self.css_images,
             self.environment_override,
             self.document_stack,
             self.original_container_sizes,
+            self.screen_style_coverage,
+            self.frame_owner_styles,
+            self.freeze_svg_inputs,
+            retained,
         );
         self.embedded_document_services.insert(document, services);
         let output = result?;
@@ -311,7 +481,7 @@ pub(crate) fn build_normalized_native_box_tree_for_test(
         .unwrap_or_else(|| runtime.document_handle());
     let viewport = runtime.layout_viewport_for_document(document);
     let source = source_view::NativeLayoutSourceView::new(runtime, root);
-    style_resolver::with_layout_styles(runtime, document, viewport, None, |styles| {
+    style_resolver::with_layout_styles(runtime, document, viewport, None, None, |styles| {
         moli_layout::build_layout_world(&source, styles).map(|world| world.normalized_tree())
     })
 }

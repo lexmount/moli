@@ -2,10 +2,13 @@ use crate::{
     context_bootstrap::{
         CanvasContextKind, attach_canvas_like_context_object,
         build_canvas_rendering_context_2d_object, build_offscreen_canvas_object,
-        build_webgl_context_object, build_webgl2_context_object, canvas_like_to_data_url,
+        build_webgl_context_object, build_webgl2_context_object, canvas_like_to_blob,
+        canvas_like_to_data_url,
     },
     util::{get_own_static_property, object_own_static_string_property, v8_string, v8str},
+    v8_traced_webidl_callback::V8TracedWebIdlCallbackFunction,
     webidl,
+    webidl_callback_execution::PreparedWebIdlCallbackExecution,
 };
 
 use super::super::node::{node_relevant_context, node_runtime_and_handle_from_object_or_detached};
@@ -21,6 +24,13 @@ const CANVAS_CONTEXT_WEBGL2_SLOT: &str = "__moliCanvasContextWebGL2";
 struct HtmlCanvasGetContextArgs {
     #[webidl(required, converter = "enum")]
     kind: CanvasContextKind,
+}
+
+#[derive(webidl::WebIdlArgs)]
+#[webidl(prefix = "HTMLCanvasElement.toBlob")]
+struct HtmlCanvasToBlobArgs {
+    #[webidl(required, converter = "callback_function")]
+    callback: webidl::WebIdlCallbackFunction,
 }
 
 fn canvas_context_slot(kind: CanvasContextKind) -> &'static str {
@@ -268,5 +278,62 @@ pub(crate) fn canvas_to_data_url_callback<'s>(
         rv.set(value.into());
     } else {
         rv.set(v8::undefined(scope).into());
+    }
+}
+
+pub(crate) fn canvas_to_blob_callback<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    _rv: v8::ReturnValue<'s, v8::Value>,
+) {
+    let canvas = args.this();
+    let Ok((host_ptr, _)) = node_runtime_and_handle_from_object_or_detached(scope, canvas) else {
+        return;
+    };
+    let Some(parsed) = webidl::parse_args::<HtmlCanvasToBlobArgs>(scope, &args) else {
+        return;
+    };
+    // The IDL converts the optional MIME type even though PNG is the fallback
+    // for formats this encoder cannot produce. Quality is an unconverted any.
+    let mime = args.get(1);
+    if !mime.is_undefined() && mime.to_string(scope).is_none() {
+        return;
+    }
+    let callback = V8TracedWebIdlCallbackFunction::new(scope, parsed.callback).into_object();
+    let context =
+        node_relevant_context(scope, canvas).unwrap_or_else(|| scope.get_current_context());
+    let scope = &mut v8::ContextScope::new(scope, context);
+    let Some(blob) = canvas_like_to_blob(scope, canvas) else {
+        return;
+    };
+    let data = v8::Array::new_with_elements(scope, &[callback.into(), blob]);
+    if let Some(task) = v8::Function::builder(deliver_canvas_blob)
+        .data(data.into())
+        .build(scope)
+    {
+        unsafe { &mut *host_ptr }.queue_internal_task(scope, task);
+    }
+}
+
+fn deliver_canvas_blob<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    _rv: v8::ReturnValue<'s, v8::Value>,
+) {
+    let data = v8::Local::<v8::Array>::try_from(args.data()).expect("canvas blob callback data");
+    let carrier = data
+        .get_index(scope, 0)
+        .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
+        .expect("canvas blob callback carrier");
+    let blob = data.get_index(scope, 1).expect("canvas blob result");
+    if let Some(callback) = PreparedWebIdlCallbackExecution::from_traced(scope, carrier) {
+        let receiver = v8::undefined(scope);
+        callback.invoke_and_report(
+            scope,
+            "toblob",
+            "HTMLCanvasElement.toBlob callback",
+            receiver.into(),
+            &[blob],
+        );
     }
 }

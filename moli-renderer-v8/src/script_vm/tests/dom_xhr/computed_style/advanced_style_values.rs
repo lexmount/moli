@@ -1,6 +1,80 @@
 use super::*;
 
 #[test]
+fn part_names_and_forwarding_changes_invalidate_elements_and_pseudos() {
+    let mut vm = new_parsed_test_vm(
+        "https://shadow-parts.test/",
+        r#"<!doctype html><style>
+          #host::part(label) { color: red; }
+          #host::part(label)::before { color: blue; }
+        </style><div id="host"></div>"#,
+    );
+    let result = vm
+        .eval(
+            r#"(() => {
+              const outer = document.getElementById('host').attachShadow({mode: 'open'});
+              outer.innerHTML = '<div exportparts="private: label"></div>';
+              const forwarder = outer.firstElementChild;
+              const inner = forwarder.attachShadow({mode: 'open'});
+              inner.innerHTML = '<style>span::before { content: "Label"; }</style>' +
+                                '<span part="private">Text</span>';
+              const part = inner.querySelector('span');
+              const read = () => [getComputedStyle(part).color, getComputedStyle(part, '::before').color];
+              const initial = read();
+              part.setAttribute('part', 'other');
+              const renamed = read();
+              part.setAttribute('part', 'private');
+              const restored = read();
+              forwarder.setAttribute('exportparts', 'private: other');
+              return JSON.stringify([initial, renamed, restored, read()]);
+            })()"#,
+        )
+        .expect("shadow part style reads should succeed");
+    assert_eq!(
+        result,
+        r#"[["rgb(255, 0, 0)","rgb(0, 0, 255)"],["rgb(0, 0, 0)","rgb(0, 0, 0)"],["rgb(255, 0, 0)","rgb(0, 0, 255)"],["rgb(0, 0, 0)","rgb(0, 0, 0)"]]"#,
+    );
+}
+
+#[test]
+fn computed_style_blockifies_legacy_webkit_box_items_until_clamped() {
+    let mut vm = new_parsed_test_vm(
+        "https://webkit-box-blockification.test/",
+        r#"<!doctype html>
+          <div id="box" style="display: -webkit-box; -webkit-box-orient: vertical">
+            <span id="direct">Direct</span>
+            <div style="display: contents"><span id="nested">Nested</span></div>
+          </div>
+          <div style="display: -webkit-inline-box">
+            <span id="inline-item">Inline item</span>
+            <span id="inline-table" style="display: inline-table"></span>
+          </div>"#,
+    );
+
+    let displays = vm
+        .eval(
+            r#"
+(() => {
+  const box = document.getElementById('box');
+  const display = id => getComputedStyle(document.getElementById(id)).display;
+  const readBoxItems = () => [display('direct'), display('nested')].join(',');
+  const values = [readBoxItems(), display('inline-item'), display('inline-table')];
+  box.style.setProperty('-webkit-line-clamp', '2');
+  values.push(readBoxItems());
+  box.style.removeProperty('-webkit-line-clamp');
+  values.push(readBoxItems());
+  return values.join('|');
+})()
+"#,
+        )
+        .unwrap();
+    assert_eq!(
+        displays,
+        "block,block|block|table|inline,inline|block,block"
+    );
+}
+
+#[test]
 fn computed_style_serializes_text_decoration_longhands() {
     let mut vm = new_parsed_test_vm(
         "https://css-text-decoration-computed.test/",
@@ -720,6 +794,120 @@ fn object_dimension_attributes_participate_in_the_css_cascade() {
 }
 
 #[test]
+fn iframe_dimension_attributes_follow_the_cascade_and_update_layout() {
+    let mut vm = new_parsed_test_vm(
+        "https://iframe-dimensions.test/",
+        r#"<!doctype html>
+        <iframe id="frame" width="360" height="454" style="border: 0"></iframe>
+        <iframe id="overridden" height="500" style="height: 80px; border: 0"></iframe>"#,
+    );
+    vm.set_layout_policy(moli_page_types::LayoutPolicy::Realtime);
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const frame = document.getElementById('frame');
+  const size = element => [element.offsetWidth, element.offsetHeight];
+  const values = [size(frame), document.getElementById('overridden').offsetHeight];
+  frame.setAttribute('height', '260');
+  values.push(size(frame));
+  frame.removeAttribute('height');
+  values.push(size(frame));
+  return JSON.stringify(values);
+})()
+"#,
+        )
+        .expect("iframe dimension hints should update layout");
+
+    assert_eq!(result, "[[360,454],80,[360,260],[360,150]]");
+}
+
+#[test]
+fn html_presentational_hints_read_only_null_namespace_attributes() {
+    let mut vm = new_parsed_test_vm(
+        "https://namespaced-presentation.test/",
+        r#"<!doctype html><table id="table"><tr><td id="cell">Cell</td></tr></table>
+           <div id="target">Visible</div>"#,
+    );
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const namespace = 'urn:example';
+  const table = document.getElementById('table');
+  const cell = document.getElementById('cell');
+  const target = document.getElementById('target');
+  const read = () => [getComputedStyle(cell).paddingTop, getComputedStyle(target).display];
+
+  table.setAttributeNS(namespace, 'cellpadding', '12');
+  target.setAttributeNS(namespace, 'hidden', '');
+  const values = [read()];
+  table.setAttributeNS(null, 'cellpadding', '6');
+  target.setAttributeNS(null, 'hidden', '');
+  values.push(read());
+  table.removeAttributeNS(null, 'cellpadding');
+  target.removeAttributeNS(null, 'hidden');
+  values.push(read());
+  return JSON.stringify(values);
+})()
+"#,
+        )
+        .expect("HTML presentation hints should follow the DOM attribute namespace");
+
+    assert_eq!(
+        result,
+        r#"[["1px","block"],["6px","none"],["1px","block"]]"#
+    );
+}
+
+#[test]
+fn language_mutations_use_only_xml_and_supported_null_namespaces() {
+    let mut vm = new_parsed_test_vm(
+        "https://language-style-mutation.test/",
+        r#"<!doctype html><style>span:lang(fr) { color: red }</style>
+           <body lang="en"><div id="parent"><span id="child">Text</span></div>"#,
+    );
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const xml = 'http://www.w3.org/XML/1998/namespace';
+  const parent = document.getElementById('parent');
+  const child = document.getElementById('child');
+  const read = () => getComputedStyle(child).color;
+  const colors = [read()];
+  parent.setAttributeNS('urn:other', 'lang', 'fr');
+  colors.push(read());
+  parent.setAttributeNS(xml, 'xml:lang', 'fr-CA');
+  colors.push(read());
+  parent.removeAttributeNS(xml, 'lang');
+  colors.push(read());
+  parent.setAttributeNS(null, 'lang', 'fr');
+  colors.push(read());
+  parent.removeAttributeNS(null, 'lang');
+  colors.push(read());
+
+  const foreign = document.createElementNS('urn:foreign', 'item');
+  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  parent.append(foreign, svg);
+  foreign.setAttribute('lang', 'fr');
+  svg.setAttribute('lang', 'fr');
+  const foreignMatches = foreign.matches(':lang(fr)');
+  foreign.setAttributeNS(xml, 'xml:lang', 'fr');
+  return JSON.stringify([colors, foreignMatches, foreign.matches(':lang(fr)'), svg.matches(':lang(fr)')]);
+})()
+"#,
+        )
+        .expect("language selectors should track an inherited xml:lang change");
+
+    assert_eq!(
+        result,
+        r#"[["rgb(0, 0, 0)","rgb(0, 0, 0)","rgb(255, 0, 0)","rgb(0, 0, 0)","rgb(255, 0, 0)","rgb(0, 0, 0)"],false,true,true]"#
+    );
+}
+
+#[test]
 fn svg_generic_presentation_attributes_apply_to_every_svg_element() {
     let mut vm = new_parsed_test_vm(
         "https://svg-generic-presentation-attributes.test/",
@@ -896,6 +1084,15 @@ fn svg_special_presentation_attributes_follow_element_scopes_and_cascade() {
 
   get('group').setAttribute('transform', 'translate(12, 3)');
   values.push(value('group', 'transform'));
+  for (const [id, attribute] of [['pattern', 'patternTransform'], ['linear', 'gradientTransform']]) {
+    const element = get(id);
+    element.setAttribute(attribute, 'scale(6)');
+    values.push(value(id, 'transform') === 'matrix(6, 0, 0, 6, 0, 0)');
+    element.removeAttribute(attribute);
+    values.push(value(id, 'transform') === 'none');
+  }
+  get('root').setAttribute('width', '80');
+  values.push(value('root', 'width') === '80px');
   return JSON.stringify(values);
 })()
 "#,
@@ -904,7 +1101,7 @@ fn svg_special_presentation_attributes_follow_element_scopes_and_cascade() {
 
     assert_eq!(
         result,
-        r#"["1px","2px","3px","4px","matrix(1, 0, 0, 1, 200, 0)","matrix(1, 0, 0, 1, 100, 0)","matrix(2, 0, 0, 2, 0, 0)","matrix(2, 0, 0, 2, 0, 0)","matrix(4, 0, 0, 4, 0, 0)","matrix(5, 0, 0, 5, 0, 0)",true,true,true,true,"matrix(3, 0, 0, 3, 0, 0)","matrix(1, 0, 0, 1, 12, 3)"]"#
+        r#"["1px","2px","3px","4px","matrix(1, 0, 0, 1, 200, 0)","matrix(1, 0, 0, 1, 100, 0)","matrix(2, 0, 0, 2, 0, 0)","matrix(2, 0, 0, 2, 0, 0)","matrix(4, 0, 0, 4, 0, 0)","matrix(5, 0, 0, 5, 0, 0)",true,true,true,true,"matrix(3, 0, 0, 3, 0, 0)","matrix(1, 0, 0, 1, 12, 3)",true,true,true,true,true]"#
     );
 }
 

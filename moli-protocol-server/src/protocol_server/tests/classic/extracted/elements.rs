@@ -620,7 +620,7 @@ async fn webdriver_classic_element_user_prompt_behavior_matches_chromium_wpt() {
             .expect("classic session id");
         let url = classic_data_url(
             r#"
-            <input id="foo" style="display:block;width:120px;height:40px" value="foo">
+            <input id="foo" style="display:block;box-sizing:border-box;width:120px;height:40px" value="foo">
             <p id="text">bar</p>
             <input id="checked" type="checkbox" checked>
             <input id="active">
@@ -2820,7 +2820,7 @@ async fn webdriver_classic_css_value_uses_current_browsing_context() {
 }
 #[tokio::test]
 async fn webdriver_classic_click_respects_dom_first_and_real_layout_policies() {
-    for policy in [LayoutPolicy::Mock, LayoutPolicy::OnDemand] {
+    for policy in [LayoutPolicy::Mock, LayoutPolicy::Lazy] {
         let state = AppState::new_with_storage_partition_and_runtime_config(
             "127.0.0.1:9222".parse().unwrap(),
             Arc::new(StoragePartitionState::open(None).unwrap()),
@@ -2862,7 +2862,7 @@ async fn webdriver_classic_click_respects_dom_first_and_real_layout_policies() {
         .await;
         let expected = match policy {
             LayoutPolicy::Mock => json!(["click"]),
-            LayoutPolicy::OnDemand | LayoutPolicy::Realtime => {
+            LayoutPolicy::Lazy | LayoutPolicy::Realtime => {
                 json!(["pointerdown", "mousedown", "mouseup", "click"])
             }
         };

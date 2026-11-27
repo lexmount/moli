@@ -128,6 +128,7 @@ fn perform_implicit_form_submission(
     let _ = submit_form_with_submit_event(scope, runtime_ptr, form_handle, None, true);
     RendererInputDispatchOutcome {
         handled: true,
+        wheel: None,
         triggered_top_level_navigation: !had_pending_top_level_navigation
             && unsafe { &*runtime_ptr }.has_pending_location_navigation(),
         pending_download: None,
@@ -556,7 +557,7 @@ pub(in crate::native_bridge) fn submit_form_default_action(
     };
     // A parsed/detached Document has no browsing context to navigate. Resolve
     // that from the native document, independently of the form's wrapper kind.
-    let (submitting_document, initiator_url, initiator_origin) = {
+    let (submitting_document, initiator_url, initiator_origin, allows_local_files) = {
         let runtime = unsafe { &*runtime_ptr };
         let Some(document) =
             source_document.filter(|&document| runtime.document_has_browsing_context(document))
@@ -571,6 +572,10 @@ pub(in crate::native_bridge) fn submit_form_default_action(
                     .document_security_origin(document)
                     .ascii_serialization(),
             ),
+            runtime
+                .owner_dispatch_scope_for_node(document)
+                .and_then(|scope| runtime.document_resource_loader_for_dispatch_scope(scope))
+                .is_some_and(|loader| loader.request_client().has_document_file_access()),
         )
     };
     let source_popup = source_document.and_then(|document| {
@@ -601,6 +606,7 @@ pub(in crate::native_bridge) fn submit_form_default_action(
             unsafe { &*runtime_ptr },
             submitting_document,
         ),
+        allows_local_files,
     );
 
     let special_target = target_name

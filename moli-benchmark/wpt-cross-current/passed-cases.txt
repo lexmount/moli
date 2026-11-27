@@ -376,10 +376,8 @@ IndexedDB/string-list-ordering.any.js?moli-wpt-any=window
 IndexedDB/structured-clone-transaction-state.any.js?moli-wpt-any=dedicatedworker
 IndexedDB/structured-clone-transaction-state.any.js?moli-wpt-any=window
 IndexedDB/structured-clone.any.js?1-20=&moli-wpt-any=dedicatedworker
-IndexedDB/structured-clone.any.js?101-last=&moli-wpt-any=dedicatedworker
 IndexedDB/structured-clone.any.js?21-40=&moli-wpt-any=dedicatedworker
 IndexedDB/structured-clone.any.js?41-60=&moli-wpt-any=dedicatedworker
-IndexedDB/structured-clone.any.js?61-80=&moli-wpt-any=dedicatedworker
 IndexedDB/structured-clone.any.js?81-100=&moli-wpt-any=dedicatedworker
 IndexedDB/transaction-abort-generator-revert.any.js?moli-wpt-any=dedicatedworker
 IndexedDB/transaction-abort-generator-revert.any.js?moli-wpt-any=window
@@ -492,6 +490,7 @@ autoplay-policy-detection/autoplaypolicy.html
 autoplay-policy-detection/autoplaypolicy_media_element.html
 captured-mouse-events/captured-mouse-event-constructor-inherited.html
 captured-mouse-events/captured-mouse-event-constructor.html
+clear-site-data/resource.html
 clipboard-apis/clipboard-events-synthetic.html
 clipboard-apis/data-transfer-file-list-change-reference-updates.html
 clipboard-apis/dataTransfer-clearData.html
@@ -591,6 +590,9 @@ content-security-policy/img-src/img-src-self-unique-origin.html
 content-security-policy/img-src/img-src-targeting.html
 content-security-policy/img-src/img-src-wildcard-allowed.html
 content-security-policy/inheritance/blob-inherits-from-meta-http-equiv-with-invalid-characters.html
+content-security-policy/inheritance/document-write-iframe.html
+content-security-policy/inheritance/frame-src-javascript-url.html
+content-security-policy/inheritance/iframe-srcdoc-inheritance.html
 content-security-policy/inheritance/inherited-csp-list-modifications-are-local.html
 content-security-policy/inheritance/javascript-url-open-in-main-window.html
 content-security-policy/media-src/media-src-7_1.html
@@ -713,6 +715,7 @@ content-security-policy/style-src/style-src-stylesheet-nonce-blocked.html
 content-security-policy/svg/svg-from-guid.html
 content-security-policy/svg/svg-policy-resource-doc-includes.html
 content-security-policy/svg/svg-policy-with-resource.html
+content-security-policy/unsafe-eval/eval-blocked-in-about-blank-iframe.html
 content-security-policy/unsafe-hashes/javascript_src_allowed-href.html
 content-security-policy/unsafe-hashes/javascript_src_allowed-href_blank-script-src-attr.html
 content-security-policy/unsafe-hashes/javascript_src_allowed-href_blank-script-src-elem.html
@@ -944,6 +947,7 @@ css/css-conditional/container-queries/multiple-style-containers-comma-separated-
 css/css-conditional/container-queries/nested-size-style-container-invalidation.html
 css/css-conditional/container-queries/nested-style-size-container.html
 css/css-conditional/container-queries/query-container-name-dynamic.html
+css/css-conditional/container-queries/query-container-name.html
 css/css-conditional/container-queries/query-evaluation-style.html
 css/css-conditional/container-queries/registered-color-style-queries.html
 css/css-conditional/container-queries/style-container-invalidation-inheritance.html
@@ -952,6 +956,7 @@ css/css-conditional/container-queries/style-query-container-name-change.html
 css/css-conditional/container-queries/style-query-document-element.html
 css/css-conditional/container-queries/style-query-no-cycle.html
 css/css-conditional/container-queries/style-query-registered-custom-em-change.html
+css/css-conditional/container-queries/style-query-registered-custom-rem-change.html
 css/css-conditional/container-queries/style-query-registered-custom-removed-initial.html
 css/css-conditional/container-queries/style-query-unset-on-root.html
 css/css-conditional/container-queries/style-query-with-container-name-custom-change.html
@@ -1926,6 +1931,7 @@ css/css-flexbox/negative-item-margins-crash.html
 css/css-flexbox/negative-margins-001.html
 css/css-flexbox/negative-overflow-002.html
 css/css-flexbox/negative-overflow.html
+css/css-flexbox/nested-flex-image-loading-invalidates-intrinsic-sizes.html
 css/css-flexbox/nested-orthogonal-flexbox-relayout.html
 css/css-flexbox/order-painting.html
 css/css-flexbox/order/order-abs-children-painting-order-different-container.html
@@ -3084,11 +3090,14 @@ css/css-shadow/scope-pseudo-in-shadow.html
 css/css-shadow/shadow-cascade-order-001.html
 css/css-shadow/shadow-host-style-sharing.html
 css/css-shadow/shadow-multiple-links.html
+css/css-shadow/shadow-reassign-dynamic-003.html
 css/css-shadow/shadow-reassign-dynamic-005-crash.html
 css/css-shadow/shadow-shared-style-cache-001.html
 css/css-shadow/slot-non-html-display-value.html
+css/css-shadow/slotted-invalidation.html
 css/css-shadow/slotted-link.html
 css/css-shadow/slotted-matches.html
+css/css-shadow/slotted-nested.html
 css/css-shadow/slotted-slot.html
 css/css-size-adjust/inheritance.html
 css/css-size-adjust/parsing/text-size-adjust-invalid.html
@@ -3403,8 +3412,6 @@ css/css-sizing/intrinsic-percent-replaced-009.html
 css/css-sizing/intrinsic-percent-replaced-010.html
 css/css-sizing/intrinsic-percent-replaced-017.html
 css/css-sizing/intrinsic-percent-replaced-021.html
-css/css-sizing/intrinsic-percent-replaced-022.html
-css/css-sizing/intrinsic-percent-replaced-023.html
 css/css-sizing/intrinsic-percent-replaced-024.html
 css/css-sizing/intrinsic-percent-replaced-026.html
 css/css-sizing/intrinsic-size-min-content-box-sizing.html
@@ -3511,6 +3518,7 @@ css/css-syntax/input-preprocessing.html
 css/css-syntax/invalid-nested-rules.html
 css/css-syntax/serialize-escape-identifiers.html
 css/css-syntax/trailing-braces.html
+css/css-syntax/unclosed-constructs.html
 css/css-syntax/unclosed-url-at-eof.html
 css/css-syntax/unicode-range-selector.html
 css/css-syntax/urange-parsing.html
@@ -3671,9 +3679,11 @@ css/css-values/exp-log-invalid.html
 css/css-values/exp-log-serialize.html
 css/css-values/getComputedStyle-border-radius-002.html
 css/css-values/getComputedStyle-calc-mixed-units-001.html
+css/css-values/getComputedStyle-calc-mixed-units-002.html
 css/css-values/hypot-pow-sqrt-computed.html
 css/css-values/hypot-pow-sqrt-serialize.html
 css/css-values/if-range-with-attr-crash.html
+css/css-values/lh-rlh-percentage-line-height-with-zoom.html
 css/css-values/lh-unit-004.html
 css/css-values/lh-unit-005.html
 css/css-values/max-function-crash.html
@@ -3701,9 +3711,12 @@ css/css-values/percentage-without-context.html
 css/css-values/premature-comment-crash.html
 css/css-values/progress-invalid.html
 css/css-values/random-in-keyframe.html
+css/css-values/rch-invalidation.html
 css/css-values/rem-length-degrees-crash.html
 css/css-values/rem-unit-root-element.html
 css/css-values/rgba-011.html
+css/css-values/ric-invalidation.html
+css/css-values/rlh-invalidation.html
 css/css-values/rlh-on-root-lengths.html
 css/css-values/round-function.html
 css/css-values/round-length-degrees-crash.html
@@ -3719,7 +3732,9 @@ css/css-values/sin-cos-tan-serialize.html
 css/css-values/tree-counting/calc-sibling-function-in-shadow-dom.html
 css/css-values/tree-counting/calc-sibling-function-parsing.html
 css/css-values/tree-counting/calc-sibling-function.html
+css/css-values/tree-counting/sibling-function-container-query-invalidation.html
 css/css-values/tree-counting/sibling-function-container-query.html
+css/css-values/tree-counting/sibling-function-invalidation.html
 css/css-values/tree-counting/trig-functions-with-runtime-angle-arguments.html
 css/css-values/typed-arithmetic-different-categories-crash.html
 css/css-values/typed-arithmetic-inside-calc-crash.html
@@ -3874,7 +3889,6 @@ css/cssom-view/parsing/scroll-behavior-valid.html
 css/cssom-view/position-sticky-root-scroller-with-scroll-behavior.html
 css/cssom-view/pt-to-px-width.html
 css/cssom-view/range-bounding-client-rect-with-display-contents.html
-css/cssom-view/resize-event-on-initial-layout-002.html
 css/cssom-view/screenLeftTop.html
 css/cssom-view/scroll-back-to-initial-position.html
 css/cssom-view/scroll-behavior-smooth-after-hiding-iframe.html
@@ -4077,6 +4091,7 @@ css/cssom/setproperty-null-undefined.html
 css/cssom/shorthand-serialization.html
 css/cssom/shorthand-values.html
 css/cssom/style-attr-update-across-documents.html
+css/cssom/style-sheet-interfaces-001.html
 css/cssom/style-sheet-interfaces-002.html
 css/cssom/stylesheet-title.html
 css/cssom/ttwf-cssom-doc-ext-load-count.html
@@ -4148,6 +4163,8 @@ css/selectors/focus-in-focusin-event-001.html
 css/selectors/focus-visible-009.html
 css/selectors/focus-visible-010.html
 css/selectors/focus-visible-014.html
+css/selectors/focus-visible-017-2.html
+css/selectors/focus-visible-017.html
 css/selectors/focus-visible-023.html
 css/selectors/focus-visible-script-focus-001.html
 css/selectors/focus-within-009.html
@@ -4239,6 +4256,7 @@ css/selectors/invalidation/has-with-is-child-combinator.html
 css/selectors/invalidation/has-with-not.html
 css/selectors/invalidation/has-with-nth-child.html
 css/selectors/invalidation/has-with-pseudo-class.html
+css/selectors/invalidation/heading-pseudo-class-in-has.html
 css/selectors/invalidation/host-context-pseudo-class-in-has.html
 css/selectors/invalidation/host-has-shadow-tree-element-at-nonsubject-position.html
 css/selectors/invalidation/host-has-shadow-tree-element-at-subject-position.html
@@ -4283,10 +4301,12 @@ css/selectors/is-where-basic.html
 css/selectors/is-where-error-crash.html
 css/selectors/is-where-not.html
 css/selectors/is-where-pseudo-classes.html
+css/selectors/is-where-shadow.html
 css/selectors/last-child.html
 css/selectors/last-of-type.html
 css/selectors/link-sharing-crash.html
 css/selectors/media/media-playing-paused-style-invalidation.html
+css/selectors/missing-right-token.html
 css/selectors/not-complex.html
 css/selectors/not-specificity.html
 css/selectors/nth-child-spurious-brace-crash.html
@@ -6623,7 +6643,10 @@ html/browsers/the-window-object/open-close/open-features-tokenization-noopener.h
 html/browsers/the-window-object/open-close/open-features-tokenization-noreferrer.html
 html/browsers/the-window-object/proxy-getOwnPropertyDescriptor.html
 html/browsers/the-window-object/window-aliases.html
+html/browsers/the-window-object/window-indexed-access-vs-named-access.html
 html/browsers/the-window-object/window-indexed-properties-delete-no-cache.html
+html/browsers/the-window-object/window-indexed-properties-strict.html
+html/browsers/the-window-object/window-indexed-properties.html
 html/browsers/the-window-object/window-open-invalid-url.html
 html/browsers/the-window-object/window-open-noopener.html?_parent
 html/browsers/the-window-object/window-open-noopener.html?_self
@@ -6669,6 +6692,7 @@ html/dom/aria-attribute-reflection.html
 html/dom/aria-element-reflection-disconnected.html
 html/dom/aria-element-reflection.html
 html/dom/documents/dom-tree-accessors/Document.body.html
+html/dom/documents/dom-tree-accessors/Document.currentScript.html
 html/dom/documents/dom-tree-accessors/Document.getElementsByClassName-null-undef.html
 html/dom/documents/dom-tree-accessors/Element.getElementsByClassName-null-undef.html
 html/dom/documents/dom-tree-accessors/document.embeds-document.plugins-01.html
@@ -6716,6 +6740,7 @@ html/dom/elements/global-attributes/dataset-set.html
 html/dom/elements/global-attributes/dataset.html
 html/dom/elements/global-attributes/dir-auto-div-append-child.html
 html/dom/elements/global-attributes/dir-bdi-script.html
+html/dom/elements/global-attributes/document-dir.html
 html/dom/elements/global-attributes/id-attribute.html
 html/dom/elements/global-attributes/id-name-specialcase.html
 html/dom/elements/global-attributes/id-name.html
@@ -6772,6 +6797,7 @@ html/dom/reflection-grouping.html
 html/dom/reflection-metadata.html
 html/dom/reflection-misc.html
 html/dom/reflection-obsolete.html
+html/dom/reflection-sections.html
 html/dom/reflection-text.html
 html/editing/activation/click.html
 html/editing/dnd/crashtests/DataTransfer-getData-RefCell-already-borrowed.html
@@ -6853,6 +6879,10 @@ html/links/stylesheet/quirk-origin-check.html
 html/meta/refresh-time.html
 html/obsolete/requirements-for-implementations/other-elements-attributes-and-apis/document-all.html
 html/obsolete/requirements-for-implementations/other-elements-attributes-and-apis/document-applets.html
+html/obsolete/requirements-for-implementations/other-elements-attributes-and-apis/document-color-01.html
+html/obsolete/requirements-for-implementations/other-elements-attributes-and-apis/document-color-02.html
+html/obsolete/requirements-for-implementations/other-elements-attributes-and-apis/document-color-03.html
+html/obsolete/requirements-for-implementations/other-elements-attributes-and-apis/document-color-04.html
 html/obsolete/requirements-for-implementations/other-elements-attributes-and-apis/heading-obsolete-attributes-01.html
 html/obsolete/requirements-for-implementations/other-elements-attributes-and-apis/nothing.html
 html/obsolete/requirements-for-implementations/other-elements-attributes-and-apis/script-IDL-event-htmlfor.html
@@ -6880,9 +6910,11 @@ html/semantics/document-metadata/the-base-element/base_srcdoc.html
 html/semantics/document-metadata/the-base-element/base_target_does_not_affect_iframe_src_navigation.html
 html/semantics/document-metadata/the-base-element/base_target_does_not_affect_location_assignment.html
 html/semantics/document-metadata/the-link-element/attr-link-fetchpriority.html
+html/semantics/document-metadata/the-link-element/link-error-fired-before-scripting-unblocked.html
 html/semantics/document-metadata/the-link-element/link-href-attribute-crash.html
 html/semantics/document-metadata/the-link-element/link-load-error-events.html
 html/semantics/document-metadata/the-link-element/link-load-event.html
+html/semantics/document-metadata/the-link-element/link-load-fired-before-scripting-unblocked.html
 html/semantics/document-metadata/the-link-element/link-rel-attribute-tokenization.html
 html/semantics/document-metadata/the-link-element/link-rel-attribute.html
 html/semantics/document-metadata/the-link-element/link-rellist.html
@@ -7053,6 +7085,7 @@ html/semantics/embedded-content/the-img-element/document-destroyed-crash.html
 html/semantics/embedded-content/the-img-element/empty-src-no-current-request.html
 html/semantics/embedded-content/the-img-element/image-loading-eager.html
 html/semantics/embedded-content/the-img-element/image-loading-lazy-available.html
+html/semantics/embedded-content/the-img-element/image-loading-lazy-below-viewport-dynamic.html
 html/semantics/embedded-content/the-img-element/image-loading-lazy-different-crossorigin.html
 html/semantics/embedded-content/the-img-element/image-loading-lazy-empty-src.html
 html/semantics/embedded-content/the-img-element/image-loading-lazy-in-script-disabled-iframe.html
@@ -7065,6 +7098,7 @@ html/semantics/embedded-content/the-img-element/image-loading-lazy-in-scroller-n
 html/semantics/embedded-content/the-img-element/image-loading-lazy-in-scroller-nested-5.html
 html/semantics/embedded-content/the-img-element/image-loading-lazy-in-scroller-nested.html
 html/semantics/embedded-content/the-img-element/image-loading-lazy-in-scroller.html
+html/semantics/embedded-content/the-img-element/image-loading-lazy-in-viewport-dynamic.html
 html/semantics/embedded-content/the-img-element/image-loading-lazy-move-into-script-disabled-iframe.html
 html/semantics/embedded-content/the-img-element/image-loading-lazy-multiple-times.html
 html/semantics/embedded-content/the-img-element/image-loading-lazy-negative-margin.html
@@ -7317,6 +7351,7 @@ html/semantics/forms/the-input-element/reset.html
 html/semantics/forms/the-input-element/search_input.html
 html/semantics/forms/the-input-element/selection-weekmonth.html
 html/semantics/forms/the-input-element/selection.html
+html/semantics/forms/the-input-element/show-picker-cross-origin-iframe.html
 html/semantics/forms/the-input-element/telephone.html
 html/semantics/forms/the-input-element/text.html
 html/semantics/forms/the-input-element/time-2.html
@@ -7860,6 +7895,7 @@ html/semantics/tabular-data/historical.html
 html/semantics/tabular-data/processing-model-1/col-span-limits.html
 html/semantics/tabular-data/processing-model-1/rowspan-0-quirks.html
 html/semantics/tabular-data/processing-model-1/rowspan-0.html
+html/semantics/tabular-data/processing-model-1/span-limits.html
 html/semantics/tabular-data/the-caption-element/caption_001.html
 html/semantics/tabular-data/the-table-element/caption-methods.html
 html/semantics/tabular-data/the-table-element/createTBody.html
@@ -8804,6 +8840,8 @@ navigation-api/scroll-behavior/scroll-on-synthetic-event.html
 navigation-api/scroll-behavior/scroll-without-intercept.html
 navigation-api/state/cross-document-away-and-back.html?method=navigate
 navigation-api/state/cross-document-away-and-back.html?method=updateCurrentEntry
+navigation-api/state/cross-document-getState-undefined.html
+navigation-api/state/cross-document-getState.html
 navigation-api/state/cross-document-location-api.html?method=navigate
 navigation-api/state/cross-document-location-api.html?method=updateCurrentEntry
 navigation-api/state/history-pushState.html?method=navigate
@@ -8962,7 +9000,6 @@ resource-timing/buffer-full-add-entries-during-callback-that-drop.html
 resource-timing/buffer-full-add-entries-during-callback.html
 resource-timing/buffer-full-add-then-clear.html
 resource-timing/buffer-full-decrease-buffer-during-callback.html
-resource-timing/buffer-full-eventually.html
 resource-timing/buffer-full-increase-buffer-during-callback.html
 resource-timing/buffer-full-inspect-buffer-during-callback.html
 resource-timing/buffer-full-set-to-current-buffer.html
@@ -9645,6 +9682,8 @@ svg/types/scripted/SVGGraphicsElement.getBBox-08.html
 svg/types/scripted/SVGLength-ch.html
 svg/types/scripted/SVGLength-ic.html
 svg/types/scripted/SVGLength-px-with-context.html
+svg/types/scripted/SVGLength-rem.html
+svg/types/scripted/SVGLength-rlh.html
 svg/types/scripted/SVGLength-viewport.html
 svg/types/scripted/SVGLength-zoom.html
 svg/types/scripted/SVGLength.html
@@ -9670,6 +9709,7 @@ trusted-types/DedicatedWorker-eval.html
 trusted-types/DedicatedWorker-importScripts.html
 trusted-types/DedicatedWorker-setTimeout-setInterval.html
 trusted-types/Document-execCommand.html
+trusted-types/Document-write-appending-line-feed.html
 trusted-types/Document-write.html
 trusted-types/Element-insertAdjacentHTML.html
 trusted-types/Element-outerHTML.html
@@ -9733,12 +9773,15 @@ trusted-types/eval-csp-no-tt.html
 trusted-types/eval-csp-tt-default-policy-mutate.html
 trusted-types/eval-csp-tt-default-policy.html
 trusted-types/eval-csp-tt-no-default-policy.html
+trusted-types/eval-function-constructor-untrusted-arguments-and-applying-default-policy.html
 trusted-types/eval-function-constructor-untrusted-arguments-and-default-policy-throwing.html
+trusted-types/eval-function-constructor.html
 trusted-types/eval-no-csp-no-tt-default-policy.html
 trusted-types/eval-no-csp-no-tt.html
 trusted-types/eval-with-non-trusted-script-object.html
 trusted-types/eval-with-permissive-csp.html
 trusted-types/get-trusted-types-compliant-attribute-value.html
+trusted-types/inheriting-csp-for-local-schemes.html
 trusted-types/legacy-trusted-scripts.html
 trusted-types/navigate-to-javascript-url-001.html
 trusted-types/navigate-to-javascript-url-002.html
@@ -9750,6 +9793,7 @@ trusted-types/navigate-to-javascript-url-008.html
 trusted-types/navigate-to-javascript-url-csp-headers.html
 trusted-types/no-require-trusted-types-for-report-only.html
 trusted-types/no-require-trusted-types-for.html
+trusted-types/require-trusted-types-for-TypeError-belongs-to-the-global-object-realm.html
 trusted-types/require-trusted-types-for-report-only.html
 trusted-types/require-trusted-types-for.html
 trusted-types/script-enforcement-001.html
@@ -9773,8 +9817,8 @@ trusted-types/trusted-types-eval-reporting-no-unsafe-eval.html
 trusted-types/trusted-types-eval-reporting-report-only.html
 trusted-types/trusted-types-navigation.html?01-05
 trusted-types/trusted-types-navigation.html?06-10
-trusted-types/trusted-types-navigation.html?11-15
 trusted-types/trusted-types-navigation.html?16-20
+trusted-types/trusted-types-navigation.html?21-25
 trusted-types/trusted-types-reporting-for-DOMParser-parseFromString.html
 trusted-types/trusted-types-reporting-for-DedicatedWorker-DedicatedWorker-constructor.html
 trusted-types/trusted-types-reporting-for-DedicatedWorker-eval.html
@@ -10147,6 +10191,7 @@ webidl/ecmascript-binding/put-forwards.html
 webidl/ecmascript-binding/replaceable-setter-throws-if-defineownproperty-fails.html
 webidl/ecmascript-binding/sequence-conversion.html
 webidl/ecmascript-binding/setter-argument.html
+webidl/ecmascript-binding/window-named-properties-object.html
 webmessaging/MessageEvent_onmessage_postMessage_infinite_loop.html
 webmessaging/MessageEvent_properties.htm
 webmessaging/broadcastchannel/blobs.html

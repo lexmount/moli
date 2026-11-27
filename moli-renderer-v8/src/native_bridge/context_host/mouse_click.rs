@@ -1,6 +1,5 @@
 use super::*;
 use crate::dom::native::{DomHost, DomMutationEffects};
-
 #[derive(Clone, Copy)]
 struct MousePress {
     handle: DomHandle,
@@ -156,14 +155,6 @@ impl PageScriptHost {
     }
 }
 
-fn in_shadow_including_subtree(dom: &DomHost, root: DomHandle, target: DomHandle) -> bool {
-    std::iter::successors(Some(target), |node| {
-        dom.parent_node(*node)
-            .or_else(|| dom.shadow_root_host(*node))
-    })
-    .any(|ancestor| ancestor == root)
-}
-
 pub(crate) fn common_flat_tree_ancestor(
     dom: &DomHost,
     pressed: DomHandle,
@@ -185,4 +176,16 @@ pub(crate) fn common_flat_tree_ancestor(
         .take_while(|(pressed, released)| pressed == released)
         .last()
         .map(|(ancestor, _)| *ancestor)
+}
+
+pub(super) fn in_shadow_including_subtree(
+    dom: &DomHost,
+    root: DomHandle,
+    target: DomHandle,
+) -> bool {
+    std::iter::successors(Some(target), |node| {
+        dom.parent_node(*node)
+            .or_else(|| dom.shadow_root_host(*node))
+    })
+    .any(|ancestor| ancestor == root)
 }

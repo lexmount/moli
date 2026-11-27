@@ -4,9 +4,10 @@ use crate::{
     PaintCaptureRequest, PaintSnapshot, PaintViewport, build_layout_world,
     form::prepare_form_controls,
     inline::prepare_inline_contexts,
+    layout_tree::FrozenInlineSvgInputs,
     list::prepare_list_markers,
     overflow::OverflowProjection,
-    projection::finish_layout_pass,
+    projection::{RetainedPaintData, finish_layout_pass},
     taffy_tree::{compute_prepared_world_layout, prepare_world_layout},
 };
 use std::collections::{HashMap, HashSet};
@@ -22,7 +23,8 @@ where
     pub tree: FrozenLayoutTree<N>,
     pub paint: Option<PaintSnapshot>,
     pub css_image_references: Vec<crate::LayoutCssImageReference<N>>,
-    pub(crate) screen_paint: Option<Box<crate::ScreenPaintLayout<N>>>,
+    pub(crate) retained_layout: Option<Box<RetainedLayoutWorld<N>>>,
+    pub(crate) retained_box_count: usize,
 }
 
 impl<N> EmbeddedFrameSnapshot<N>
@@ -39,9 +41,18 @@ where
             tree,
             paint,
             css_image_references,
-            screen_paint: None,
+            retained_layout: None,
+            retained_box_count: 0,
         }
     }
+}
+
+/// Paint demand for a child viewport sampled by its parent's capture.
+#[derive(Clone, Copy)]
+pub struct EmbeddedFramePaintRequest {
+    pub include_backgrounds: bool,
+    /// The parent capture's bounds in child viewport coordinates.
+    pub cull_rect: Option<crate::LayoutRect>,
 }
 
 /// Renderer-owned bridge for one live embedded browsing context.
@@ -51,16 +62,20 @@ where
 /// computed-style estimate. Implementations must return an owned, source-free
 /// snapshot and must not run JavaScript, lifecycle work, or an event-loop turn.
 /// Recursive child layout is allowed because every nested world remains local
-/// to the same synchronous demand. The child tree is consumed into the single
-/// parent-owned frozen snapshot; it is not a separately retained cache entry.
+/// to the same synchronous demand. The parent owns the child tree and any
+/// retained work from the child's publication.
 pub trait EmbeddedFrameRenderer<N>
 where
     N: Copy + std::fmt::Debug + Eq + std::hash::Hash,
 {
+    /// Records the owner style used by the final measured layout.
+    fn record_frame_owner_style(&mut self, _source: N, _style: &crate::ResolvedLayoutStyle) {}
+
     fn render_embedded_frame(
         &mut self,
         frame: N,
         viewport: LayoutViewport,
+        paint: Option<EmbeddedFramePaintRequest>,
     ) -> Result<Option<EmbeddedFrameSnapshot<N>>, LayoutError>;
 }
 
@@ -74,6 +89,7 @@ where
         &mut self,
         _frame: N,
         _viewport: LayoutViewport,
+        _paint: Option<EmbeddedFramePaintRequest>,
     ) -> Result<Option<EmbeddedFrameSnapshot<N>>, LayoutError> {
         Ok(None)
     }
@@ -96,9 +112,11 @@ pub struct LayoutPassRequest {
     pub reason: LayoutFlushReason,
     environment: crate::LayoutEnvironment,
     paint_capture: Option<PaintCaptureRequest>,
+    paint_cull_rect: Option<crate::LayoutRect>,
     frame_coverage: LayoutFrameCoverage,
     retain_scroll_projection: bool,
     retain_screen_paint: bool,
+    retain_layout_world: bool,
 }
 
 impl LayoutPassRequest {
@@ -110,9 +128,11 @@ impl LayoutPassRequest {
                 scrollbars_hidden: false,
             },
             paint_capture: None,
+            paint_cull_rect: None,
             frame_coverage: LayoutFrameCoverage::PositiveViewport,
             retain_scroll_projection: false,
             retain_screen_paint: false,
+            retain_layout_world: false,
         }
     }
 
@@ -135,6 +155,12 @@ impl LayoutPassRequest {
     /// Sets document-wide runtime policy without changing authored CSS styles.
     pub const fn with_environment(mut self, environment: crate::LayoutEnvironment) -> Self {
         self.environment = environment;
+        self
+    }
+
+    /// Narrows embedded paint to the part exposed by the parent capture.
+    pub const fn with_paint_cull_rect(mut self, rect: Option<crate::LayoutRect>) -> Self {
+        self.paint_cull_rect = rect;
         self
     }
 
@@ -166,6 +192,16 @@ impl LayoutPassRequest {
 
     pub const fn retains_screen_paint(self) -> bool {
         self.retain_screen_paint
+    }
+
+    /// Keep the working tree and numeric caches for a subsequent screen pass.
+    pub const fn with_retained_layout_world(mut self) -> Self {
+        self.retain_layout_world = true;
+        self
+    }
+
+    pub const fn retains_layout_world(self) -> bool {
+        self.retain_layout_world
     }
 
     /// Whether this demand also needs immutable software-paint input.
@@ -279,6 +315,62 @@ where
     box_tree_elapsed: Duration,
     list_marker_elapsed: Duration,
     form_control_elapsed: Duration,
+    retained_box_count: usize,
+    pruned_source_count: usize,
+    reuse_numeric_layout: bool,
+}
+
+/// A complete retained box update includes every changed native and style
+/// input since the world was last published. A subtree change requires
+/// rechecking its descendants even when the root's primary style is equal.
+#[derive(Clone, Copy)]
+pub enum LayoutSourceChange<N> {
+    Node(N),
+    Subtree(N),
+}
+
+/// Document-owned working tree with optional paint inputs for its publication.
+pub struct RetainedLayoutWorld<N>
+where
+    N: Copy + std::fmt::Debug + Eq + Hash,
+{
+    pub(crate) world: LayoutWorld<N>,
+    pub(crate) viewport: LayoutViewport,
+    pub(crate) reusable_layout: bool,
+    pub(crate) frames: HashMap<N, (crate::LayoutBoxId, Box<RetainedLayoutWorld<N>>)>,
+    pub(crate) paint: Option<Box<RetainedPaintData>>,
+}
+
+impl<N: Copy + std::fmt::Debug + Eq + Hash> RetainedLayoutWorld<N> {
+    /// Whether the working tree was retained for another numeric layout pass.
+    pub const fn can_reuse_layout(&self) -> bool {
+        self.reusable_layout
+    }
+
+    pub const fn has_paint(&self) -> bool {
+        self.paint.is_some()
+    }
+
+    /// Release the old publication's paint inputs while retaining layout caches.
+    pub fn discard_paint(&mut self) {
+        if self.paint.take().is_some() {
+            self.world.release_paint_storage();
+            self.frames.retain(|_, (_, frame)| {
+                frame.discard_paint();
+                frame.can_reuse_layout()
+            });
+        }
+    }
+
+    /// The parent refresh moves each frame's existing work into its next pass.
+    pub fn take_embedded_layouts(&mut self) -> HashMap<N, (crate::LayoutBoxId, Box<Self>)> {
+        std::mem::take(&mut self.frames)
+    }
+
+    fn into_layout_world(mut self) -> LayoutWorld<N> {
+        self.discard_paint();
+        self.world
+    }
 }
 
 /// Pass-local numeric layout, before embedded frames and paint are projected.
@@ -288,8 +380,40 @@ where
 {
     prepared: PreparedLayoutPass<N>,
     inline_preparation_elapsed: Duration,
+    reused_inline_contexts: usize,
     numeric_layout_elapsed: Duration,
     numeric_metrics: NumericLayoutMetrics,
+    overflow_projection: Option<OverflowProjection>,
+}
+
+#[derive(Clone, Copy)]
+pub(crate) struct InlineSvgViewport {
+    pub(crate) owner: crate::LayoutOutputBoxId,
+    pub(crate) size: crate::LayoutSize,
+    pub(crate) prepared: bool,
+}
+
+pub(crate) fn svg_viewport_size<N: Copy>(layout_box: &crate::LayoutBox<N>) -> crate::LayoutSize {
+    let layout = layout_box.final_layout;
+    let zoom = layout_box.style.effective_zoom();
+    crate::LayoutSize::new(
+        ((layout.size.width
+            - layout.border.left
+            - layout.border.right
+            - layout.padding.left
+            - layout.padding.right
+            - layout.scrollbar_size.width)
+            / zoom)
+            .max(0.0),
+        ((layout.size.height
+            - layout.border.top
+            - layout.border.bottom
+            - layout.padding.top
+            - layout.padding.bottom
+            - layout.scrollbar_size.height)
+            / zoom)
+            .max(0.0),
+    )
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
@@ -357,8 +481,10 @@ where
         let Self {
             prepared,
             inline_preparation_elapsed,
+            reused_inline_contexts,
             numeric_layout_elapsed,
             numeric_metrics,
+            overflow_projection,
         } = self;
         let PreparedLayoutPass {
             world,
@@ -369,6 +495,7 @@ where
             ..
         } = prepared;
         drop(world);
+        drop(overflow_projection);
         let mut next =
             measure_prepared_layout_pass_with_scrollbars(prepare()?, services, frozen_scrollbars)?;
         next.prepared.started = started;
@@ -376,6 +503,7 @@ where
         next.prepared.list_marker_elapsed += list_marker_elapsed;
         next.prepared.form_control_elapsed += form_control_elapsed;
         next.inline_preparation_elapsed += inline_preparation_elapsed;
+        next.reused_inline_contexts += reused_inline_contexts;
         next.numeric_layout_elapsed += numeric_layout_elapsed;
         next.numeric_metrics.accumulate(numeric_metrics);
         Ok(next)
@@ -392,7 +520,7 @@ where
                 scrollbars.0.insert((ScrollbarOwner::Viewport, axis));
             }
         }
-        for layout_box in &world.boxes {
+        for layout_box in world.boxes.values() {
             for axis in SCROLLBAR_AXES {
                 if layout_box.style.auto_scrollbar_revealed(axis)
                     && let Some(owner) = ScrollbarOwner::for_box(layout_box)
@@ -409,15 +537,12 @@ where
         let world = &self.prepared.world;
         world
             .boxes
-            .iter()
+            .ordered()
             .enumerate()
             .filter_map(|(index, layout_box)| {
                 let source = layout_box.source()?;
                 let axes = layout_box.size_query_axes()?;
-                let size = crate::overflow::query_content_box_size(
-                    world,
-                    crate::LayoutBoxId::from_index(index),
-                );
+                let size = crate::overflow::query_content_box_size(world, world.boxes.id_at(index));
                 Some((
                     source,
                     [
@@ -438,9 +563,57 @@ where
     S: LayoutSource,
     R: LayoutStyleResolver<S::NodeId>,
 {
+    prepare_layout_pass_reusing(source, styles, request, None, None)
+}
+
+pub fn prepare_layout_pass_reusing<S, R>(
+    source: &S,
+    styles: &mut R,
+    request: LayoutPassRequest,
+    retained: Option<Box<RetainedLayoutWorld<S::NodeId>>>,
+    changes: Option<&[LayoutSourceChange<S::NodeId>]>,
+) -> Result<PreparedLayoutPass<S::NodeId>, LayoutError>
+where
+    S: LayoutSource,
+    R: LayoutStyleResolver<S::NodeId>,
+{
     let started = Instant::now();
     let phase_started = Instant::now();
-    let mut world = build_layout_world(source, styles)?;
+    let reusable = retained.filter(|retained| {
+        request.retains_layout_world()
+            && retained.can_reuse_layout()
+            && retained.world.environment == request.environment
+    });
+    let reused = if let Some(retained) = reusable {
+        let viewport_changed = retained.viewport != request.viewport;
+        // Paint metadata indexes the previous publication. Retire it before
+        // updating the world, even when the update later requires a cold pass.
+        let mut world = retained.into_layout_world();
+        // DOM damage does not describe media-query or viewport-unit changes.
+        // Revalidate every style while preserving boxes whose inputs still match.
+        let changes = if viewport_changed { None } else { changes };
+        if viewport_changed {
+            // Shaped IFC inputs can survive; measured sizes and line placement
+            // must be checked against the new viewport constraints.
+            world.inline_numeric_reuse = None;
+        }
+        crate::builder::update_layout_world(source, styles, &mut world, changes)?.map(
+            |(count, pruned, reuse_numeric_layout)| {
+                (
+                    world,
+                    count,
+                    pruned,
+                    reuse_numeric_layout && !viewport_changed,
+                )
+            },
+        )
+    } else {
+        None
+    };
+    let (mut world, retained_box_count, pruned_source_count, reuse_numeric_layout) = match reused {
+        Some(reused) => reused,
+        None => (build_layout_world(source, styles)?, 0, 0, false),
+    };
     world.environment = request.environment;
     if request.viewport.mobile_frame_size().is_some() {
         // Mobile viewport scrollbars overlay content. Classic scrollbar
@@ -456,7 +629,7 @@ where
         "viewport policy must retain only a live pass-local body box identity"
     );
     let phase_started = Instant::now();
-    prepare_list_markers(&mut world)?;
+    let changed_retained_marker_text = prepare_list_markers(&mut world)?;
     let list_marker_elapsed = phase_started.elapsed();
     let phase_started = Instant::now();
     prepare_form_controls(&mut world, styles)?;
@@ -468,6 +641,9 @@ where
         box_tree_elapsed,
         list_marker_elapsed,
         form_control_elapsed,
+        retained_box_count,
+        pruned_source_count,
+        reuse_numeric_layout: reuse_numeric_layout && !changed_retained_marker_text,
     })
 }
 
@@ -485,6 +661,7 @@ where
         measure_prepared_layout_pass(prepared, services)?,
         source,
         frames,
+        crate::InlineSvgConsumers::default(),
     )
 }
 
@@ -507,13 +684,48 @@ where
     N: Copy + std::fmt::Debug + Eq + std::hash::Hash,
 {
     let world = &mut prepared.world;
-    let phase_started = Instant::now();
-    prepare_inline_contexts(world, services);
-    let inline_preparation_elapsed = phase_started.elapsed();
+    let retain_inline = prepared.request.retains_layout_world();
+    if retain_inline {
+        let fonts = services.font_inputs();
+        if world.retained_inline_fonts.as_deref() != Some(&fonts) {
+            for layout_box in world.boxes.values_mut() {
+                layout_box.inline_layout = None;
+            }
+            world.inline_numeric_reuse = None;
+            world.retained_inline_fonts = Some(Box::new(fonts));
+            prepared.reuse_numeric_layout = false;
+        }
+        if let Some(numeric) = &mut world.inline_numeric_reuse {
+            numeric.begin_pass();
+        } else {
+            world.inline_numeric_reuse = Some(Box::new(crate::inline::InlineNumericReuse::new()));
+        }
+    }
+    let mut invalidated = Vec::new();
+    if prepared.reuse_numeric_layout {
+        // Revisit cached Taffy branches that cover IFC fragments. Their
+        // inline results are restored or rebuilt under the current inputs.
+        invalidated.extend(world.boxes.keyed().filter_map(|(id, layout_box)| {
+            layout_box.inline_context_owner.is_some().then_some(id)
+        }));
+    }
     world.validate_invariants()?;
     let phase_started = Instant::now();
-    let numeric_metrics =
-        compute_world_layout_with_scrollbars(world, prepared.request.viewport, frozen_scrollbars);
+    let reused_inline_contexts = if retain_inline {
+        crate::inline::prepare_inline_contexts_with_retained_inputs(world, services, true)
+    } else {
+        prepare_inline_contexts(world, services);
+        0
+    };
+    let inline_preparation_elapsed = phase_started.elapsed();
+    let phase_started = Instant::now();
+    let (numeric_metrics, overflow_projection) = compute_world_layout_with_scrollbars(
+        world,
+        prepared.request.viewport,
+        frozen_scrollbars,
+        prepared.reuse_numeric_layout,
+        invalidated,
+    )?;
     let numeric_layout_elapsed = phase_started.elapsed();
     if moli_trace::cpu_profile_enabled() {
         tracing::info!(
@@ -528,13 +740,19 @@ where
                 * std::mem::size_of::<Option<std::num::NonZeroU32>>(),
             estimated_cache_bytes = world.box_caches.capacity()
                 * std::mem::size_of::<taffy::Cache>(),
+            retained_inline_layout_hits = world.inline_numeric_reuse.as_deref()
+                .map_or(0, crate::inline::InlineNumericReuse::hits),
+            retained_inline_measurement_hits = world.inline_numeric_reuse.as_deref()
+                .map_or(0, crate::inline::InlineNumericReuse::measurement_hits),
         );
     }
     Ok(MeasuredLayoutPass {
         prepared,
         inline_preparation_elapsed,
+        reused_inline_contexts,
         numeric_layout_elapsed,
         numeric_metrics,
+        overflow_projection,
     })
 }
 
@@ -542,6 +760,7 @@ pub fn finish_measured_layout_pass<S, F>(
     measured: MeasuredLayoutPass<S::NodeId>,
     source: &S,
     frames: &mut F,
+    svg: crate::InlineSvgConsumers<'_, S::NodeId>,
 ) -> Result<LayoutPassResult<S::NodeId>, LayoutError>
 where
     S: LayoutSource,
@@ -550,32 +769,61 @@ where
     let MeasuredLayoutPass {
         prepared:
             PreparedLayoutPass {
-                mut world,
+                world,
                 request,
                 started,
                 box_tree_elapsed,
                 list_marker_elapsed,
                 form_control_elapsed,
+                retained_box_count,
+                pruned_source_count,
+                ..
             },
         inline_preparation_elapsed,
+        reused_inline_contexts,
         numeric_layout_elapsed,
         numeric_metrics,
+        overflow_projection,
     } = measured;
-    let phase_started = Instant::now();
-    let object_geometry = prepare_svg_content(&mut world, source);
-    let numeric_layout_elapsed = numeric_layout_elapsed + phase_started.elapsed();
-    let phase_started = Instant::now();
-    let mut embedded_frames = HashMap::new();
-    for (index, layout_box) in world.boxes.iter().enumerate() {
-        if !layout_box
+    let mut embedded_viewports = HashMap::new();
+    let mut svg_viewports = HashMap::new();
+    let mut frozen_inline_svg = None;
+    for (index, layout_box) in world.boxes.ordered().enumerate() {
+        let Some(kind) = layout_box
             .element_semantics()
-            .is_some_and(|semantics| semantics.replaced == Some(crate::LayoutReplacedKind::Frame))
-        {
+            .and_then(|element| element.replaced)
+        else {
             continue;
-        }
+        };
         let Some(source) = layout_box.source() else {
             continue;
         };
+        if kind == crate::LayoutReplacedKind::Svg {
+            let size = svg_viewport_size(layout_box);
+            if size.width > 0.0
+                && size.height > 0.0
+                && let std::collections::hash_map::Entry::Vacant(entry) =
+                    svg_viewports.entry(source)
+            {
+                entry.insert(InlineSvgViewport {
+                    owner: crate::LayoutOutputBoxId::from_index(index),
+                    size,
+                    prepared: false,
+                });
+                if let Some(input) = svg
+                    .freeze
+                    .and_then(|freeze| freeze(source, &layout_box.style, size))
+                {
+                    frozen_inline_svg
+                        .get_or_insert_with(|| Box::new(FrozenInlineSvgInputs::new()))
+                        .insert(source, input);
+                }
+            }
+        }
+        if kind != crate::LayoutReplacedKind::Frame {
+            continue;
+        }
+        frames.record_frame_owner_style(source, &layout_box.style);
         let layout = layout_box.final_layout();
         let width = (layout.size.width
             - layout.border.left
@@ -599,89 +847,49 @@ where
             css_viewport_dimension(height),
             request.viewport.device_pixel_ratio,
         );
-        if let Some(snapshot) = frames.render_embedded_frame(source, viewport)? {
-            embedded_frames.insert(crate::LayoutBoxId::from_index(index), (source, snapshot));
-        }
+        embedded_viewports.insert(world.boxes.id_at(index), (source, viewport));
     }
-    let embedded_frame_elapsed = phase_started.elapsed();
-    finish_layout_pass(
+    let mut result = finish_layout_pass(
         world,
         source,
         request.viewport,
         request.reason,
         started,
         request.paint_capture,
+        request.paint_cull_rect,
         request.retains_scroll_projection(),
         request.retains_screen_paint(),
-        object_geometry,
-        embedded_frames,
+        request.retains_layout_world(),
+        frozen_inline_svg,
+        svg.paint,
+        embedded_viewports,
+        frames,
+        overflow_projection,
         crate::projection::LayoutPassPhaseMetrics {
             box_tree_elapsed,
             list_marker_elapsed,
             form_control_elapsed,
             inline_preparation_elapsed,
+            reused_inline_contexts,
             numeric_layout_elapsed,
             numeric_first_pass_elapsed: numeric_metrics.first_pass_elapsed,
             numeric_followup_passes_elapsed: numeric_metrics.followup_passes_elapsed,
             overflow_detection_elapsed: numeric_metrics.overflow_detection_elapsed,
             scrollbar_feedback_elapsed: numeric_metrics.scrollbar_feedback_elapsed,
-            embedded_frame_elapsed,
             numeric_layout_pass_count: numeric_metrics.pass_count,
             numeric_feedback_invalidated_node_count: numeric_metrics
                 .feedback_invalidated_node_count,
             numeric_feedback_overflow_recomputed_node_count: numeric_metrics
                 .feedback_overflow_recomputed_node_count,
+            retained_box_count,
+            pruned_source_count,
+            retained_numeric_layout_hits: numeric_metrics.retained_layout_hits,
+            retained_numeric_tree: numeric_metrics.reused_tree,
+            reused_overflow_projection: numeric_metrics.reused_overflow_projection,
         },
-    )
-}
-
-fn prepare_svg_content<S: LayoutSource>(
-    world: &mut crate::LayoutWorld<S::NodeId>,
-    source: &S,
-) -> Vec<crate::LayoutObjectGeometry<S::NodeId>> {
-    let mut objects = Vec::new();
-    for (index, layout_box) in world.boxes.iter_mut().enumerate() {
-        if !layout_box
-            .element_semantics()
-            .is_some_and(|semantics| semantics.replaced == Some(crate::LayoutReplacedKind::Svg))
-        {
-            continue;
-        }
-        let Some(node) = layout_box.source() else {
-            continue;
-        };
-        let layout = layout_box.final_layout;
-        let zoom = layout_box.style.effective_zoom();
-        let viewport = crate::LayoutSize::new(
-            ((layout.size.width
-                - layout.border.left
-                - layout.border.right
-                - layout.padding.left
-                - layout.padding.right
-                - layout.scrollbar_size.width)
-                / zoom)
-                .max(0.0),
-            ((layout.size.height
-                - layout.border.top
-                - layout.border.bottom
-                - layout.padding.top
-                - layout.padding.bottom
-                - layout.scrollbar_size.height)
-                / zoom)
-                .max(0.0),
-        );
-        if let Some(content) = source.svg_content(node, &layout_box.style, viewport) {
-            layout_box.replaced_image = content.image;
-            objects.extend(content.objects.into_iter().map(|(source, quad)| {
-                crate::LayoutObjectGeometry {
-                    source,
-                    owner: crate::LayoutOutputBoxId::from_index(index),
-                    quad,
-                }
-            }));
-        }
-    }
-    objects
+    )?;
+    result.tree.svg_viewports = svg_viewports;
+    Ok(result)
 }
 
 /// Resolves `overflow:auto` with a monotonic browser-style feedback loop.
@@ -708,6 +916,9 @@ struct NumericLayoutMetrics {
     scrollbar_feedback_elapsed: Duration,
     feedback_invalidated_node_count: usize,
     feedback_overflow_recomputed_node_count: usize,
+    retained_layout_hits: usize,
+    reused_tree: bool,
+    reused_overflow_projection: bool,
 }
 
 impl NumericLayoutMetrics {
@@ -720,6 +931,7 @@ impl NumericLayoutMetrics {
         self.feedback_invalidated_node_count += previous.feedback_invalidated_node_count;
         self.feedback_overflow_recomputed_node_count +=
             previous.feedback_overflow_recomputed_node_count;
+        self.retained_layout_hits += previous.retained_layout_hits;
     }
 }
 
@@ -727,7 +939,9 @@ fn compute_world_layout_with_scrollbars<N>(
     world: &mut crate::LayoutWorld<N>,
     viewport: LayoutViewport,
     frozen_scrollbars: &AutoScrollbars<N>,
-) -> NumericLayoutMetrics
+    reuse_numeric_layout: bool,
+    mut invalidated: Vec<crate::LayoutBoxId>,
+) -> Result<(NumericLayoutMetrics, Option<OverflowProjection>), LayoutError>
 where
     N: Copy + std::fmt::Debug + Eq + std::hash::Hash,
 {
@@ -748,8 +962,20 @@ where
                 .reveal_auto_scrollbar(axis, true);
         }
     }
-    for (index, layout_box) in world.boxes.iter_mut().enumerate() {
-        let id = crate::LayoutBoxId::from_index(index);
+    for (id, layout_box) in world.boxes.keyed_mut() {
+        if reuse_numeric_layout
+            && (layout_box.inline_formatting_context
+                || layout_box.inline_context_owner.is_some()
+                // Grid track details and table used geometry belong to this
+                // numeric pass even when box construction was retained.
+                || layout_box.style.display().is_grid_container()
+                || crate::table::is_table_root(layout_box.kind)
+                || SCROLLBAR_AXES
+                    .into_iter()
+                    .any(|axis| layout_box.style.auto_scrollbar_revealed(axis)))
+        {
+            invalidated.push(id);
+        }
         if id == root_id {
             layout_box.style.prepare_viewport_root_layout();
         } else if defining_body == Some(id) {
@@ -773,10 +999,31 @@ where
 
     let mut metrics = NumericLayoutMetrics::default();
     let phase_started = Instant::now();
-    let mut prepared = prepare_world_layout(world, viewport);
+    let mut prepared = prepare_world_layout(world, viewport, reuse_numeric_layout)?;
+    if reuse_numeric_layout {
+        world.track_retained_cache_reads();
+        // Preserve local geometry for cache hits. Recompute the root under
+        // the viewport's initial gutter state, which can differ between passes.
+        prepared.invalidate_cached_layout_paths(world, &invalidated, true);
+    }
+    metrics.reused_tree = prepared.reused_tree;
     let preparation_elapsed = phase_started.elapsed();
-    let mut overflow_projection: Option<OverflowProjection> = None;
-    let mut pending_feedback_seeds = Vec::new();
+    let mut overflow_projection = prepared
+        .tree
+        .overflow
+        .take()
+        .filter(|_| reuse_numeric_layout)
+        .map(|projection| *projection);
+    let mut pending_feedback_seeds: Vec<_> = std::mem::take(&mut prepared.tree.overflow_dirty)
+        .into_iter()
+        .collect();
+    if overflow_projection.is_some() {
+        // The viewport and prior auto-gutter boxes were reset before this
+        // iteration. Their local geometry may change even on a cache hit.
+        pending_feedback_seeds.push(root_id);
+        pending_feedback_seeds.extend(invalidated);
+    }
+    metrics.reused_overflow_projection = overflow_projection.is_some();
     loop {
         metrics.pass_count = metrics.pass_count.saturating_add(1);
         let phase_started = Instant::now();
@@ -791,6 +1038,13 @@ where
         // projection still computes scroll extents, so this demand needs no
         // scrollbar-feedback overflow projection or corrective numeric pass.
         if scrollbars_hidden {
+            if let Some(projection) = &mut overflow_projection {
+                let phase_started = Instant::now();
+                touched.append(&mut pending_feedback_seeds);
+                let affected = projection.refresh(world, viewport, &touched);
+                metrics.feedback_overflow_recomputed_node_count += affected.len();
+                metrics.overflow_detection_elapsed += phase_started.elapsed();
+            }
             break;
         }
         let phase_started = Instant::now();
@@ -804,7 +1058,7 @@ where
         } else {
             let projection = OverflowProjection::new(world, viewport);
             let candidates = (0..projection.len())
-                .map(crate::LayoutBoxId::from_index)
+                .map(|index| world.boxes.id_at(index))
                 .collect();
             overflow_projection = Some(projection);
             candidates
@@ -833,7 +1087,7 @@ where
             if defining_body == Some(id) {
                 continue;
             }
-            let layout_box = &mut world.boxes[id.index()];
+            let layout_box = &mut world.boxes[id];
             let mut box_changed = layout_box.style.reveal_auto_scrollbar(
                 LayoutScrollbarAxis::Horizontal,
                 false,
@@ -854,10 +1108,13 @@ where
             // `compute_prepared_world_layout` starts at the root, untouched
             // branches remain cache hits; only these boxes and their ancestor
             // paths participate in the corrective numeric layout.
-            metrics.feedback_invalidated_node_count =
-                metrics.feedback_invalidated_node_count.saturating_add(
-                    prepared.invalidate_scrollbar_feedback(world, &changed_boxes, viewport_changed),
-                );
+            metrics.feedback_invalidated_node_count = metrics
+                .feedback_invalidated_node_count
+                .saturating_add(prepared.invalidate_cached_layout_paths(
+                    world,
+                    &changed_boxes,
+                    viewport_changed,
+                ));
             pending_feedback_seeds.extend(changed_boxes.iter().copied());
             if viewport_changed {
                 pending_feedback_seeds.push(root_id);
@@ -868,7 +1125,11 @@ where
             break;
         }
     }
-    metrics
+    if world.inline_numeric_reuse.is_some() {
+        world.numeric_tree = Some(prepared.tree);
+    }
+    metrics.retained_layout_hits = world.finish_retained_cache_reads();
+    Ok((metrics, overflow_projection))
 }
 
 fn css_viewport_dimension(value: f32) -> u32 {

@@ -180,7 +180,7 @@ pub(crate) fn set_svg_animated_string_base_value<'s>(
     owner: v8::Local<'s, v8::Object>,
     attribute: &str,
     value: v8::Local<'s, v8::Value>,
-) -> Option<String> {
+) -> Option<()> {
     let (runtime_ptr, handle) =
         crate::native_bridge::node_runtime_and_handle_from_object_or_detached(scope, owner).ok()?;
     let script_href = {
@@ -242,5 +242,5 @@ pub(crate) fn set_svg_animated_string_base_value<'s>(
             &value,
         );
     }
-    Some(value)
+    Some(())
 }

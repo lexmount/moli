@@ -13,12 +13,13 @@ mod action;
 mod batch;
 mod window;
 
-pub use action::{
-    ClickAction, InputModifiers, MouseButton, Point, ScrollAction, ScrollDeltaMode, WindowAction,
-};
+pub use action::WindowAction;
 pub use batch::{
     ActionBarrier, ActionBatch, ActionBatchCause, ActionBatchId, ActionSequence, PlannedAction,
     ScheduledAction, ScrollRun,
+};
+pub use moli_input::{
+    ClickAction, InputModifiers, MouseButton, Point, ScrollAction, ScrollDeltaMode,
 };
 pub use window::{ActionAdmission, ActionCompaction, ActionWindow, AdmissionState};
 

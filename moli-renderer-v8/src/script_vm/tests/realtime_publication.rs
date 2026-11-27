@@ -60,6 +60,53 @@ fn realtime_publication_temporary_viewport_preserves_screen_and_child_geometry()
     assert_eq!(vm.layout_pass_observability_for_test().1, before + 1);
 }
 
+#[cfg(feature = "devtools")]
+#[tokio::test(flavor = "current_thread")]
+async fn realtime_publication_hover_refreshes_screen_after_temporary_viewport() {
+    tokio::task::LocalSet::new()
+        .run_until(async {
+            let (mut vm, viewport) = fixture(
+                r#"<!doctype html><style>
+        html, body { margin: 0 }
+        #target { width: 100px; height: 40px; background: red }
+        #target:hover { width: 160px; background: lime }
+        </style><div id=target></div>"#,
+            );
+            let session = crate::runtime::RendererScreencastPaintSession::default();
+            let paint = |vm: &mut StandaloneScriptVmHarness| {
+                let snapshot = vm
+                    .paint_current_screen_layout(
+                        Some(&session),
+                        viewport,
+                        moli_layout::PaintCaptureRequest::viewport(),
+                        LayoutFlushReason::RenderingOpportunity,
+                    )
+                    .unwrap()
+                    .unwrap();
+                moli_paint::raster_snapshot(&snapshot).unwrap()
+            };
+            assert_eq!(&paint(&mut vm).rgba[..4], [255, 0, 0, 255]);
+            let builds = vm.layout_pass_observability_for_test().1;
+
+            vm.screenshot_layout_snapshot(LayoutViewport::new(100, 120, 1.0))
+                .unwrap()
+                .unwrap();
+            assert_eq!(vm.eval("String(target.offsetWidth)").unwrap(), "100");
+            assert_eq!(vm.layout_pass_observability_for_test().1, builds + 1);
+
+            let hit = vm.mouse_input_surface_hit(16., 16., "mousemove").unwrap();
+            assert!(
+                vm._context_host
+                    .borrow_mut()
+                    .set_hovered_element_for_input(hit.target)
+            );
+            assert_eq!(vm.eval("String(target.offsetWidth)").unwrap(), "160");
+            assert_eq!(&paint(&mut vm).rgba[..4], [0, 255, 0, 255]);
+            assert_eq!(vm.layout_pass_observability_for_test().1, builds + 2);
+        })
+        .await;
+}
+
 #[test]
 fn realtime_publication_temporary_viewport_preserves_screen_container_query_sizes() {
     let (mut vm, viewport) = fixture(

@@ -9,16 +9,18 @@
 use std::{fmt::Debug, hash::Hash};
 
 use super::{
+    PaintSpace,
+    border::border_image_area,
     filters::{expanded_filter_clip, project_filters},
     geometry::BoxAreas,
+    inline_boxes::InlineBorderImages,
     text::{caret_rect, range_selection_rects},
 };
 use crate::{
-    LayoutBoxId, LayoutPoint, LayoutRect, LayoutTransform2D, PaintFilter, PaintFragment,
+    LayoutBoxId, LayoutFragmentKind, LayoutPoint, LayoutRect, LayoutReplacedKind,
+    LayoutTransform2D, PaintEdgeSizes, PaintFilter, PaintFragment, PaintPixelGrid,
     inline::InlinePaintBounds, projection::PaintProjection, stacking::PaintOrderEvent,
 };
-
-const CULL_ANTIALIAS_MARGIN: f32 = 1.0;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum PaintCullBounds {
@@ -39,7 +41,7 @@ impl PaintCullBounds {
 
     fn misses(self, region: PaintCullRegion) -> bool {
         match (self, region) {
-            (Self::Empty, _) => true,
+            (Self::Empty, _) | (_, PaintCullRegion::Empty) => true,
             (Self::Unbounded, _) | (_, PaintCullRegion::Infinite) => false,
             (Self::Bounded(bounds), PaintCullRegion::Bounded(cull)) => {
                 !rects_intersect(bounds, cull)
@@ -50,19 +52,35 @@ impl PaintCullBounds {
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(super) enum PaintCullRegion {
+    Empty,
     Bounded(LayoutRect),
     Infinite,
 }
 
 impl PaintCullRegion {
-    pub(super) fn for_capture(rect: LayoutRect) -> Self {
-        Self::Bounded(outset_rect(
-            rect,
-            CULL_ANTIALIAS_MARGIN,
-            CULL_ANTIALIAS_MARGIN,
-            CULL_ANTIALIAS_MARGIN,
-            CULL_ANTIALIAS_MARGIN,
-        ))
+    pub(super) fn for_capture(rect: LayoutRect, grid: PaintPixelGrid) -> Self {
+        Self::Bounded(include_antialias_fringe(rect, grid))
+    }
+
+    pub(super) fn intersect(self, rect: LayoutRect) -> Self {
+        if !rect_is_finite(rect) {
+            return self;
+        }
+        match self {
+            Self::Empty => Self::Empty,
+            Self::Infinite => Self::Bounded(rect),
+            Self::Bounded(current) => {
+                let left = current.x.max(rect.x);
+                let top = current.y.max(rect.y);
+                let right = current.right().min(rect.right());
+                let bottom = current.bottom().min(rect.bottom());
+                if right < left || bottom < top {
+                    Self::Empty
+                } else {
+                    Self::Bounded(LayoutRect::new(left, top, right - left, bottom - top))
+                }
+            }
+        }
     }
 
     pub(super) fn local_rect(self, local_to_viewport: LayoutTransform2D) -> Option<LayoutRect> {
@@ -104,7 +122,10 @@ pub(super) struct PaintCullPlan {
 }
 
 impl PaintCullPlan {
-    pub(super) fn build<N>(projection: &PaintProjection<'_, N>) -> Self
+    pub(super) fn build<N>(
+        projection: &PaintProjection<'_, N>,
+        inline_images: &InlineBorderImages,
+    ) -> Self
     where
         N: Copy + Debug + Eq + Hash,
     {
@@ -142,7 +163,7 @@ impl PaintCullPlan {
                     }
                 }
                 _ => {
-                    let bounds = event_ink_bounds(projection, event);
+                    let bounds = event_ink_bounds(projection, inline_images, event);
                     entries[index] = PaintCullPlanEntry {
                         bounds,
                         matching_pop: None,
@@ -174,6 +195,7 @@ impl PaintCullPlan {
 
 fn event_ink_bounds<N>(
     projection: &PaintProjection<'_, N>,
+    inline_images: &InlineBorderImages,
     event: PaintOrderEvent,
 ) -> PaintCullBounds
 where
@@ -183,10 +205,25 @@ where
         PaintOrderEvent::BoxOutsetShadow(id) => outset_shadow_bounds(projection, id),
         PaintOrderEvent::BoxBackground(id) => box_background_bounds(projection, id),
         PaintOrderEvent::TableCollapsedBorders(id) => table_border_bounds(projection, id),
-        PaintOrderEvent::BoxContents(id)
-        | PaintOrderEvent::InlineContents(id)
-        | PaintOrderEvent::BoxText(id) => box_contents_bounds(projection, id),
-        PaintOrderEvent::BoxCaret(id) => caret_rect(&projection.world.boxes[id.index()])
+        PaintOrderEvent::BoxContents(id) | PaintOrderEvent::BoxText(id) => {
+            box_contents_bounds(projection, id)
+        }
+        PaintOrderEvent::InlineContents(id) => {
+            let mut bounds = box_contents_bounds(projection, id);
+            for fragment in projection
+                .inline_fragments(id)
+                .iter()
+                .take_while(|fragment| {
+                    matches!(fragment.kind, LayoutFragmentKind::InlineBox { .. })
+                })
+            {
+                if let Some(image) = inline_images.get(&fragment.id) {
+                    bounds.include(map_snapped_box_rect(projection, id, image.ink_bounds()));
+                }
+            }
+            bounds
+        }
+        PaintOrderEvent::BoxCaret(id) => caret_rect(&projection.world.boxes[id])
             .map_or(PaintCullBounds::Empty, |rect| {
                 map_box_rect(projection, id, rect)
             }),
@@ -195,7 +232,7 @@ where
         } => {
             let mut bounds = PaintCullBounds::Empty;
             range_selection_rects(
-                &projection.world.boxes[owner.index()],
+                &projection.world.boxes[owner],
                 Some(&(start..end)),
                 |rect| {
                     bounds.include(map_box_rect(projection, owner, rect));
@@ -203,13 +240,15 @@ where
             );
             bounds
         }
-        PaintOrderEvent::InlineBox { owner, fragment } => map_box_rect(
-            projection,
-            owner,
-            projection.inline_fragments(owner)[fragment].rect,
-        ),
+        PaintOrderEvent::InlineBox { owner, fragment } => {
+            let fragment = &projection.inline_fragments(owner)[fragment];
+            let rect = inline_images
+                .get(&fragment.id)
+                .map_or(fragment.rect, |image| image.ink_bounds());
+            map_snapped_box_rect(projection, owner, rect)
+        }
         PaintOrderEvent::InlineText { owner, line, .. } => {
-            let layout_box = &projection.world.boxes[owner.index()];
+            let layout_box = &projection.world.boxes[owner];
             let context = layout_box.inline_layout.as_ref().unwrap();
             match context.fragments.lines[line].paint_bounds {
                 InlinePaintBounds::Empty => PaintCullBounds::Empty,
@@ -235,11 +274,20 @@ fn box_background_bounds<N>(projection: &PaintProjection<'_, N>, id: LayoutBoxId
 where
     N: Copy + Debug + Eq + Hash,
 {
-    let layout_box = &projection.world.boxes[id.index()];
+    let layout_box = &projection.world.boxes[id];
     if layout_box.inline_flattened || !layout_box.style.is_visible() {
         return PaintCullBounds::Empty;
     }
-    let bounds = map_box_rect(projection, id, projection.geometry(id.index()).border_box);
+    let rect = projection
+        .geometry(projection.world.boxes.index_of(id))
+        .border_box;
+    let border = layout_box.final_layout.border;
+    let widths = PaintEdgeSizes::new(border.top, border.right, border.bottom, border.left);
+    let ink = border_image_area(&layout_box.style, rect, widths).unwrap_or(rect);
+    let mut bounds = map_snapped_box_rect(projection, id, ink);
+    if ink != rect {
+        bounds.include(map_snapped_box_rect(projection, id, rect));
+    }
     if matches!(bounds, PaintCullBounds::Empty) && layout_box.is_replaced() {
         // Replaced-content projection can publish a fallback diagnostic even
         // when its used box has no ink. Do not make diagnostics depend on the
@@ -254,11 +302,30 @@ fn box_contents_bounds<N>(projection: &PaintProjection<'_, N>, id: LayoutBoxId) 
 where
     N: Copy + Debug + Eq + Hash,
 {
-    let layout_box = &projection.world.boxes[id.index()];
+    let layout_box = &projection.world.boxes[id];
     if !layout_box.style.is_visible() {
         return PaintCullBounds::Empty;
     }
-    let mut local = projection.geometry(id.index()).border_box;
+    match layout_box
+        .element_semantics()
+        .and_then(|element| element.replaced)
+    {
+        Some(LayoutReplacedKind::Svg) if !layout_box.style.clips_overflow() => {
+            // The scene can contribute beyond its CSS content box.
+            return PaintCullBounds::Unbounded;
+        }
+        Some(LayoutReplacedKind::Svg | LayoutReplacedKind::Frame) => {
+            return map_snapped_box_rect(
+                projection,
+                id,
+                BoxAreas::for_box(projection, id).content_rect,
+            );
+        }
+        _ => {}
+    }
+    let mut local = projection
+        .geometry(projection.world.boxes.index_of(id))
+        .border_box;
     if let Some(context) = layout_box.inline_layout.as_ref() {
         let layout = layout_box.final_layout;
         let origin = LayoutPoint::new(
@@ -275,7 +342,14 @@ where
             }
         }
     }
-    let bounds = map_box_rect(projection, id, local);
+    let mut bounds = map_box_rect(projection, id, local);
+    if layout_box.is_replaced() {
+        bounds.include(map_snapped_box_rect(
+            projection,
+            id,
+            BoxAreas::for_box(projection, id).content_rect,
+        ));
+    }
     if matches!(bounds, PaintCullBounds::Empty) && layout_box.is_replaced() {
         PaintCullBounds::Unbounded
     } else {
@@ -287,7 +361,7 @@ fn table_border_bounds<N>(projection: &PaintProjection<'_, N>, id: LayoutBoxId) 
 where
     N: Copy + Debug + Eq + Hash,
 {
-    let layout_box = &projection.world.boxes[id.index()];
+    let layout_box = &projection.world.boxes[id];
     if !layout_box.style.is_visible() {
         return PaintCullBounds::Empty;
     }
@@ -296,7 +370,7 @@ where
     };
     let mut bounds = PaintCullBounds::Empty;
     for segment in borders.segments() {
-        bounds.include(map_box_rect(projection, id, segment.rect));
+        bounds.include(map_snapped_box_rect(projection, id, segment.rect));
     }
     bounds
 }
@@ -305,11 +379,11 @@ fn outset_shadow_bounds<N>(projection: &PaintProjection<'_, N>, id: LayoutBoxId)
 where
     N: Copy + Debug + Eq + Hash,
 {
-    let layout_box = &projection.world.boxes[id.index()];
+    let layout_box = &projection.world.boxes[id];
     if layout_box.inline_flattened || !layout_box.style.is_visible() {
         return PaintCullBounds::Empty;
     }
-    let geometry = projection.geometry(id.index());
+    let geometry = projection.geometry(projection.world.boxes.index_of(id));
     let paint_space = projection.coordinate_spaces[geometry.coordinate_space.index()].paint;
     let areas = BoxAreas::for_box(projection, id);
     let mut bounds = PaintCullBounds::Empty;
@@ -354,13 +428,14 @@ fn box_outline_bounds<N>(projection: &PaintProjection<'_, N>, id: LayoutBoxId) -
 where
     N: Copy + Debug + Eq + Hash,
 {
-    let layout_box = &projection.world.boxes[id.index()];
+    let layout_box = &projection.world.boxes[id];
     if layout_box.inline_flattened || !layout_box.style.is_visible() {
         return PaintCullBounds::Empty;
     }
-    let geometry = projection.geometry(id.index());
+    let geometry = projection.geometry(projection.world.boxes.index_of(id));
     let paint_space = projection.coordinate_spaces[geometry.coordinate_space.index()].paint;
     let mut bounds = PaintCullBounds::Empty;
+    let pixel_grid = PaintPixelGrid::new(projection.viewport.device_pixel_ratio);
     let radii = layout_box
         .style
         .border_radii(geometry.border_box.width, geometry.border_box.height);
@@ -371,14 +446,14 @@ where
         radii,
         paint_space.property_transform(),
     ) {
-        bounds.include(map_rect(transform, rect));
+        bounds.include(map_snapped_rect(transform, rect, pixel_grid));
     }
 
-    let extent = projection.scroll_extent(id.index());
-    let scrollbar_transform = if id == projection.world.root {
-        LayoutTransform2D::IDENTITY
+    let extent = projection.scroll_extent(projection.world.boxes.index_of(id));
+    let scrollbar_space = if id == projection.world.root {
+        PaintSpace::ROOT
     } else {
-        paint_space.local_transform()
+        paint_space
     };
     for rect in [
         extent.horizontal_scrollbar.map(|scrollbar| scrollbar.frame),
@@ -388,7 +463,11 @@ where
     .into_iter()
     .flatten()
     {
-        bounds.include(map_rect(scrollbar_transform, rect));
+        bounds.include(map_snapped_rect(
+            scrollbar_space.property_transform(),
+            scrollbar_space.pre_transform_rect(rect),
+            pixel_grid,
+        ));
     }
     bounds
 }
@@ -401,7 +480,7 @@ fn context_output_bounds<N>(
 where
     N: Copy + Debug + Eq + Hash,
 {
-    let filters = project_filters(&projection.world.boxes[id.index()].style);
+    let filters = project_filters(&projection.world.boxes[id].style);
     let moves_pixels = filters.effects.iter().any(filter_moves_pixels);
     let unsupported_transform = projection.resolved_transform_has_unsupported_3d(id);
     if unsupported_transform {
@@ -414,7 +493,7 @@ where
         return (source_bounds, false);
     }
 
-    let geometry = projection.geometry(id.index());
+    let geometry = projection.geometry(projection.world.boxes.index_of(id));
     let transform = projection.coordinate_spaces[geometry.coordinate_space.index()]
         .paint
         .local_transform();
@@ -449,11 +528,56 @@ fn map_box_rect<N>(
 where
     N: Copy + Debug + Eq + Hash,
 {
-    let geometry = projection.geometry(id.index());
+    let geometry = projection.geometry(projection.world.boxes.index_of(id));
     let transform = projection.coordinate_spaces[geometry.coordinate_space.index()]
         .paint
         .local_transform();
     map_rect(transform, rect)
+}
+
+fn map_snapped_box_rect<N>(
+    projection: &PaintProjection<'_, N>,
+    id: LayoutBoxId,
+    rect: LayoutRect,
+) -> PaintCullBounds
+where
+    N: Copy + Debug + Eq + Hash,
+{
+    let geometry = projection.geometry(projection.world.boxes.index_of(id));
+    let paint_space = projection.coordinate_spaces[geometry.coordinate_space.index()].paint;
+    map_snapped_rect(
+        paint_space.property_transform(),
+        paint_space.pre_transform_rect(rect),
+        PaintPixelGrid::new(projection.viewport.device_pixel_ratio),
+    )
+}
+
+fn map_snapped_rect(
+    transform: LayoutTransform2D,
+    rect: LayoutRect,
+    grid: PaintPixelGrid,
+) -> PaintCullBounds {
+    map_rect(transform, grid.snap_rect(rect).unwrap_or(rect))
+}
+
+fn include_antialias_fringe(rect: LayoutRect, grid: PaintPixelGrid) -> LayoutRect {
+    let margin = grid.pixel_size() as f32;
+    outset_rect(rect, margin, margin, margin, margin)
+}
+
+pub(super) fn clip_cull_region(
+    region: PaintCullRegion,
+    transform: LayoutTransform2D,
+    rect: LayoutRect,
+    grid: PaintPixelGrid,
+) -> PaintCullRegion {
+    match map_rect(transform, rect) {
+        PaintCullBounds::Bounded(mapped) => {
+            region.intersect(include_antialias_fringe(mapped, grid))
+        }
+        PaintCullBounds::Empty => PaintCullRegion::Empty,
+        PaintCullBounds::Unbounded => region,
+    }
 }
 
 fn map_rect(transform: LayoutTransform2D, rect: LayoutRect) -> PaintCullBounds {
@@ -543,8 +667,11 @@ mod tests {
     #[test]
     fn capture_cull_rect_keeps_an_antialias_guard_band() {
         assert_eq!(
-            PaintCullRegion::for_capture(LayoutRect::new(10.0, 20.0, 30.0, 40.0)),
-            PaintCullRegion::Bounded(LayoutRect::new(9.0, 19.0, 32.0, 42.0))
+            PaintCullRegion::for_capture(
+                LayoutRect::new(10.0, 20.0, 30.0, 40.0),
+                PaintPixelGrid::new(2.0),
+            ),
+            PaintCullRegion::Bounded(LayoutRect::new(9.5, 19.5, 31.0, 41.0))
         );
     }
 }

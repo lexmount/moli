@@ -247,6 +247,13 @@ fn stored_cookie(name: &str, value: &str) -> StoredCookie {
     }
 }
 
+fn host_file_access_blocked_config() -> FetchConfig {
+    let mut config = FetchConfig::default();
+    config.set_local_file_policy(moli_fetch::LocalFilePolicy::BlockHostFileAccess);
+    config.set_web_security_disabled(true);
+    config
+}
+
 fn test_state() -> AppState {
     protocol_server_test_state(
         "127.0.0.1:9222".parse().expect("test addr"),
@@ -487,7 +494,7 @@ fn protocol_server_test_runtime_config(
         fetch_config,
         optional_resource_fetch_mask,
         true,
-        LayoutPolicy::OnDemand,
+        LayoutPolicy::Lazy,
     )
     // Most protocol fixtures exercise Chromium-compatible debugging, including pauses.
     .with_debugger_enabled(true)

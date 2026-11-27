@@ -1,8 +1,9 @@
 use moli_test_support as support;
 
 use super::{
-    Browser, FetchDeadline, FetchedDocument, NavigationEngine, NavigationPageStorageHandles,
-    NavigationResourceStorageHandles, RawDocumentFetchPolicy, RenderedDomWaitUntil,
+    Browser, FetchDeadline, FetchReadinessTimeout, FetchTimeoutPhase, FetchedDocument,
+    NavigationEngine, NavigationPageStorageHandles, NavigationResourceStorageHandles,
+    RawDocumentFetchPolicy, RenderedDomWaitUntil,
     external_raw_document_body_from_streaming_response_with_body_eof_observer,
 };
 use crate::{
@@ -581,8 +582,12 @@ async fn fetch_about_blank_case_variants_materialize_empty_documents() -> Result
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn browser_fetch_rejects_file_navigation_without_reading_local_file() -> Result<()> {
-    let browser = Browser::new(AppConfig::default())?;
+async fn browser_fetch_rejects_file_navigation_with_a_blocking_policy() -> Result<()> {
+    let mut config = AppConfig::default();
+    config
+        .fetch_mut()
+        .set_local_file_policy(moli_fetch::LocalFilePolicy::BlockFileUrls);
+    let browser = Browser::new(config)?;
 
     let error = browser
         .fetch_with_wait_until(
@@ -600,21 +605,19 @@ async fn browser_fetch_rejects_file_navigation_without_reading_local_file() -> R
     Ok(())
 }
 
-#[tokio::test(flavor = "multi_thread")]
+#[tokio::test]
 async fn fetch_done_does_not_wait_for_future_interval_timers() -> Result<()> {
     let server = FixtureServer::spawn().await?;
     let browser = Browser::new(AppConfig::default())?;
 
-    let mut page = tokio::time::timeout(
-        Duration::from_secs(2),
-        browser.fetch_with_wait_until(
+    let mut page = browser
+        .fetch_with_wait_until(
             &server.url("/runtime/future-interval-done"),
             RenderedDomWaitUntil::Done,
-            Duration::from_millis(500),
-        ),
-    )
-    .await
-    .context("fetch wait_until Done should not wait for future interval ticks")??;
+            Duration::from_secs(30),
+        )
+        .await
+        .context("fetch wait_until Done should not wait for future interval ticks")?;
 
     assert_eq!(
         page.evaluate_runtime_expression_async("document.body.dataset.ready")
@@ -1962,6 +1965,7 @@ async fn navigation_engine_service_worker_multipart_redirect_preserves_protocol_
                     true,
                     None,
                     None,
+                    moli_fetch::LocalFileNavigationAccess::Denied,
                     "POST",
                     &format!("{base_url}{upload_path}"),
                     Some(body.clone()),
@@ -2487,47 +2491,50 @@ async fn wait_for_selector_cancellation_restores_entry_for_close() -> Result<()>
     Ok(())
 }
 
-#[tokio::test(flavor = "multi_thread")]
+// The fixture spends 10 seconds on the main response and 24 on a subresource.
+// Waiting on the shared budget leaves the activity pending. A renewed budget
+// is long enough to observe the activity completing.
+const SHARED_READINESS_TIMEOUT: Duration = Duration::from_secs(30);
+
+#[tokio::test]
 async fn fetch_deadline_spans_lifecycle_selector_and_script_without_reset() -> Result<()> {
     let server = FixtureServer::spawn().await?;
     let browser = Browser::new(AppConfig::default())?;
     let renderer_owner = browser.js_runtime.renderer_owner_handle();
-    let started = std::time::Instant::now();
-    let deadline = FetchDeadline::new(Duration::from_millis(600))?;
+    let deadline = FetchDeadline::new(SHARED_READINESS_TIMEOUT)?;
     let fetched = browser
         .fetch_request_document_allow_http_error_with_wait_until_deadline(
-            browser_navigation_request(&server.url("/static"))?,
+            browser_navigation_request(&server.url("/wait-until-shared-deadline"))?,
             RenderedDomWaitUntil::Load,
             deadline,
             RawDocumentFetchPolicy::Materialize,
         )
         .await?;
     let FetchedDocument::Page(mut page) = fetched else {
-        panic!("static HTML fixture unexpectedly produced a raw document");
+        panic!("readiness fixture unexpectedly produced a raw document");
     };
     let page_id = page.renderer_page_id();
 
     browser
         .wait_for_selector_with_deadline(&mut page, "body", deadline)
         .await?;
-    tokio::time::sleep(Duration::from_millis(300)).await;
     let error = browser
-        .wait_for_script_truthy_with_deadline(&mut page, "false", deadline)
+        .wait_for_script_truthy_with_deadline(
+            &mut page,
+            "document.body.dataset.activity === 'complete'",
+            deadline,
+        )
         .await
         .unwrap_err();
 
-    assert!(
+    assert_eq!(
         error
-            .chain()
-            .any(|cause| cause.to_string().contains("timed out")),
+            .downcast_ref::<FetchReadinessTimeout>()
+            .map(|timeout| timeout.phase()),
+        Some(FetchTimeoutPhase::WaitingForScript),
         "unexpected deadline error: {error:?}"
     );
-    assert!(
-        started.elapsed() < Duration::from_millis(800),
-        "the script phase appears to have received a fresh timeout: elapsed={:?}",
-        started.elapsed()
-    );
-    tokio::time::timeout(Duration::from_secs(1), page.close_async()).await??;
+    tokio::time::timeout(Duration::from_secs(30), page.close_async()).await??;
     assert!(
         renderer_owner.record(page_id).is_none(),
         "a deadline-cancelled wait must return the Page owner entry for close"
@@ -2537,68 +2544,52 @@ async fn fetch_deadline_spans_lifecycle_selector_and_script_without_reset() -> R
     Ok(())
 }
 
-#[tokio::test(flavor = "multi_thread")]
+#[tokio::test]
 async fn best_effort_page_readiness_consumes_only_the_remaining_fetch_deadline() -> Result<()> {
     let server = FixtureServer::spawn().await?;
     let browser = Browser::new(AppConfig::default())?;
     let renderer_owner = browser.js_runtime.renderer_owner_handle();
+    let url = server.url("/wait-until-shared-deadline");
 
-    for (wait_until, path, expected_html) in [
-        (
-            RenderedDomWaitUntil::NetworkIdle,
-            "/wait-until-slow-interval-fetch",
-            "data-state=\"init\"",
-        ),
-        (
-            RenderedDomWaitUntil::DomStable,
-            "/wait-until-slow-interval-dom-mutation",
-            "id=\"mutation-count\"",
-        ),
+    for wait_until in [
+        RenderedDomWaitUntil::NetworkIdle,
+        RenderedDomWaitUntil::DomStable,
     ] {
-        // The main response costs 500 ms. Readiness must receive only the
-        // roughly 500 ms left in this one-second plan, not a fresh second.
-        let deadline = FetchDeadline::new(Duration::from_secs(1))?;
-        let started = std::time::Instant::now();
+        let deadline = FetchDeadline::new(SHARED_READINESS_TIMEOUT)?;
         let fetched = browser
             .fetch_request_document_allow_http_error_with_wait_until_deadline(
-                browser_navigation_request(&server.url(path))?,
+                browser_navigation_request(&url)?,
                 wait_until,
                 deadline,
                 RawDocumentFetchPolicy::Materialize,
             )
             .await?;
-        let elapsed = started.elapsed();
         let FetchedDocument::Page(mut page) = fetched else {
             panic!("HTML fixture unexpectedly produced a raw document");
         };
         let page_id = page.renderer_page_id();
 
         assert!(
-            elapsed < Duration::from_millis(1_300),
-            "{wait_until:?} appears to have restarted its timeout after the slow main response: {elapsed:?}"
-        );
-        assert!(
-            page.serialize_html_async().await?.contains(expected_html),
-            "the best-effort Page must remain usable after {wait_until:?} expires"
+            page.serialize_html_async()
+                .await?
+                .contains("data-activity=\"pending\""),
+            "{wait_until:?} must return a usable page before the activity completes"
         );
 
-        let post_wait_started = std::time::Instant::now();
+        // Even a selector that is already present must honor the spent budget.
         let error = browser
-            .wait_for_selector_with_deadline(&mut page, "#never-appears", deadline)
+            .wait_for_selector_with_deadline(&mut page, "body", deadline)
             .await
             .unwrap_err();
-        assert!(
+        assert_eq!(
             error
-                .chain()
-                .any(|cause| cause.to_string().contains("timed out")),
+                .downcast_ref::<FetchReadinessTimeout>()
+                .map(|timeout| timeout.phase()),
+            Some(FetchTimeoutPhase::WaitingForSelector),
             "unexpected exhausted-deadline error: {error:?}"
         );
-        assert!(
-            post_wait_started.elapsed() < Duration::from_millis(200),
-            "a post-readiness selector must not receive a fresh timeout"
-        );
 
-        tokio::time::timeout(Duration::from_secs(1), page.close_async()).await??;
+        tokio::time::timeout(Duration::from_secs(30), page.close_async()).await??;
         assert!(
             renderer_owner.record(page_id).is_none(),
             "best-effort deadline cancellation must return the Page entry for close"
@@ -2619,11 +2610,8 @@ async fn page_fetch_wait_until_apis_do_not_restart_best_effort_timeout() -> Resu
         RenderedDomWaitUntil::NetworkIdle,
         RenderedDomWaitUntil::DomStable,
     ] {
-        // The main response spends four seconds of the ten-second budget.
-        // The eight-second subresource stays pending on the shared budget
-        // and has time to complete if readiness starts a fresh budget.
         let mut page = browser
-            .fetch_with_wait_until(&url, wait_until, Duration::from_secs(10))
+            .fetch_with_wait_until(&url, wait_until, SHARED_READINESS_TIMEOUT)
             .await?;
 
         assert!(
@@ -4745,6 +4733,46 @@ async fn renderer_page_testing_handle_page_state_refresh_works_on_current_thread
     Ok(())
 }
 
+#[cfg(feature = "molio")]
+#[tokio::test]
+async fn viewport_display_ticks_do_not_capture_idle_page_state() -> Result<()> {
+    let browser = Browser::new(AppConfig::default().with_layout_policy(LayoutPolicy::Realtime))?;
+    let url = concat!(
+        "data:text/html,<body><script>",
+        "document.body.innerHTML='<main hidden>'+'<span data-item=1>text</span>'.repeat(4096)+'</main>'",
+        "</script>",
+    );
+    let mut page = browser.fetch(url).await?;
+    let mut frames = page
+        .subscribe_viewport_frames(Default::default(), 1)
+        .await?;
+    tokio::time::timeout(
+        Duration::from_secs(5),
+        frames
+            .updates
+            .wait_for(|frame| frame.as_ref().is_some_and(|frame| frame.snapshot.is_some())),
+    )
+    .await??;
+    tokio::time::timeout(
+        Duration::from_secs(5),
+        frames.display_tick_requests.wait_for(Option::is_none),
+    )
+    .await??;
+
+    let handle = page.handle_for_testing();
+    let before = handle.current_page_state_async().await?.snapshot_revision;
+    for _ in 0..4 {
+        page.viewport_display_tick(1, std::time::Instant::now())
+            .await?;
+    }
+    assert_eq!(
+        handle.current_page_state_async().await?.snapshot_revision,
+        before
+    );
+    assert!(!frames.display_tick_requests.has_changed()?);
+    Ok(())
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn renderer_owner_removed_page_releases_last_page_state() -> Result<()> {
     let server = FixtureServer::spawn().await?;
@@ -5345,14 +5373,14 @@ async fn renderer_owner_created_page_runs_input_commands() -> Result<()> {
 #[tokio::test(flavor = "multi_thread")]
 async fn renderer_owner_created_page_runs_input_query_commands() -> Result<()> {
     let server = FixtureServer::spawn().await?;
-    let browser = Browser::new(AppConfig::default().with_layout_policy(LayoutPolicy::OnDemand))?;
+    let browser = Browser::new(AppConfig::default().with_layout_policy(LayoutPolicy::Lazy))?;
     let renderer_owner = browser.js_runtime.renderer_owner_handle();
     let page_url: url::Url = server.url("/input-query-commands").parse()?;
     let html = r#"
         <!doctype html>
         <html>
           <body style="margin:0">
-            <input id="field" style="position:absolute;left:12px;top:8px;width:120px;height:24px" value="seed">
+            <input id="field" style="box-sizing:border-box;position:absolute;left:12px;top:8px;width:120px;height:24px" value="seed">
           </body>
         </html>
     "#
@@ -5443,7 +5471,7 @@ async fn renderer_owner_created_page_runs_input_query_commands() -> Result<()> {
 #[tokio::test(flavor = "multi_thread")]
 async fn renderer_owner_created_page_reports_real_client_rect_for_positioned_node() -> Result<()> {
     let server = FixtureServer::spawn().await?;
-    let browser = Browser::new(AppConfig::default().with_layout_policy(LayoutPolicy::OnDemand))?;
+    let browser = Browser::new(AppConfig::default().with_layout_policy(LayoutPolicy::Lazy))?;
     let renderer_owner = browser.js_runtime.renderer_owner_handle();
     let page_url: url::Url = server.url("/input-query-geometry").parse()?;
     let html = r#"

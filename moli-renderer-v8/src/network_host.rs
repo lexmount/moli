@@ -73,7 +73,7 @@ pub(crate) use self::body_source::{
     pending_network_body_stream, retain_pending_network_body_state_in_retired_realm,
 };
 pub(crate) use self::browser_response::{
-    LocalUrlError, file_url_response, local_url_response, local_url_response_result,
+    LocalUrlError, local_url_response, local_url_response_result,
 };
 pub(crate) use self::csp_reports::{
     WindowCspReportRequestContext, capture_window_csp_report_request_context,
@@ -124,6 +124,12 @@ pub(crate) use self::image::{
     start_scanned_image_preload,
 };
 pub(in crate::network_host) use self::js_values::defined_object_string_property;
+#[cfg(all(
+    feature = "media-ext",
+    any(target_os = "linux", target_os = "macos"),
+    target_pointer_width = "64"
+))]
+pub(crate) use self::media::is_mp4_video_response;
 pub(crate) use self::media::{
     MediaElementResourceFetchStart, media_response_status_is_successful,
     start_media_element_resource_fetch,
@@ -183,7 +189,6 @@ pub(in crate::network_host) use self::url_helpers::merge_subresource_request_hea
 pub(crate) use self::url_helpers::{ResolveContextUrlError, resolve_context_url};
 #[cfg(test)]
 pub(crate) use self::xhr::prepare_xhr_send_body;
-pub(crate) use self::xhr::xhr_has_upload_listeners;
 pub(crate) use self::xhr::{
     PreparedXhrSendBody, XHR_ABORTED_SLOT, XHR_ACTIVE_INTERNAL_ID_SLOT, XHR_ASYNC_SLOT,
     XHR_METHOD_SLOT, XHR_OPEN_GENERATION_SLOT, XHR_SEND_FLAG_SLOT, XHR_TIMEOUT_SLOT,
@@ -192,8 +197,8 @@ pub(crate) use self::xhr::{
     apply_xhr_response_body_source_with_status_text, apply_xhr_streaming_failure,
     apply_xhr_streaming_response_body_source, apply_xhr_streaming_response_chunk,
     apply_xhr_streaming_response_head, apply_xhr_timeout, begin_xhr_send,
-    convert_xhr_send_body_from_args, dispatch_xhr_loadstart, dispatch_xhr_upload_complete,
-    finish_xhr_abort, install_progress_event_template_bindings,
+    capture_xhr_upload_listener_flag, convert_xhr_send_body_from_args, dispatch_xhr_loadstart,
+    dispatch_xhr_upload_complete, finish_xhr_abort, install_progress_event_template_bindings,
     install_window_xml_http_request_template_bindings, install_xml_http_request_bindings,
     install_xml_http_request_event_target_bindings, progress_event_constructor_callback,
     set_xhr_state_number, throw_synchronous_xhr_failure, xhr_author_request_headers,

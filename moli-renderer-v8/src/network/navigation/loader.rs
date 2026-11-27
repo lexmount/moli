@@ -8,7 +8,7 @@ use moli_cookie_jar::BrowserCookieFacadeContext;
 use moli_fetch::{
     FetchCancelHandle, NetworkFetchResult, RawResponse, Request, Response, StreamingRawResponse,
 };
-use moli_url_policy::route_navigation_url;
+use moli_url_policy::{LocalFileNavigationAccess, route_navigation_url};
 use parking_lot::Mutex;
 
 use crate::network::{RendererResourceTaskRunner, ResourceRequestClient};
@@ -37,8 +37,13 @@ pub struct NavigationResourceLoaderDiagnostics {
 
 struct NavigationResourceLoaderInner {
     id: u64,
-    state: Mutex<NavigationResourceLoaderState>,
+    progress: Mutex<NavigationResourceLoaderProgress>,
     cancel: FetchCancelHandle,
+}
+
+struct NavigationResourceLoaderProgress {
+    state: NavigationResourceLoaderState,
+    loaded_local_file: bool,
 }
 
 /// The network authority for exactly one main-resource navigation attempt.
@@ -116,7 +121,10 @@ impl NavigationResourceLoader {
                 id: NEXT_NAVIGATION_RESOURCE_LOADER_ID
                     .fetch_add(1, Ordering::Relaxed)
                     .saturating_add(1),
-                state: Mutex::new(NavigationResourceLoaderState::Created),
+                progress: Mutex::new(NavigationResourceLoaderProgress {
+                    state: NavigationResourceLoaderState::Created,
+                    loaded_local_file: false,
+                }),
                 cancel,
             }),
         }
@@ -127,7 +135,7 @@ impl NavigationResourceLoader {
     }
 
     pub fn state(&self) -> NavigationResourceLoaderState {
-        *self.inner.state.lock()
+        self.inner.progress.lock().state
     }
 
     pub fn diagnostics(&self) -> NavigationResourceLoaderDiagnostics {
@@ -142,15 +150,15 @@ impl NavigationResourceLoader {
     }
 
     pub fn cancel(&self) {
-        let mut state = self.inner.state.lock();
+        let mut progress = self.inner.progress.lock();
         if matches!(
-            *state,
+            progress.state,
             NavigationResourceLoaderState::Created
                 | NavigationResourceLoaderState::Fetching
                 | NavigationResourceLoaderState::ResponseReady
         ) {
             self.inner.cancel.cancel();
-            *state = NavigationResourceLoaderState::Cancelled;
+            progress.state = NavigationResourceLoaderState::Cancelled;
         }
     }
 
@@ -170,7 +178,7 @@ impl NavigationResourceLoader {
     }
 
     pub async fn fetch(&self, request: Request) -> Result<Response> {
-        self.begin_fetch()?;
+        self.begin_fetch_request(&request)?;
         match self
             .request_client
             .fetch_with_cancel(
@@ -180,7 +188,7 @@ impl NavigationResourceLoader {
             .await
         {
             Ok(response) => {
-                self.finish_response_ready()?;
+                self.finish_response_ready(Some(&response.final_url))?;
                 Ok(response)
             }
             Err(error) => {
@@ -194,7 +202,7 @@ impl NavigationResourceLoader {
         &self,
         request: Request,
     ) -> Result<NetworkFetchResult<Response>> {
-        self.begin_fetch()?;
+        self.begin_fetch_request(&request)?;
         match self
             .request_client
             .fetch_text_stream_with_cancel_and_network_metadata(
@@ -204,7 +212,7 @@ impl NavigationResourceLoader {
             .await
         {
             Ok(response) => {
-                self.finish_response_ready()?;
+                self.finish_response_ready(Some(&response.response().final_url))?;
                 Ok(response)
             }
             Err(error) => {
@@ -215,7 +223,7 @@ impl NavigationResourceLoader {
     }
 
     pub async fn fetch_raw(&self, request: Request) -> Result<RawResponse> {
-        self.begin_fetch()?;
+        self.begin_fetch_request(&request)?;
         let single_hop = !request.transport_follows_redirects();
         let response_cancel = if single_hop {
             self.inner.cancel.child_for_subrequest()
@@ -243,7 +251,7 @@ impl NavigationResourceLoader {
                         .any(|(name, _)| name.eq_ignore_ascii_case("location"))
                 {
                     response_cancel.cancel();
-                    self.finish_response_ready()?;
+                    self.finish_response_ready(Some(&head.final_url))?;
                     return Ok(RawResponse::from_head_and_body(head, body));
                 }
                 while let Some(chunk) = response.next_chunk().await {
@@ -253,7 +261,7 @@ impl NavigationResourceLoader {
                     self.finish_failed();
                     return Err(error);
                 }
-                self.finish_response_ready()?;
+                self.finish_response_ready(Some(&head.final_url))?;
                 if single_hop {
                     self.inner.cancel.adopt_response_progress(&response_cancel);
                 }
@@ -267,13 +275,14 @@ impl NavigationResourceLoader {
     }
 
     pub(crate) fn restart_after_response(&self) -> Result<()> {
-        let mut state = self.inner.state.lock();
+        let mut progress = self.inner.progress.lock();
         ensure!(
-            *state == NavigationResourceLoaderState::ResponseReady,
+            progress.state == NavigationResourceLoaderState::ResponseReady,
             "navigation restart requires a completed response (state: {:?})",
-            *state
+            progress.state
         );
-        *state = NavigationResourceLoaderState::Created;
+        progress.state = NavigationResourceLoaderState::Created;
+        progress.loaded_local_file = false;
         Ok(())
     }
 
@@ -281,7 +290,7 @@ impl NavigationResourceLoader {
         &self,
         request: Request,
     ) -> Result<NetworkFetchResult<RawResponse>> {
-        self.begin_fetch()?;
+        self.begin_fetch_request(&request)?;
         let result = self
             .request_client
             .fetch_raw_with_cancel_and_network_metadata(
@@ -291,7 +300,7 @@ impl NavigationResourceLoader {
             .await;
         match result {
             Ok(response) => {
-                self.finish_response_ready()?;
+                self.finish_response_ready(Some(&response.response().final_url))?;
                 Ok(response)
             }
             Err(error) => {
@@ -311,7 +320,7 @@ impl NavigationResourceLoader {
         &self,
         request: Request,
     ) -> Result<NetworkFetchResult<StreamingRawResponse>> {
-        self.begin_fetch()?;
+        self.begin_fetch_request(&request)?;
         let cancellation = if request.transport_follows_redirects() {
             self.inner.cancel.clone()
         } else {
@@ -326,7 +335,7 @@ impl NavigationResourceLoader {
             .await
         {
             Ok(response) => {
-                self.finish_response_ready()?;
+                self.finish_response_ready(Some(&response.response().final_url))?;
                 if !matches!(response.response().status, 301 | 302 | 303 | 307 | 308)
                     || !response
                         .response()
@@ -350,18 +359,20 @@ impl NavigationResourceLoader {
     }
 
     pub(crate) fn note_external_response_ready(&self) -> Result<()> {
+        route_navigation_url(&self.requested_url, LocalFileNavigationAccess::Denied)?;
         self.begin_fetch()?;
-        self.finish_response_ready()
+        self.finish_response_ready(None)
     }
 
     pub fn commit(&self, final_url: url::Url) -> Result<DocumentFetchContextSeed> {
-        let mut state = self.inner.state.lock();
+        let mut progress = self.inner.progress.lock();
         ensure!(
-            *state == NavigationResourceLoaderState::ResponseReady,
+            progress.state == NavigationResourceLoaderState::ResponseReady,
             "navigation resource loader cannot commit from state {:?}",
-            *state
+            progress.state
         );
-        *state = NavigationResourceLoaderState::Committed;
+        let loaded_local_file = progress.loaded_local_file && final_url == self.requested_url;
+        progress.state = NavigationResourceLoaderState::Committed;
         Ok(DocumentFetchContextSeed::new(
             self.requested_url.clone(),
             final_url,
@@ -369,29 +380,41 @@ impl NavigationResourceLoader {
             self.request_client.page_network_policy(),
             self.committed_document_browser_site_context.clone(),
             self.task_runner.clone(),
+            loaded_local_file,
         ))
     }
 
+    fn begin_fetch_request(&self, request: &Request) -> Result<()> {
+        let file_access = if request.url == self.requested_url {
+            self.request_client.file_navigation_access(request)
+        } else {
+            LocalFileNavigationAccess::Denied
+        };
+        route_navigation_url(&self.requested_url, file_access)?;
+        if request.url.scheme() == "file" {
+            route_navigation_url(&request.url, file_access)?;
+        }
+        self.begin_fetch()
+    }
+
     fn begin_fetch(&self) -> Result<()> {
-        route_navigation_url(
-            &self.requested_url,
-            self.request_client.local_file_navigation_access(),
-        )?;
-        let mut state = self.inner.state.lock();
+        let mut progress = self.inner.progress.lock();
         ensure!(
-            *state == NavigationResourceLoaderState::Created,
+            progress.state == NavigationResourceLoaderState::Created,
             "navigation resource loader can start only once (state: {:?})",
-            *state
+            progress.state
         );
-        *state = NavigationResourceLoaderState::Fetching;
+        progress.state = NavigationResourceLoaderState::Fetching;
         Ok(())
     }
 
-    fn finish_response_ready(&self) -> Result<()> {
-        let mut state = self.inner.state.lock();
-        match *state {
+    fn finish_response_ready(&self, final_url: Option<&url::Url>) -> Result<()> {
+        let mut progress = self.inner.progress.lock();
+        match progress.state {
             NavigationResourceLoaderState::Fetching => {
-                *state = NavigationResourceLoaderState::ResponseReady;
+                progress.state = NavigationResourceLoaderState::ResponseReady;
+                progress.loaded_local_file =
+                    self.requested_url.scheme() == "file" && final_url == Some(&self.requested_url);
                 Ok(())
             }
             NavigationResourceLoaderState::Cancelled => {
@@ -404,9 +427,9 @@ impl NavigationResourceLoader {
     }
 
     fn finish_failed(&self) {
-        let mut state = self.inner.state.lock();
-        if *state != NavigationResourceLoaderState::Cancelled {
-            *state = NavigationResourceLoaderState::Failed;
+        let mut progress = self.inner.progress.lock();
+        if progress.state != NavigationResourceLoaderState::Cancelled {
+            progress.state = NavigationResourceLoaderState::Failed;
         }
     }
 }
@@ -417,7 +440,7 @@ impl Drop for NavigationResourceLoaderInner {
         // clone releases it. Performing cancellation here avoids a racy
         // `Arc::strong_count()` last-owner check in the outer wrapper.
         if matches!(
-            *self.state.get_mut(),
+            self.progress.get_mut().state,
             NavigationResourceLoaderState::Created | NavigationResourceLoaderState::Fetching
         ) {
             self.cancel.cancel();
@@ -503,7 +526,7 @@ mod tests {
         navigation.cancel();
 
         let error = navigation
-            .finish_response_ready()
+            .finish_response_ready(None)
             .expect_err("cancelled response must not become ready");
 
         assert_eq!(error.to_string(), "navigation cancelled");

@@ -1934,6 +1934,15 @@ def run_engine_on_cases(
     actually navigates to (loopback or external IPv6).
     """
 
+    if driver.name == "moli" and any(
+        isinstance(case, tuple) and case[0] in {
+            "clear-site-data/clear-cache.https.html",
+            "clear-site-data/clear-cache-partitioning.tentative.https.html",
+        }
+        for case in cases
+    ):
+        driver = driver.with_ephemeral_http_cache()
+
     return asyncio.run(
         _run_async(
             driver=driver,

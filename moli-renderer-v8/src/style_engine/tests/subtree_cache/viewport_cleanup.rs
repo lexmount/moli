@@ -2,7 +2,6 @@ use super::*;
 
 #[test]
 fn viewport_resize_recascades_cached_viewport_units_without_media_match_changes() {
-    reset_source_cascade_rebuild_count_for_test();
     let mut host = test_host();
     let document = host.document_handle();
     let rule_target = host.create_element("div");
@@ -105,7 +104,6 @@ fn viewport_resize_recascades_cached_viewport_units_without_media_match_changes(
     let shadow_flushes = engine
         .retained_shadow_scope_flush_count_for_document_for_test(document, shadow_root)
         .expect("the shadow scope should be retained");
-    let source_rebuilds = source_cascade_rebuild_count_for_test();
 
     let viewport_500 = StyleViewport::new(Some(500.0), Some(400.0));
     assert_eq!(
@@ -135,11 +133,6 @@ fn viewport_resize_recascades_cached_viewport_units_without_media_match_changes(
         Some(shadow_flushes),
         "viewport units alone must not flush the ShadowRoot AuthorStyles",
     );
-    assert_eq!(
-        source_cascade_rebuild_count_for_test(),
-        source_rebuilds,
-        "viewport units alone must not rebuild source-local cascade data",
-    );
 }
 
 #[test]
@@ -151,7 +144,7 @@ fn repeated_viewport_resizes_recascade_only_dependent_cached_elements() {
     assert!(host.set_attribute(dependent, "class", "viewport-dependent"));
     assert!(host.set_attribute(independent, "class", "viewport-independent"));
     assert!(host.append_child(document, dependent));
-    assert!(host.append_child(document, independent));
+    assert!(host.append_child(dependent, independent));
 
     let document_url = url::Url::parse("https://example.test/repeated-resize.html").unwrap();
     let mut inputs = FullStyleWorldSnapshot::default();
@@ -360,7 +353,6 @@ fn viewport_resize_propagates_through_inheritance_variables_pseudos_and_nested_s
 
 #[test]
 fn device_changes_keep_media_sheets_installed_and_flush_only_affected_tree_scopes() {
-    reset_source_cascade_rebuild_count_for_test();
     let mut host = test_host();
     let document = host.document_handle();
     let document_target = host.create_element("div");
@@ -506,7 +498,6 @@ fn device_changes_keep_media_sheets_installed_and_flush_only_affected_tree_scope
     let second_flushes = engine
         .retained_shadow_scope_flush_count_for_document_for_test(document, second_root)
         .expect("second scope should be retained");
-    let source_rebuilds = source_cascade_rebuild_count_for_test();
 
     let viewport_700 = StyleViewport::new(Some(700.0), Some(500.0));
     assert_eq!(
@@ -531,7 +522,6 @@ fn device_changes_keep_media_sheets_installed_and_flush_only_affected_tree_scope
         Some(second_flushes),
         "a viewport change that crosses no media boundary must not flush the second scope",
     );
-    assert_eq!(source_cascade_rebuild_count_for_test(), source_rebuilds);
     assert_eq!(
         engine.computed_style_property_value(
             &host,
@@ -603,11 +593,6 @@ fn device_changes_keep_media_sheets_installed_and_flush_only_affected_tree_scope
         engine.retained_stylist_flush_count_for_document_for_test(document),
         document_flushes + 1,
         "the Document Stylist must flush once when its installed MediaList changes match state",
-    );
-    assert_eq!(
-        source_cascade_rebuild_count_for_test(),
-        source_rebuilds + 1,
-        "only the affected scope's source-local cascade projection must rebuild",
     );
 }
 

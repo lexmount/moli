@@ -9,38 +9,10 @@ impl ScriptVm {
         let prepared = self
             .document_runtime
             .prepare_initial_connected_style_loads();
-        self.commit_and_apply_connected_style_loads(prepared);
-    }
-
-    fn commit_and_apply_connected_style_loads(
-        &mut self,
-        prepared_loads: Vec<crate::document_runtime::PreparedConnectedStyleLoad>,
-    ) {
-        // This is a synchronous owner-thread transaction. Preparing reads the
-        // DOM, committing touches only ContextHost's FrameOwnerStore, and
-        // applying starts/queues the resource operation. No V8 callback, task
-        // checkpoint, or event-loop turn runs between those steps.
-        for prepared in prepared_loads {
-            let inline_source = self
-                ._context_host
-                .borrow()
-                .owner_style_sheet_processing_source(prepared.owner());
-            let event_admission = self
-                ._context_host
-                .borrow_mut()
-                .commit_connected_style_load_event_plan(prepared.event_plan());
-            let Some(event_admission) = event_admission else {
-                tracing::debug!(
-                    owner = ?prepared.owner(),
-                    "discarded connected-style plan rejected by the current main Document"
-                );
-                continue;
-            };
-            let prime_result = self.document_runtime.apply_prepared_connected_style_load(
-                prepared,
-                inline_source,
-                event_admission,
+        for prepared in prepared {
+            let prime_result = self.document_runtime.commit_prepared_connected_style_load(
                 self._context_host.as_ref().as_ptr(),
+                prepared,
             );
             self.apply_connected_style_load_prime_result(prime_result);
         }
@@ -60,28 +32,12 @@ impl ScriptVm {
             );
             return 0;
         }
-        let completed_stylesheet_clients = self
-            .document_runtime
-            .note_discovered_document_owned_stylesheet_inputs(inputs.iter());
-        self.settle_stylesheet_link_clients(completed_stylesheet_clients);
-        if inputs.iter().any(|input| {
-            matches!(
-                input.signature(),
-                crate::stylesheet_blocking::DocumentBlockingStylesheetSignature::ParserCreatedStyleImport { .. }
-            )
-        }) {
-            // Closing a parser-created style queues its owner processing until
-            // discovery can supply the shared import operation. Bind it now so
-            // the graph is installed before its terminal releases the script.
-            let prepared = self
-                .document_runtime
-                .prepare_parser_style_import_loads(inputs);
-            self.commit_and_apply_connected_style_loads(prepared);
+        if !inputs.is_empty() {
             let prime_result = self
                 .document_runtime
-                .prime_document_lifecycle_processing_for_owner(self._context_host.as_ref().as_ptr());
+                .accept_parser_stylesheet_inputs(self._context_host.as_ref().as_ptr(), inputs);
             self.apply_connected_style_load_prime_result(prime_result);
-            self.record_ready_stylesheet_network_results();
+            self.publish_ready_stylesheet_results();
         }
         inputs.len()
     }

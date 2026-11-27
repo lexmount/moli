@@ -936,7 +936,7 @@ async fn execute_connected_style_load_task_on_owner_local_task(
             let lifecycle_started = Instant::now();
             page_vm
                 .vm_mut()
-                .prime_document_lifecycle_processing_and_record_stylesheet_network_results();
+                .prime_document_lifecycle_and_publish_stylesheets();
             let lifecycle_elapsed_ms = lifecycle_started.elapsed().as_millis();
 
             Ok(PageOwnedConnectedStyleLoadTaskRun {
@@ -1847,10 +1847,10 @@ impl PageVm {
         }
 
         self.vm_mut()
-            .prime_document_lifecycle_processing_and_record_stylesheet_network_results();
+            .prime_document_lifecycle_and_publish_stylesheets();
 
         if !self
-            .vm_mut()
+            .vm()
             .document_runtime
             .document_write_stylesheet_blocked_script_is_ready()
         {
@@ -1863,7 +1863,7 @@ impl PageVm {
             .resume_document_write_stylesheet_blocked_script()?;
         if resumed {
             self.vm_mut()
-                .prime_document_lifecycle_processing_and_record_stylesheet_network_results();
+                .prime_document_lifecycle_and_publish_stylesheets();
         }
         Ok(resumed)
     }
@@ -2578,7 +2578,7 @@ impl PageVm {
                             page_vm.report.runs.push(run);
                             page_vm
                                 .vm_mut()
-                                .prime_document_lifecycle_processing_and_record_stylesheet_network_results();
+                                .prime_document_lifecycle_and_publish_stylesheets();
                         }
                         parser_completion::SelectedPostParsePageOwnedCompletion::Ordinary
                     }
@@ -3618,7 +3618,7 @@ impl PageVm {
             )
             .await;
         self.vm_mut()
-            .prime_document_lifecycle_processing_and_record_stylesheet_network_results();
+            .prime_document_lifecycle_and_publish_stylesheets();
         let (run, navigation_triggered, completion, _) = execution.into_parts();
         (run, navigation_triggered, completion)
     }
@@ -4426,7 +4426,7 @@ impl PageVm {
             vm_bootstrap.finish()?
         };
         vm.set_document_navigator_identity(&env.navigator_identity);
-        vm.set_layout_policy(env.layout_configuration.policy);
+        vm.set_layout_configuration(env.layout_configuration);
         vm.set_scrollbars_hidden(
             env.layout_configuration
                 .scrollbars_hidden_for(env.document_settings.scrollbars_hidden),

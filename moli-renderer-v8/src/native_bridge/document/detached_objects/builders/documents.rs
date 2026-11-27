@@ -99,11 +99,6 @@ fn new_detached_document_shell<'s>(
         v8str(scope, "documentKind").into(),
         v8_string(scope, kind)?.into(),
     );
-    let _ = state.set(
-        scope,
-        v8str(scope, "readyState").into(),
-        v8_string(scope, "complete")?.into(),
-    );
     define_detached_state(scope, document, state);
     let handle = create_native_detached_document_handle_with_url(scope, kind, url)?;
     define_detached_native_handle(scope, document, handle);

@@ -7,6 +7,7 @@ edition = "2024"
 [features]
 default = ["devtools"]
 devtools = ["moli-command-types/devtools", "dep:moli-protocol-cdp"]
+media-ext = ["dep:moli-video", "moli-video?/media-ext", "moli-webapi/media-ext"]
 # Desktop viewport streaming and native editing use the existing input dispatch.
 molio = ["devtools", "moli-layout/molio"]
 # Native ACE page tasks for embedders. Public browser builds leave this disabled.
@@ -18,6 +19,9 @@ test-support = []
 # (`window.webdriver` / `window.WebDriver`) used by imported WPT tests.
 # Keep disabled for normal browser builds so page scripts do not see this test surface.
 wpt-extensions = []
+
+[target.'cfg(all(any(target_os = "linux", target_os = "macos"), target_pointer_width = "64"))'.dependencies]
+moli-video = { path = "../moli-video", optional = true }
 
 [dependencies]
 moli-command-types = { path = "../moli-types/moli-command-types", default-features = false }
@@ -41,8 +45,8 @@ read-fonts = "0.41.0"
 percent-encoding = "2.3"
 selectors = "0.41"
 stylo = "0.22"
-stylo_static_prefs = "0.22"
 moli-action-window = { path = "../moli-action-window" }
+moli-input = { path = "../moli-input" }
 moli-broadcast-channel = { path = "../moli-broadcast-channel" }
 moli-browser-profile = { path = "../moli-browser-profile" }
 moli-content-type = { path = "../moli-content-type" }
@@ -126,7 +130,7 @@ strum = { version = "0.28.0", features = ["derive"] }
 # Tokio >=1.53 releases a dropped mpsc receiver's waker even while context-wide
 # senders remain (tokio-rs/tokio#8095). Older versions retain stopped renderer
 # I/O drivers and leak an eventpoll/eventfd pair per closed target on Linux.
-tokio = { version = "1.53.1", features = ["io-util", "macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
+tokio = { version = "1.53.1", features = ["fs", "io-util", "macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
 tracing = "0.1.41"
 url = "2.5.7"
 idna = "1.0"

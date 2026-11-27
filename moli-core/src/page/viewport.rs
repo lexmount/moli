@@ -16,6 +16,8 @@ use super::{
 pub struct ViewportFrames {
     pub updates: watch::Receiver<Option<RendererViewportFrame>>,
     pub cursor: watch::Receiver<Option<RendererViewportCursor>>,
+    /// The viewport revision awaiting display frames, while rendering work is pending.
+    pub display_tick_requests: watch::Receiver<Option<u64>>,
     pub resource_wake: Arc<Notify>,
 }
 
@@ -165,6 +167,7 @@ impl Page {
     ) -> Result<ViewportFrames> {
         let (updates, receiver) = watch::channel(None);
         let (cursor, cursor_receiver) = watch::channel(None);
+        let (display_tick_requests, display_tick_receiver) = watch::channel(None);
         let resource_wake = Arc::new(Notify::new());
         self.dispatch_unit_page_command_async(
             RendererPageCommand::SubscribeViewportFrames(RendererViewportSubscription {
@@ -173,6 +176,7 @@ impl Page {
                 initial_pointer_position,
                 updates,
                 cursor,
+                display_tick_requests,
                 resource_wake: Arc::clone(&resource_wake),
             }),
             "subscribe to viewport frames",
@@ -181,6 +185,7 @@ impl Page {
         Ok(ViewportFrames {
             updates: receiver,
             cursor: cursor_receiver,
+            display_tick_requests: display_tick_receiver,
             resource_wake,
         })
     }
@@ -198,6 +203,15 @@ impl Page {
             "set viewport pointer position",
         )
         .await
+    }
+
+    /// Signals that the native window has reached another display frame.
+    pub async fn viewport_display_tick(
+        &self,
+        revision: u64,
+        time: std::time::Instant,
+    ) -> Result<()> {
+        self.handle.viewport_display_tick(revision, time).await
     }
 
     pub async fn wake_viewport_frames(&mut self) -> Result<()> {

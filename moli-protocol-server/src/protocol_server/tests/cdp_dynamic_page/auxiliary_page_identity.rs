@@ -18,6 +18,18 @@ pub(super) async fn open_auxiliary_with_url(
     url: &str,
     synchronous_script: &str,
 ) -> (String, TestCdpSocket) {
+    let id = open_auxiliary_target(addr, opener, url, synchronous_script).await;
+    let mut page = connect_dynamic_page(addr, &id).await;
+    send_cdp_command(&mut page, 1, "Page.enable", None, json!({})).await;
+    (id, page)
+}
+
+pub(super) async fn open_auxiliary_target(
+    addr: std::net::SocketAddr,
+    opener: &mut TestCdpSocket,
+    url: &str,
+    synchronous_script: &str,
+) -> String {
     let baseline = fetch_server_json(addr, "/json/list").await;
     let ids: Vec<_> = baseline
         .as_array()
@@ -41,13 +53,10 @@ pub(super) async fn open_auxiliary_with_url(
         targets.len() == ids.len() + 1
     })
     .await;
-    let id = targets.iter().find(|t| !ids.contains(&t["id"])).unwrap()["id"]
+    targets.iter().find(|t| !ids.contains(&t["id"])).unwrap()["id"]
         .as_str()
         .unwrap()
-        .to_owned();
-    let mut page = connect_dynamic_page(addr, &id).await;
-    send_cdp_command(&mut page, 1, "Page.enable", None, json!({})).await;
-    (id, page)
+        .to_owned()
 }
 
 async fn wait_for_value(page: &mut TestCdpSocket, expression: &str, expected: serde_json::Value) {
@@ -135,6 +144,68 @@ async fn auxiliary_page_borrowed_close_uses_the_window_receiver() {
     assert_eq!(
         evaluate_window_name_probe(&mut c, 2, "document.body.textContent").await,
         "keep c"
+    );
+    abort_test_cdp_server(server).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn borrowed_set_attribute_updates_lazy_image_in_popup_document() {
+    let (fixture_addr, _fixture) = spawn_dedicated_fixture_server(
+        Router::new()
+            .route(
+                "/image.svg",
+                get(|| async {
+                    (
+                        [(axum::http::header::CONTENT_TYPE, "image/svg+xml")],
+                        r#"<svg xmlns="http://www.w3.org/2000/svg" width="4" height="4"><rect width="4" height="4"/></svg>"#,
+                    )
+                }),
+            )
+            .fallback(get(|| async { axum::response::Html("<!doctype html>") })),
+        "popup-lazy-image",
+    );
+    let (addr, server) = spawn_test_protocol_server_with_image_fetch_enabled(true).await;
+    let (mut browser, _) = connect_async(discover_browser_websocket_url(addr).await.unwrap())
+        .await
+        .unwrap();
+    let opener_id = create_dynamic_target(&mut browser, 1).await;
+    let mut opener = connect_dynamic_page(addr, &opener_id).await;
+    send_cdp_command(&mut opener, 1, "Page.enable", None, json!({})).await;
+    navigate_dynamic_page_and_wait_for_load(&mut opener, 2, &format!("http://{fixture_addr}/"))
+        .await;
+    let (_, mut popup) = open_auxiliary(addr, &mut opener, "").await;
+    navigate_dynamic_page_and_wait_for_load(&mut popup, 3, &format!("http://{fixture_addr}/popup"))
+        .await;
+
+    let messages = timeout(
+        Duration::from_secs(5),
+        send_cdp_command(
+            &mut opener,
+            4,
+            "Runtime.evaluate",
+            None,
+            json!({"awaitPromise": true, "returnByValue": true, "expression": r#"(async () => {
+                const image = p.document.createElement('img');
+                image.loading = 'lazy';
+                p.document.body.append(image);
+                const loaded = new Promise(resolve => {
+                    image.onload = () => resolve([image.complete, image.naturalWidth]);
+                    image.onerror = () => resolve(['error']);
+                });
+                Element.prototype.setAttribute.call(image, 'src', '/image.svg');
+                await Promise.resolve();
+                image.loading = 'eager';
+                return await loaded;
+            })()"#}),
+        ),
+    )
+    .await
+    .expect("borrowed src setter should start the popup image request");
+    let response = response_by_id(&messages, 4);
+    assert_eq!(
+        response["result"]["result"]["value"],
+        json!([true, 4]),
+        "{response}"
     );
     abort_test_cdp_server(server).await;
 }

@@ -20,7 +20,7 @@ impl LinkProjection {
         let targets = projection
             .world
             .boxes
-            .iter()
+            .ordered()
             .map(|layout_box| {
                 let mut current = layout_box.source.or(layout_box.owner);
                 let mut ancestors = Vec::new();
@@ -41,7 +41,10 @@ impl LinkProjection {
                                     .first()
                                     .copied()
                             })?;
-                            let fragment = projection.geometry(id.index()).fragments.first()?;
+                            let fragment = projection
+                                .geometry(projection.world.boxes.index_of(id))
+                                .fragments
+                                .first()?;
                             let fragment = &projection.fragments[fragment.index()];
                             let matrix = projection.coordinate_spaces
                                 [fragment.coordinate_space.index()]

@@ -7,8 +7,8 @@
 
 use style::Atom;
 use taffy::{
-    AvailableSpace, BoxSizing, CoreStyle as _, MaybeMath, MaybeResolve, RequestedAxis,
-    ResolveOrZero as _, ResolvedAspectRatio, Size, SizingMode,
+    AbsoluteAxis, AvailableSpace, BoxSizing, CoreStyle as _, MaybeMath, MaybeResolve,
+    RequestedAxis, ResolveOrZero as _, ResolvedAspectRatio, Size, SizingMode,
 };
 
 use crate::{LayoutReplacedKind, ReplacedMetrics, style::resolve_stylo_calc_value};
@@ -273,18 +273,17 @@ pub(crate) fn measure_replaced(
     // The browser-owned style seam has already resolved the three CSS states
     // (`auto`, `<ratio>`, and `auto <ratio>`) against the natural ratio. Do not
     // reconstruct that precedence from Taffy's lossy numeric field here.
-    let preferred_basis = Size {
-        width: if available_space.width == AvailableSpace::MinContent {
-            Some(0.0)
-        } else {
-            parent_size.width
-        },
-        height: if available_space.height == AvailableSpace::MinContent {
-            Some(0.0)
-        } else {
-            parent_size.height
-        },
-    };
+    // CSS Sizing 3 resolves cyclic percentages to zero in the requested
+    // min-content axis. A block's width probe can also carry min-content
+    // availability in the opposite axis.
+    let preferred_basis = parent_size.or(Size {
+        width: (requested_axis.contains(AbsoluteAxis::Horizontal)
+            && available_space.width == AvailableSpace::MinContent)
+            .then_some(0.0),
+        height: (requested_axis.contains(AbsoluteAxis::Vertical)
+            && available_space.height == AvailableSpace::MinContent)
+            .then_some(0.0),
+    });
     let mut preferred_size = style
         .size
         .maybe_resolve(preferred_basis, resolve_stylo_calc_value)

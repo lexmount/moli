@@ -1082,6 +1082,7 @@ mod tests {
             layout_configuration: moli_page_types::LayoutConfiguration {
                 policy: moli_page_types::LayoutPolicy::default(),
                 scrollbars_hidden: false,
+                ..Default::default()
             },
             wpt_extensions_enabled: false,
             navigation_bootstrap_entry: None,

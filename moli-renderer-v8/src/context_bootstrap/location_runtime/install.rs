@@ -366,7 +366,15 @@ fn location_writable_attribute_setter_callback<'s>(
         rv.set_undefined();
         return;
     };
-    let Some(value) = v8_value_to_string(scope, args.get(0)) else {
+    let input = args.get(0);
+    let value = if matches!(attribute, LocationAttribute::Href) {
+        input
+            .to_string(scope)
+            .map(|value| value.to_rust_string_lossy(scope))
+    } else {
+        v8_value_to_string(scope, input)
+    };
+    let Some(value) = value else {
         return;
     };
     let holder = args.this();

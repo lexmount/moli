@@ -32,13 +32,44 @@ pub fn media_mime_support(input: &str) -> MediaMimeSupport {
 }
 
 pub fn is_media_source_type_supported(input: &str) -> bool {
-    if mime_essence(input).as_deref() != Some("video/mp4") {
-        return false;
+    media_source_tracks(input, false).is_some()
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum MediaSourceTracks {
+    Video,
+    Audio,
+    VideoAndAudio,
+}
+
+impl MediaSourceTracks {
+    pub fn has_video(self) -> bool {
+        matches!(self, Self::Video | Self::VideoAndAudio)
     }
-    mime_parameter(input, "codecs").is_some_and(|codecs| {
-        codecs
-            .split(',')
-            .map(str::trim)
-            .any(|codec| codec.to_ascii_lowercase().starts_with("avc1."))
-    })
+
+    pub fn has_audio(self) -> bool {
+        matches!(self, Self::Audio | Self::VideoAndAudio)
+    }
+}
+
+pub fn media_source_tracks(input: &str, supports_aac: bool) -> Option<MediaSourceTracks> {
+    let mime = mime_essence(input)?;
+    let codecs = mime_parameter(input, "codecs")?;
+    let mut video = false;
+    let mut audio = false;
+    for codec in codecs.split(',').map(str::trim) {
+        if !video && codec.to_ascii_lowercase().starts_with("avc1.") {
+            video = true;
+        } else if supports_aac && !audio && codec.eq_ignore_ascii_case("mp4a.40.2") {
+            audio = true;
+        } else {
+            return None;
+        }
+    }
+    match (mime.as_str(), video, audio) {
+        ("video/mp4", true, false) => Some(MediaSourceTracks::Video),
+        ("audio/mp4", false, true) => Some(MediaSourceTracks::Audio),
+        ("video/mp4", true, true) => Some(MediaSourceTracks::VideoAndAudio),
+        _ => None,
+    }
 }

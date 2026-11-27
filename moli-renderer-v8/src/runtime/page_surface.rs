@@ -549,9 +549,13 @@ pub struct RendererInterceptedDrag {
     pub drag_operations_mask: i32,
 }
 
+pub use moli_input::WheelDispatchOutcome as RendererWheelDispatchOutcome;
+
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct RendererInputDispatchOutcome {
     pub handled: bool,
+    /// Present once a wheel event was dispatched to a document.
+    pub wheel: Option<RendererWheelDispatchOutcome>,
     pub triggered_top_level_navigation: bool,
     pub pending_download: Option<RendererPendingDownloadActivation>,
     pub pending_file_chooser: Option<RendererPendingFileChooserActivation>,

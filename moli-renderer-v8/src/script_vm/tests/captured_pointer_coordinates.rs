@@ -2,7 +2,7 @@ use super::*;
 
 async fn captured_child_vm(nested: bool, scaled: bool) -> StandaloneScriptVmHarness {
     let mut vm = new_storage_html_test_vm("https://captured-pointer-coordinates.test/");
-    vm.set_layout_policy(moli_page_types::LayoutPolicy::OnDemand);
+    vm.set_layout_policy(moli_page_types::LayoutPolicy::Lazy);
     vm.eval(r#"
         document.body.style.margin='0';
         document.body.innerHTML='<div id=outside style="position:absolute;left:0;top:0;width:50px;height:50px"></div>';
@@ -115,7 +115,7 @@ async fn assert_removed_pointer_target_preserves_frame_coordinates(
     scaled: bool,
 ) {
     let mut vm = new_storage_html_test_vm("https://removed-pointer-coordinates.test/");
-    vm.set_layout_policy(moli_page_types::LayoutPolicy::OnDemand);
+    vm.set_layout_policy(moli_page_types::LayoutPolicy::Lazy);
     vm.eval(r#"
         document.body.style.margin='0';
         globalThis.frame=document.createElement('iframe');
@@ -214,7 +214,7 @@ async fn captured_child_pointer_uses_published_frame_coordinates_outside_its_bou
     assert_eq!(
         vm.layout_pass_observability_for_test().1,
         builds + 1,
-        "OnDemand input must rebuild an invalidated iframe snapshot exactly once"
+        "Lazy input must rebuild an invalidated iframe snapshot exactly once"
     );
     vm.publish_layout_for_test().unwrap();
     let builds = vm.layout_pass_observability_for_test().1;
@@ -452,6 +452,46 @@ async fn touch_coordinates_share_the_frame_projection_and_release_restores_hit_r
         vm.eval("JSON.stringify(events)").unwrap(),
         r#"[["pointerdown","captured",30,30],["pointermove","outside",20,20],["pointerup","outside",20,20]]"#
     );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn captured_touch_refreshes_frame_geometry_before_dispatch() {
+    for (touch, pointer) in [
+        ("touchmove", "pointermove"),
+        ("touchend", "pointerup"),
+        ("touchcancel", "pointercancel"),
+    ] {
+        let mut vm = captured_child_vm(false, false).await;
+        vm.eval(&format!(
+            r#"
+            const style = document.createElement('style');
+            style.textContent = 'iframe[data-moved] {{ margin-left: 100px }}';
+            document.head.append(style);
+            globalThis.samples = [];
+            for (const type of ['{touch}', '{pointer}']) {{
+                captured.addEventListener(type, event => {{
+                    const point = event.changedTouches?.[0] ?? event;
+                    samples.push([event.type, point.clientX, point.clientY, point.screenX, point.screenY]);
+                }});
+            }}
+            "#,
+        ))
+        .unwrap();
+        vm.publish_layout_for_test().unwrap();
+        vm.dispatch_touch_event_at_point(130.0, 90.0, "touchstart", false)
+            .unwrap();
+        let builds = vm.layout_pass_observability_for_test().1;
+        vm.eval("frame.setAttribute('data-moved', '')").unwrap();
+        vm.dispatch_touch_event_at_point(140.0, 100.0, touch, false)
+            .unwrap();
+
+        let samples = vm.eval("JSON.stringify(samples)").unwrap();
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&samples).unwrap(),
+            serde_json::json!([[pointer, -60, 40, 140, 100], [touch, -60, 40, 140, 100]]),
+        );
+        assert_eq!(vm.layout_pass_observability_for_test().1, builds + 1);
+    }
 }
 
 #[tokio::test(flavor = "current_thread")]

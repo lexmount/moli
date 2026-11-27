@@ -162,13 +162,6 @@ pub struct FetchArgs {
     #[arg(long)]
     pub disable_css: bool,
 
-    /// Allow the fetched URL to be a `file:` URL. A document loaded from a
-    /// file may load its stylesheets, scripts, images and fonts from files;
-    /// web pages still cannot read files, and Fetch and XMLHttpRequest keep
-    /// their usual schemes.
-    #[arg(long)]
-    pub allow_file_urls: bool,
-
     #[arg(long)]
     pub with_base: bool,
 
@@ -483,7 +476,7 @@ pub struct ServeArgs {
     pub remote_allow_origins: Vec<String>,
 
     /// Set the screencast interval in milliseconds (default: 1000).
-    /// Requires --layout or --realtime.
+    /// Requires --lazy or --realtime.
     #[arg(
         long = "screencast-interval-ms",
         alias = "screencast-interval",
@@ -498,7 +491,7 @@ pub struct ServeArgs {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default, Args)]
-#[command(group(ArgGroup::new("real_layout").args(["layout", "realtime"]).multiple(true)))]
+#[command(group(ArgGroup::new("real_layout").args(["lazy", "realtime"]).multiple(true)))]
 pub struct CommonArgs {
     /// Disable same-origin access checks, CORS and ORB for this browser instance.
     /// CSP, CORP, TLS verification and credentials policies remain enforced.
@@ -632,23 +625,23 @@ pub struct CommonArgs {
     #[arg(long)]
     pub disable_subframes: bool,
 
-    /// Enable the real on-demand layout renderer and screenshot surfaces.
+    /// Enable lazy layout for on-demand geometry and screenshots.
     /// Native scrollbars are hidden unless --scrollbars or MOLI_SCROLLBARS is enabled.
     /// With `fetch --eval` or `--eval-file`, refresh layout once before running
     /// the script so geometry APIs can read it. Script mutations do not refresh it.
     ///
-    /// Without --layout or --realtime Moli keeps deterministic compatibility
-    /// geometry and does not construct layout or paint output.
+    /// The default mode provides deterministic compatibility geometry.
     #[arg(
         short,
         long,
+        alias = "layout",
         env = "MOLI_LAYOUT",
         value_parser = clap::builder::BoolishValueParser::new()
     )]
-    pub layout: bool,
+    pub lazy: bool,
 
     /// Experimental: maintain current geometry and run rendering callbacks
-    /// without requiring screenshots. Takes precedence over --layout.
+    /// without requiring screenshots. Takes precedence over --lazy.
     /// Screenshots remain demand-driven; optional resources still require
     /// --resource or individual flags such as --image and --font.
     #[arg(
@@ -658,7 +651,7 @@ pub struct CommonArgs {
     )]
     pub realtime: bool,
 
-    /// Show native scrollbars. Requires --layout or --realtime.
+    /// Show native scrollbars. Requires --lazy or --realtime.
     #[arg(
         long,
         env = "MOLI_SCROLLBARS",
@@ -692,6 +685,16 @@ pub struct CommonArgs {
     )]
     pub block_private_networks: bool,
 
+    /// Block file URL loading, including browser-initiated navigation.
+    /// Also enabled by MOLI_BLOCK_FILE_URLS=1.
+    #[arg(long)]
+    pub block_file_urls: bool,
+
+    /// Block file URLs and automation-selected host paths.
+    /// Also enabled by MOLI_BLOCK_HOST_FILE_ACCESS=1.
+    #[arg(long)]
+    pub block_host_file_access: bool,
+
     /// Block CIDRs for directly connected request targets. Proxy-resolved
     /// targets must be filtered by the configured proxy.
     #[arg(long)]
@@ -708,6 +711,20 @@ pub struct CommonArgs {
 
     #[arg(long, conflicts_with = "user_agent")]
     pub user_agent_suffix: Option<String>,
+
+    /// Set the browser's ordered language preferences, such as `zh-CN,en-US`.
+    ///
+    /// Navigator uses the list as given. HTTP requests add base languages and
+    /// preference weights. Defaults to the host display language or locale,
+    /// falling back to `en-US,en`.
+    #[arg(
+        long = "accept-lang",
+        value_name = "LANGUAGES",
+        env = "MOLI_ACCEPT_LANGUAGE",
+        value_delimiter = ',',
+        value_parser = clap::builder::NonEmptyStringValueParser::new()
+    )]
+    pub accept_language: Vec<String>,
 
     /// Unencrypted PKCS#8 Ed25519 private key used for Web Bot Auth signatures.
     #[arg(long, value_name = "PATH", requires = "web_bot_auth_domain")]
@@ -947,6 +964,18 @@ mod tests {
     }
 
     #[test]
+    fn layout_help_shows_lazy_and_realtime() {
+        for command in ["fetch", "serve"] {
+            let help = Cli::try_parse_from(["moli", command, "--help"])
+                .unwrap_err()
+                .to_string();
+            assert!(help.contains("-l, --lazy"));
+            assert!(help.contains("--realtime"));
+            assert!(!help.contains("--layout"));
+        }
+    }
+
+    #[test]
     fn fetch_help_labels_literal_and_regex_response_waits() {
         let help = Cli::try_parse_from(["moli", "fetch", "--help"])
             .unwrap_err()
@@ -1180,14 +1209,13 @@ mod tests {
 
     #[test]
     fn boolean_short_flags_can_be_grouped() {
-        // The shape the feature request asked for: `--layout --resource` as `-lr`.
         let grouped = Cli::parse_from(["moli", "serve", "-lr"]);
-        let separate = Cli::parse_from(["moli", "serve", "--layout", "--resource"]);
+        let separate = Cli::parse_from(["moli", "serve", "--lazy", "--resource"]);
         assert_eq!(grouped, separate);
 
         match grouped.command {
             Commands::Serve(args) => {
-                assert!(args.common.layout);
+                assert!(args.common.lazy);
                 assert!(args.common.resource);
             }
             other => panic!("expected serve command, got {other:?}"),

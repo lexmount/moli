@@ -2264,7 +2264,7 @@ impl FrameOwnerStore {
             .lifecycle_progress;
         let finished = lifecycle.finish_child_load_delivery_phase(action.phase())?;
         if !finished {
-            if lifecycle.has_incomplete_child_frames() {
+            if lifecycle.has_incomplete_child_frames() && !lifecycle.load_delivery_is_ready() {
                 return Some(FrameDocumentLoadDeliveryProgress::AwaitingDescendantCompletion(task));
             }
             return Some(FrameDocumentLoadDeliveryProgress::Continue(task));
@@ -2942,13 +2942,16 @@ impl FrameOwnerStore {
         &mut self,
         owner: FrameDocumentTaskOwner,
         element: DomHandle,
+        delays_load: bool,
     ) -> Option<MainDocumentImageLoadDelayBinding> {
         if !self.main_document_task_owner_is_current(owner) {
             return None;
         }
-        let load_delay_token =
-            self.acquire_document_load_delay(owner, DocumentLoadDelayReason::Image);
-        if load_delay_token.is_none()
+        let load_delay_token = delays_load
+            .then(|| self.acquire_document_load_delay(owner, DocumentLoadDelayReason::Image))
+            .flatten();
+        if delays_load
+            && load_delay_token.is_none()
             && !self
                 .documents
                 .get(&owner.document_id)
@@ -3094,16 +3097,22 @@ impl FrameOwnerStore {
         child_handle: DomHandle,
         owner: FrameDocumentTaskOwner,
         element: DomHandle,
+        delays_load: bool,
     ) -> Option<FrameDocumentImageLoadEventBinding> {
         if !self.child_document_task_owner_is_current(child_handle, owner) {
             return None;
         }
-        let load_delay_token = self.acquire_current_child_document_load_delay(
-            child_handle,
-            owner,
-            DocumentLoadDelayReason::Image,
-        );
-        if load_delay_token.is_none()
+        let load_delay_token = delays_load
+            .then(|| {
+                self.acquire_current_child_document_load_delay(
+                    child_handle,
+                    owner,
+                    DocumentLoadDelayReason::Image,
+                )
+            })
+            .flatten();
+        if delays_load
+            && load_delay_token.is_none()
             && !self
                 .documents
                 .get(&owner.document_id)

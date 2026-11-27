@@ -1,9 +1,10 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use moli_layout::{
     DocumentLayoutServices, FrozenLayoutTree, LayoutError, LayoutPoint, LayoutViewport,
-    ScrollProjectionRefresh,
+    RetainedLayoutWorld, ScrollProjectionRefresh,
 };
+use style::{properties::ComputedValues, servo_arc::Arc as ServoArc};
 
 use super::layout_snapshot::LatestLayoutTreeCache;
 #[cfg(feature = "devtools")]
@@ -11,6 +12,7 @@ use super::layout_snapshot::PublishedFrameGeometry;
 use crate::{
     css_resource_urls::{CompletedStylesheetWebFont, StylesheetLoadBlockingResource},
     document_runtime::DomHandle,
+    layout_renderer::FrameOwnerStyles,
     script_vm::web_fonts::{
         DocumentWebFontCompletion, DocumentWebFontState, PreparedStylesheetResourceLoad,
     },
@@ -31,12 +33,23 @@ struct CachedInferredFrameStyleViewport {
     viewport: StyleViewport,
 }
 
+#[derive(Default)]
+pub(super) struct LazyFrameLayout {
+    pub(super) changed_owners: HashSet<DomHandle>,
+    pub(super) needs_layout: bool,
+}
+
+struct PublishedFrameViewport {
+    viewport: LayoutViewport,
+    /// The iframe owner's style used to measure this viewport.
+    owner_style: Option<ServoArc<ComputedValues>>,
+}
+
 /// Layout-facing state whose lifetime is bounded by exactly one main Document.
 ///
 /// `ScriptVm` outlives `document.open()`, so the main-document owner
 /// transition replaces this value explicitly. This state owns the latest
-/// frozen layout tree and document font/text services. Active Realtime
-/// screencasts hold their paint inputs in the Realtime publication state.
+/// frozen layout tree, retained working tree, and document font/text services.
 /// Embedded documents receive separate Parley services so a main-document
 /// `@font-face` registration cannot leak across the browsing-context boundary.
 /// The single snapshot slot records the exact root Document it was built for;
@@ -56,11 +69,15 @@ pub(super) struct DocumentLayoutState {
     embedded_web_fonts: Option<Box<HashMap<DomHandle, DocumentWebFontState>>>,
     visual_state_generation: u64,
     latest_layout: LatestLayoutTreeCache,
+    /// The working tree for this publication and the next Realtime pass.
+    /// The frozen tree remains available while the next pass owns the world.
+    retained_layout: Option<Box<RetainedLayoutWorld<DomHandle>>>,
     /// Last used content viewport published by each live iframe owner's
     /// parent layout. Blink keeps the equivalent size on LocalFrameView; it is
     /// separate from the single latest-tree slot because a later fresh layout
     /// may replace that slot while the frame view remains live.
-    frame_viewports: HashMap<DomHandle, LayoutViewport>,
+    frame_viewports: HashMap<DomHandle, PublishedFrameViewport>,
+    pub(super) lazy_frames: LazyFrameLayout,
     /// Authored-size fallback used before parent layout publishes an exact
     /// iframe content viewport. The dependency key makes clean style reads
     /// cheap without turning this into independently valid layout state.
@@ -214,6 +231,14 @@ impl DocumentLayoutState {
         self.latest_layout.get_for_root(root)
     }
 
+    pub(super) fn append_svg_geometry(
+        &mut self,
+        root: DomHandle,
+        scenes: crate::layout_renderer::SvgGeometry,
+    ) -> Result<(), LayoutError> {
+        self.latest_layout.append_svg_geometry(root, scenes)
+    }
+
     #[cfg(feature = "devtools")]
     pub(super) fn frame_geometry(&self) -> Option<&std::rc::Rc<PublishedFrameGeometry>> {
         self.latest_layout.frame_geometry()
@@ -223,14 +248,104 @@ impl DocumentLayoutState {
         &mut self,
         document: DomHandle,
         tree: FrozenLayoutTree<DomHandle>,
+        retained: Option<Box<RetainedLayoutWorld<DomHandle>>>,
+        retain_paint: bool,
         #[cfg(feature = "devtools")] frame_geometry: PublishedFrameGeometry,
     ) {
+        self.retained_layout = retained;
+        if !retain_paint {
+            self.discard_screen_paint();
+        }
         self.latest_layout.publish(
             document,
             tree,
             #[cfg(feature = "devtools")]
             frame_geometry,
         );
+    }
+
+    pub(super) fn clear_inline_svg_content(&mut self) {
+        self.latest_layout.clear_inline_svg_geometry();
+        if let Some(retained) = &mut self.retained_layout {
+            retained.clear_inline_svg_images();
+        }
+    }
+
+    pub(super) fn take_retained_layout(&mut self) -> Option<Box<RetainedLayoutWorld<DomHandle>>> {
+        self.retained_layout.take()
+    }
+
+    pub(super) fn discard_screen_paint(&mut self) {
+        if let Some(retained) = &mut self.retained_layout {
+            if retained.can_reuse_layout() {
+                retained.discard_paint();
+            } else {
+                self.retained_layout = None;
+            }
+        }
+    }
+
+    #[cfg(feature = "devtools")]
+    pub(super) fn retained_screen_paint(
+        &self,
+        document: DomHandle,
+    ) -> Option<(
+        &FrozenLayoutTree<DomHandle>,
+        &RetainedLayoutWorld<DomHandle>,
+    )> {
+        let retained = self.retained_layout.as_ref()?;
+        if !retained.has_paint() {
+            return None;
+        }
+        Some((self.latest_layout(document)?, retained))
+    }
+
+    pub(super) fn update_repaint_styles(
+        &mut self,
+        styles: Vec<(
+            DomHandle,
+            style::servo_arc::Arc<style::properties::ComputedValues>,
+        )>,
+    ) -> bool {
+        self.retained_layout
+            .as_mut()
+            .is_some_and(|retained| retained.update_repaint_styles(styles))
+    }
+
+    pub(super) fn update_screen_style_projection(
+        &mut self,
+        document: DomHandle,
+        styles: Vec<(
+            DomHandle,
+            style::servo_arc::Arc<style::properties::ComputedValues>,
+        )>,
+        scroll_offset: impl Fn(DomHandle) -> LayoutPoint,
+    ) -> bool {
+        let (Some(previous), Some(retained)) = (
+            self.latest_layout.get(document),
+            self.retained_layout.as_mut(),
+        ) else {
+            return false;
+        };
+        let Some(tree) = retained.project_screen_styles(previous, styles, scroll_offset) else {
+            return false;
+        };
+        self.latest_layout.replace_projection(tree);
+        self.mark_visual_state_dirty();
+        true
+    }
+
+    pub(super) fn has_reusable_layout(&self) -> bool {
+        self.retained_layout
+            .as_ref()
+            .is_some_and(|retained| retained.can_reuse_layout())
+    }
+
+    #[cfg(all(test, feature = "devtools"))]
+    pub(super) fn has_retained_paint_for_test(&self) -> bool {
+        self.retained_layout
+            .as_ref()
+            .is_some_and(|retained| retained.has_paint())
     }
 
     pub(super) fn refresh_scroll_projection(
@@ -251,11 +366,16 @@ impl DocumentLayoutState {
 
     pub(super) fn clear_latest_layout(&mut self) {
         self.latest_layout.clear();
+        self.retained_layout = None;
         self.mark_visual_state_dirty();
     }
 
     pub(super) fn frame_viewport(&self, frame: DomHandle) -> Option<LayoutViewport> {
-        self.frame_viewports.get(&frame).copied()
+        self.frame_viewports.get(&frame).map(|frame| frame.viewport)
+    }
+
+    pub(super) fn frame_owner_style(&self, frame: DomHandle) -> Option<ServoArc<ComputedValues>> {
+        self.frame_viewports.get(&frame)?.owner_style.clone()
     }
 
     pub(super) fn inferred_frame_style_viewport(
@@ -294,15 +414,20 @@ impl DocumentLayoutState {
     pub(super) fn update_frame_viewports(
         &mut self,
         updates: impl IntoIterator<Item = (DomHandle, Option<LayoutViewport>)>,
+        mut owner_styles: FrameOwnerStyles,
     ) -> bool {
         let mut changed = false;
         for (frame, viewport) in updates {
             match viewport {
                 Some(viewport) => {
-                    if self.frame_viewports.get(&frame) != Some(&viewport) {
-                        self.frame_viewports.insert(frame, viewport);
-                        changed = true;
-                    }
+                    let previous = self.frame_viewports.insert(
+                        frame,
+                        PublishedFrameViewport {
+                            viewport,
+                            owner_style: owner_styles.remove(&frame),
+                        },
+                    );
+                    changed |= previous.is_none_or(|previous| previous.viewport != viewport);
                 }
                 None => {
                     changed |= self.frame_viewports.remove(&frame).is_some();

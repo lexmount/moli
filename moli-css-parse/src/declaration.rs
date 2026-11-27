@@ -1,6 +1,6 @@
 use cssparser::{
-    AtRuleParser, CowRcStr, DeclarationParser, ParseError, Parser, QualifiedRuleParser,
-    RuleBodyItemParser, RuleBodyParser,
+    AtRuleParser, CowRcStr, DeclarationParser, Delimiter, ParseError, Parser, QualifiedRuleParser,
+    RuleBodyItemParser, RuleBodyParser, parse_important,
 };
 
 use crate::{
@@ -32,16 +32,37 @@ pub fn parse_declaration_list(
     style_text: &str,
     options: DeclarationParseOptions,
 ) -> Vec<CssDeclaration> {
-    let input = style_text;
-    let mut input = Parser::new(input);
-    let mut parser = DeclarationListParser { options };
-    RuleBodyParser::new(&mut input, &mut parser)
+    scan_declarations(style_text, options, None).0
+}
+
+/// Scan for CSSOM adapters and report whether the normalized rows preserve the
+/// original property names, values, and priorities for native parsing.
+pub fn parse_declaration_list_with_source_check(
+    style_text: &str,
+    options: DeclarationParseOptions,
+) -> (Vec<CssDeclaration>, bool) {
+    scan_declarations(style_text, options, Some(true))
+}
+
+fn scan_declarations(
+    style_text: &str,
+    options: DeclarationParseOptions,
+    source_preserved: Option<bool>,
+) -> (Vec<CssDeclaration>, bool) {
+    let mut input = Parser::new(style_text);
+    let mut parser = DeclarationListParser {
+        options,
+        source_preserved,
+    };
+    let declarations = RuleBodyParser::new(&mut input, &mut parser)
         .filter_map(Result::ok)
-        .collect()
+        .collect();
+    (declarations, parser.source_preserved.unwrap_or(false))
 }
 
 struct DeclarationListParser {
     options: DeclarationParseOptions,
+    source_preserved: Option<bool>,
 }
 
 impl<'i> DeclarationParser<'i> for DeclarationListParser {
@@ -66,15 +87,32 @@ impl<'i> DeclarationParser<'i> for DeclarationListParser {
                 }
             }
         }
-        let raw_name = name.as_ref().trim();
+        let raw_name = name.as_ref();
         let name = if self.options.canonicalize_property_name {
             canonical_style_property_name(raw_name)
         } else {
-            raw_name.to_owned()
+            raw_name.trim().to_owned()
         };
-        let (value, important) = split_important_priority(input.slice_from(value_start));
+        let raw_value = input.slice_from(value_start);
+        let (value, important) = if let Some(source_preserved) = &mut self.source_preserved {
+            *source_preserved &= raw_name == name;
+            if let Some((value, important)) = split_declaration_priority(raw_value) {
+                let trimmed = value.trim();
+                *source_preserved &= trimmed == value.trim_matches(is_css_whitespace);
+                (trimmed.to_owned(), important)
+            } else {
+                *source_preserved = false;
+                split_important_priority(raw_value)
+            }
+        } else {
+            split_important_priority(raw_value)
+        };
         let value = if self.options.unescape_value_semicolons && !name.starts_with("--") {
-            unescape_top_level_semicolons(&value)
+            let unescaped = unescape_top_level_semicolons(&value);
+            if let Some(source_preserved) = &mut self.source_preserved {
+                *source_preserved &= unescaped == value;
+            }
+            unescaped
         } else {
             value
         };
@@ -87,6 +125,30 @@ impl<'i> DeclarationParser<'i> for DeclarationListParser {
             important,
         })
     }
+}
+
+fn is_css_whitespace(ch: char) -> bool {
+    matches!(ch, ' ' | '\t' | '\n' | '\r' | '\x0c')
+}
+
+pub(crate) fn split_declaration_priority(value: &str) -> Option<(&str, bool)> {
+    if !value.contains('!') {
+        return Some((value, false));
+    }
+    let mut input = Parser::new(value);
+    let value = input
+        .parse_until_before(Delimiter::Bang, |input| {
+            let start = input.position();
+            input.expect_no_error_token()?;
+            Ok::<_, ParseError<()>>(input.slice_from(start))
+        })
+        .ok()?;
+    if input.is_exhausted() {
+        return Some((value, false));
+    }
+    parse_important(&mut input).ok()?;
+    input.expect_exhausted().ok()?;
+    Some((value, true))
 }
 
 impl<'i> AtRuleParser<'i> for DeclarationListParser {

@@ -1,4 +1,4 @@
-use crate::webidl;
+use crate::{web_api_interfaces, webidl};
 
 use super::super::super::{
     document,
@@ -22,6 +22,20 @@ struct ElementGetAttributeNodeNsArgs {
     namespace: Option<String>,
     #[webidl(required)]
     local_name: String,
+}
+
+#[derive(webidl::WebIdlArgs)]
+#[webidl(prefix = "Element.setAttributeNode")]
+struct SetAttrNodeArgs<'s> {
+    #[webidl(required, interface = web_api_interfaces::Attr)]
+    attr: v8::Local<'s, v8::Object>,
+}
+
+#[derive(webidl::WebIdlArgs)]
+#[webidl(prefix = "Element.removeAttributeNode")]
+struct RemoveAttrNodeArgs<'s> {
+    #[webidl(required, interface = web_api_interfaces::Attr)]
+    attr: v8::Local<'s, v8::Object>,
 }
 
 pub(in crate::native_bridge) fn node_get_attribute_node_callback<'s>(
@@ -114,7 +128,10 @@ pub(in crate::native_bridge) fn node_set_attribute_node_callback<'s>(
     {
         return;
     };
-    match document::set_attribute_node(scope, args.this(), args.get(0)) {
+    let Some(parsed) = webidl::parse_args::<SetAttrNodeArgs>(scope, &args) else {
+        return;
+    };
+    match document::set_attribute_node(scope, args.this(), parsed.attr.into()) {
         Some(value) => rv.set(value),
         None => rv.set_null(),
     }
@@ -139,7 +156,10 @@ pub(in crate::native_bridge) fn node_remove_attribute_node_callback<'s>(
     ) {
         return;
     };
-    match document::remove_attribute_node(scope, args.this(), args.get(0)) {
+    let Some(parsed) = webidl::parse_args::<RemoveAttrNodeArgs>(scope, &args) else {
+        return;
+    };
+    match document::remove_attribute_node(scope, args.this(), parsed.attr.into()) {
         Some(value) => rv.set(value),
         None => rv.set_null(),
     }

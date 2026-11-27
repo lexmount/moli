@@ -47,7 +47,8 @@ pub struct DocumentResourceLoaderDiagnostics {
     pub active_keepalive_load_count: usize,
 }
 
-struct DocumentResourceLoaderAuthority {
+pub(crate) struct DocumentResourceLoaderAuthority {
+    allows_local_files: bool,
     id: u64,
     lifecycle: Mutex<DocumentResourceLoaderLifecycle>,
     loads: ResourceLoadRegistry,
@@ -56,6 +57,13 @@ struct DocumentResourceLoaderAuthority {
 struct DocumentResourceLoaderLifecycle {
     state: DocumentResourceLoaderState,
     context: DocumentFetchContext,
+}
+
+impl DocumentResourceLoaderAuthority {
+    pub(crate) fn allows_local_files(&self) -> bool {
+        self.allows_local_files
+            && self.lifecycle.lock().state == DocumentResourceLoaderState::Active
+    }
 }
 
 impl Drop for DocumentResourceLoaderAuthority {
@@ -133,9 +141,19 @@ impl DocumentResourceLoader {
     }
 
     pub(crate) fn new(
+        request_client: ResourceRequestClient,
+        task_runner: RendererResourceTaskRunner,
+        context: DocumentFetchContext,
+    ) -> Self {
+        let allows_local_files = request_client.commits_file_document(context.document_url());
+        Self::new_with_file_access(request_client, task_runner, context, allows_local_files)
+    }
+
+    fn new_with_file_access(
         mut request_client: ResourceRequestClient,
         task_runner: RendererResourceTaskRunner,
         context: DocumentFetchContext,
+        allows_local_files: bool,
     ) -> Self {
         if request_client.browser_site_context().is_none() {
             let browser_site_context = BrowserCookieFacadeContext::default()
@@ -143,28 +161,29 @@ impl DocumentResourceLoader {
                 .with_top_frame_origin_url(context.document_url());
             request_client = request_client.with_browser_site_context(browser_site_context);
         }
+        let allows_local_files = allows_local_files
+            && !request_client.local_file_policy().blocks_file_urls()
+            && (!context.has_sandboxed_origin() || request_client.web_security_disabled());
         let loads = ResourceLoadRegistry::new(task_runner);
-        Self {
-            request_client,
-            authority: Arc::new(DocumentResourceLoaderAuthority {
-                id: NEXT_DOCUMENT_RESOURCE_LOADER_ID
-                    .fetch_add(1, Ordering::Relaxed)
-                    .saturating_add(1),
-                lifecycle: Mutex::new(DocumentResourceLoaderLifecycle {
-                    state: DocumentResourceLoaderState::Active,
-                    context,
-                }),
-                loads,
+        let authority = Arc::new(DocumentResourceLoaderAuthority {
+            id: NEXT_DOCUMENT_RESOURCE_LOADER_ID
+                .fetch_add(1, Ordering::Relaxed)
+                .saturating_add(1),
+            lifecycle: Mutex::new(DocumentResourceLoaderLifecycle {
+                state: DocumentResourceLoaderState::Active,
+                context,
             }),
+            loads,
+            allows_local_files,
+        });
+        Self {
+            request_client: request_client.with_document_file_authority(&authority),
+            authority,
         }
     }
 
     fn from_navigation_seed(context: DocumentFetchContext, seed: DocumentFetchContextSeed) -> Self {
-        let mut request_client =
-            ResourceRequestClient::from_browser_resource_runtime_with_page_network_policy(
-                seed.browser_resource_runtime(),
-                seed.page_network_policy(),
-            );
+        let mut request_client = ResourceRequestClient::for_committed_navigation(&seed);
         if let Some(browser_site_context) = seed.shared_browser_site_context() {
             request_client = request_client.with_shared_browser_site_context(browser_site_context);
         }
@@ -189,7 +208,19 @@ impl DocumentResourceLoader {
     }
 
     pub(crate) fn fork_for_document(&self, context: DocumentFetchContext) -> Self {
-        Self::new(self.request_client.clone(), self.task_runner(), context)
+        let url = context.document_url();
+        // Only synthetic Documents that inherit a creator's environment,
+        // including a replacement by document.open(), inherit file access.
+        let inherits_files = self.authority.allows_local_files()
+            && (moli_url::is_about_blank(url)
+                || moli_url::is_about_srcdoc(url)
+                || url == self.fetch_context().document_url());
+        Self::new_with_file_access(
+            self.request_client.clone(),
+            self.task_runner(),
+            context,
+            inherits_files,
+        )
     }
 
     pub(crate) fn transfer_existing_loads_to(&self, replacement: &Self) -> usize {
@@ -218,7 +249,7 @@ impl DocumentResourceLoader {
             request_client = request_client.with_shared_browser_site_context(browser_site_context);
         }
         Self {
-            request_client,
+            request_client: request_client.with_document_file_authority(&self.authority),
             authority: Arc::clone(&self.authority),
         }
     }

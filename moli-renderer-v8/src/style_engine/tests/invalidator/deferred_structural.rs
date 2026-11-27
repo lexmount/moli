@@ -57,7 +57,7 @@ impl Fixture {
 
     fn invalidate(&mut self, effects: &DomMutationEffects) {
         assert!(effects.did_change());
-        let style_effects = StyleMutationEffect::from_dom_mutation_effects(&self.host, effects);
+        let style_effects = StyleMutationEffect::from_dom_mutation_effects(effects);
         self.engine.invalidate_for_mutations(
             &self.host,
             &style_effects,
@@ -180,8 +180,8 @@ fn refilling_consumed_fragment_before_drain_updates_both_live_scopes() {
 }
 
 #[test]
-fn batched_fragment_splices_update_computed_style_on_both_sides_of_cutoff() {
-    for (insertion_count, expect_scope_fallback) in [(255, false), (256, true)] {
+fn batched_fragment_splices_refresh_native_relative_selectors() {
+    for insertion_count in [255, 300] {
         let mut fixture = Fixture::new(
             "main { color: rgb(1, 2, 3); }
              main:has(span) .subject { color: rgb(4, 5, 6); }",
@@ -212,13 +212,50 @@ fn batched_fragment_splices_update_computed_style_on_both_sides_of_cutoff() {
             insertion_count * 5
         );
         fixture.drain();
-        assert_eq!(
-            fixture
-                .engine
-                .computed_style_cache_contains_handle_for_document_for_test(document, subject),
-            expect_scope_fallback,
-            "{insertion_count} retained child-list splices"
-        );
         assert_eq!(fixture.computed(subject, "color"), HAS_CHILD_COLOR);
     }
+}
+
+#[test]
+fn consecutive_insertions_and_attribute_changes_share_one_pending_invalidation() {
+    let mut fixture = Fixture::new(
+        ".anchor, #target { color: rgb(1, 2, 3); }
+         .anchor:has(+ .marker), #target[data-active] { color: rgb(4, 5, 6); }",
+    );
+    let document = fixture.host.document_handle();
+    let main = fixture.host.create_element("main");
+    let parent = fixture.host.create_element("section");
+    let anchor = fixture.host.create_element("div");
+    let marker = fixture.host.create_element("div");
+    let target = fixture.host.create_element("div");
+    assert!(fixture.host.set_attribute(anchor, "class", "anchor"));
+    assert!(fixture.host.set_attribute(marker, "class", "marker"));
+    assert!(fixture.host.set_attribute(target, "id", "target"));
+    assert!(fixture.host.append_child(document, main));
+    assert!(fixture.host.append_child(main, parent));
+    assert!(fixture.host.append_child(main, target));
+    for child in [anchor, marker] {
+        assert!(fixture.host.append_child(parent, child));
+    }
+    assert_eq!(fixture.computed(anchor, "color"), HAS_CHILD_COLOR);
+    assert_eq!(fixture.computed(target, "color"), BASE_COLOR);
+
+    let first = fixture.host.create_element("div");
+    let second = fixture.host.create_element("div");
+    let insertion = fixture
+        .host
+        .insert_before_effects(parent, first, Some(marker));
+    fixture.invalidate(&insertion);
+    let attribute = fixture
+        .host
+        .set_attribute_effects(target, "data-active", "");
+    fixture.invalidate(&attribute);
+    let insertion = fixture
+        .host
+        .insert_before_effects(parent, second, Some(marker));
+    fixture.invalidate(&insertion);
+    fixture.drain();
+
+    assert_eq!(fixture.computed(anchor, "color"), BASE_COLOR);
+    assert_eq!(fixture.computed(target, "color"), HAS_CHILD_COLOR);
 }

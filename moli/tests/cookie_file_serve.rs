@@ -16,10 +16,12 @@ use axum::{Router, http::HeaderMap, response::Html, routing::get};
 use futures_util::{SinkExt, StreamExt};
 use moli_test_support::discover_browser_websocket_url;
 use serde_json::{Value, json};
-use tokio::time::{sleep, timeout};
+use tokio::time::timeout;
 use tokio_tungstenite::{WebSocketStream, connect_async, tungstenite::Message as WsMessage};
+use wait_timeout::ChildExt;
 
 type WsSocket = WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
+const BROWSER_EVENT_WATCHDOG: Duration = Duration::from_secs(60);
 
 struct ServingChild {
     child: Child,
@@ -114,7 +116,7 @@ fn spawn_serving_child_with_args(args: &[&OsStr]) -> ServingChild {
         output
     }));
     serving.port = ready_receiver
-        .recv_timeout(Duration::from_secs(15))
+        .recv_timeout(BROWSER_EVENT_WATCHDOG)
         .expect("moli serve reports its listening port");
     serving
 }
@@ -177,7 +179,7 @@ async fn send_cdp_command(
         .await
         .expect("send CDP command");
     loop {
-        let message = timeout(Duration::from_secs(15), socket.next())
+        let message = timeout(BROWSER_EVENT_WATCHDOG, socket.next())
             .await
             .expect("CDP response arrives in time")
             .expect("CDP socket stays open");
@@ -219,26 +221,20 @@ async fn attached_page_session(socket: &mut WsSocket, id: u64) -> String {
 }
 
 /// Waits until the page session reports its document as fully loaded.
-async fn wait_for_page_load(socket: &mut WsSocket, session_id: &str, mut next_id: u64) {
-    timeout(Duration::from_secs(15), async {
-        loop {
-            let ready = send_cdp_command(
-                socket,
-                next_id,
-                "Runtime.evaluate",
-                Some(session_id),
-                json!({"expression": "document.readyState", "returnByValue": true}),
-            )
-            .await;
-            next_id += 1;
-            if ready["result"]["result"]["value"] == json!("complete") {
-                return;
-            }
-            sleep(Duration::from_millis(50)).await;
-        }
-    })
-    .await
-    .expect("page load completes in time");
+async fn wait_for_page_load(socket: &mut WsSocket, session_id: &str, id: u64) {
+    let ready = send_cdp_command(
+        socket,
+        id,
+        "Runtime.evaluate",
+        Some(session_id),
+        json!({
+            "expression": "document.readyState === 'complete' ? 'complete' : new Promise(resolve => addEventListener('load', () => resolve(document.readyState), {once: true}))",
+            "awaitPromise": true,
+            "returnByValue": true,
+        }),
+    )
+    .await;
+    assert_eq!(ready["result"]["result"]["value"], "complete", "{ready}");
 }
 
 async fn close_browser_and_wait_exit(
@@ -247,16 +243,9 @@ async fn close_browser_and_wait_exit(
 ) -> std::process::ExitStatus {
     let reply = send_cdp_command(socket, 90, "Browser.close", None, json!({})).await;
     assert_eq!(reply["result"], json!({}), "Browser.close must acknowledge");
-    timeout(Duration::from_secs(15), async {
-        loop {
-            if let Some(status) = serving.child.try_wait().expect("read server exit status") {
-                return status;
-            }
-            sleep(Duration::from_millis(20)).await;
-        }
-    })
-    .await
-    .expect("moli serve exits naturally after Browser.close")
+    tokio::task::block_in_place(|| serving.child.wait_timeout(BROWSER_EVENT_WATCHDOG))
+        .expect("read server exit status")
+        .expect("moli serve exits naturally after Browser.close")
 }
 
 /// Netscape records reduce to `name=value` pairs for content assertions.

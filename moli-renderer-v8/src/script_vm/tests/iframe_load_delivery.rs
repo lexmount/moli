@@ -107,3 +107,73 @@ async fn iframe_load_delivery_discards_queued_load_for_replaced_document() {
             .is_none()
     );
 }
+
+#[tokio::test(flavor = "current_thread")]
+async fn iframe_reentrant_load_callbacks_preserve_descendant_completion_boundaries() {
+    const SOURCE: &str = include_str!("../../../tests/fixtures/iframe-reentrant-load.js");
+    let oracle: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../tests/fixtures/iframe-reentrant-load.chromium.json"
+    ))
+    .unwrap();
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
+    let mut vm = crate::runtime::PageVmTaskExecutorTestHarness::new(
+        url::Url::parse("https://iframe-load-delivery.test/").unwrap(),
+        &loader,
+    );
+    vm.eval(&format!(
+        "({SOURCE}).then(value => globalThis.reentrantLoadResult = value, \
+         error => globalThis.reentrantLoadError = error.stack || String(error));"
+    ))
+    .unwrap();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while vm.eval("typeof reentrantLoadResult").unwrap() == "undefined" {
+        assert_eq!(
+            vm.eval("typeof reentrantLoadError").unwrap(),
+            "undefined",
+            "reentrant load fixture failed: {}",
+            vm.eval("globalThis.reentrantLoadError").unwrap()
+        );
+        vm.run_one_oldest_ready_page_task_executor_turn(&loader)
+            .await
+            .unwrap();
+        assert!(
+            std::time::Instant::now() < deadline,
+            "reentrant iframe load fixture did not complete"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+    }
+    let actual: serde_json::Value =
+        serde_json::from_str(&vm.eval("JSON.stringify(reentrantLoadResult)").unwrap()).unwrap();
+    let actual = actual.as_array().unwrap();
+    let expected = oracle["cases"].as_array().unwrap();
+    assert_eq!(actual.len(), expected.len());
+    for (actual, expected) in actual.iter().zip(expected) {
+        assert_eq!(actual["phase"], expected["phase"]);
+        assert_eq!(actual["complete"], true);
+        if actual["phase"] != "window-microtask" {
+            assert_eq!(actual, expected, "synchronous callback ordering");
+            continue;
+        }
+        // This topic changes load-dependency delivery. Main's separate
+        // callback-microtask cleanup policy can place these two markers later
+        // than Chromium; retain their own order and the load completion order.
+        let events = actual["events"].as_array().unwrap();
+        let position = |name: &str| events.iter().position(|event| event == name).unwrap();
+        assert!(position("window-microtask") < position("descendant-insert"));
+        assert!(position("descendant-insert") < position("descendant-load"));
+        let lifecycle = |value: &serde_json::Value| {
+            value["events"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter(|event| *event != "window-microtask" && *event != "descendant-insert")
+                .cloned()
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            lifecycle(actual),
+            lifecycle(expected),
+            "microtask descendant must retain load completion boundaries"
+        );
+    }
+}

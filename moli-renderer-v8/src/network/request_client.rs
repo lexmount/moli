@@ -1,18 +1,18 @@
 use std::{
     fmt,
-    sync::{Arc, mpsc},
+    sync::{Arc, Weak, mpsc},
     thread,
     time::Instant,
 };
 
-use anyhow::{Context, Result, anyhow};
+use anyhow::{Context, Result, anyhow, ensure};
 use moli_cookie_jar::{
     BrowserCookieFacadeContext, SharedBrowserCookieStore, new_shared_browser_cookie_store,
 };
 use moli_disk_pool::DiskPool;
 use moli_fetch::{
-    BrowserRequestMetadata, FetchCancelHandle, FetchConfig, NetworkFetchResult, RawResponse,
-    Request, RequestMode, Response, ResponseHead, StreamingRawResponse,
+    BrowserRequestMetadata, FetchCancelHandle, FetchConfig, LocalFilePolicy, NetworkFetchResult,
+    RawResponse, Request, RequestMode, Response, ResponseHead, StreamingRawResponse,
     validate_cors_response_chain,
 };
 use moli_parkable_image::ParkableImageManager;
@@ -28,7 +28,9 @@ use super::{
         raw_subresource_memory_cache_expiry, raw_subresource_memory_cache_key,
         script_text_cache_key, script_text_request_is_memory_cacheable,
     },
-    loads,
+    context::DocumentResourceLoaderAuthority,
+    file_loader, loads,
+    navigation::DocumentFetchContextSeed,
     policy::PageNetworkPolicy,
 };
 
@@ -37,6 +39,15 @@ pub struct ResourceRequestClient {
     resource_runtime: BrowserResourceRuntime,
     page_network_policy: PageNetworkPolicy,
     browser_site_context: Option<Arc<BrowserCookieFacadeContext>>,
+    document_file_access: DocumentFileAccess,
+}
+
+#[derive(Clone, Default)]
+enum DocumentFileAccess {
+    #[default]
+    None,
+    Navigation(Arc<url::Url>),
+    Document(Weak<DocumentResourceLoaderAuthority>),
 }
 
 /// Thread-affine lifetime root for a standalone resource request client.
@@ -125,7 +136,46 @@ impl ResourceRequestClient {
             resource_runtime,
             page_network_policy,
             browser_site_context: None,
+            document_file_access: DocumentFileAccess::None,
         }
+    }
+
+    /// Prepare an exact Document commit using proof from its navigation loader.
+    /// Only the resulting active Document authority can consume file resources.
+    pub fn for_committed_navigation(seed: &DocumentFetchContextSeed) -> Self {
+        let mut client = Self::from_browser_resource_runtime_with_page_network_policy(
+            seed.browser_resource_runtime(),
+            seed.page_network_policy(),
+        );
+        if seed.loaded_local_file() {
+            client.document_file_access =
+                DocumentFileAccess::Navigation(Arc::new(seed.final_url().clone()));
+        }
+        client
+    }
+
+    pub(super) fn commits_file_document(&self, url: &url::Url) -> bool {
+        matches!(&self.document_file_access, DocumentFileAccess::Navigation(expected) if **expected == *url)
+    }
+
+    pub(super) fn with_document_file_authority(
+        mut self,
+        authority: &Arc<DocumentResourceLoaderAuthority>,
+    ) -> Self {
+        self.document_file_access = if authority.allows_local_files() {
+            DocumentFileAccess::Document(Arc::downgrade(authority))
+        } else {
+            DocumentFileAccess::None
+        };
+        self
+    }
+
+    pub(crate) fn has_document_file_access(&self) -> bool {
+        if self.local_file_policy().blocks_file_urls() {
+            return false;
+        }
+        matches!(&self.document_file_access, DocumentFileAccess::Document(authority)
+            if authority.upgrade().is_some_and(|authority| authority.allows_local_files()))
     }
 
     pub(crate) fn with_browser_site_context(
@@ -156,40 +206,69 @@ impl ResourceRequestClient {
         self.page_network_policy.clone()
     }
 
-    pub fn local_file_navigation_access(&self) -> LocalFileNavigationAccess {
-        self.resource_runtime
-            .client()
-            .local_file_navigation_access()
+    pub fn local_file_policy(&self) -> LocalFilePolicy {
+        self.resource_runtime.client().local_file_policy()
+    }
+
+    pub(super) fn file_navigation_access(&self, request: &Request) -> LocalFileNavigationAccess {
+        if !self.local_file_policy().blocks_file_urls()
+            && request.request_mode == RequestMode::Navigate
+            && request.method == "GET"
+            && request.redirect_count() == 0
+            && request.local_file_navigation_access() == LocalFileNavigationAccess::BrowserGranted
+        {
+            LocalFileNavigationAccess::BrowserGranted
+        } else {
+            LocalFileNavigationAccess::Denied
+        }
+    }
+
+    pub(crate) fn permits_file_script_read(&self, url: &url::Url) -> bool {
+        url.scheme() == "file" && self.has_document_file_access() && self.web_security_disabled()
     }
 
     fn local_text_response(&self, request: &Request) -> Option<Result<Response>> {
-        if request.url.scheme() == "file" {
-            return self.local_file_response(request);
-        }
         crate::network_host::local_url_response_result(&request.url, &request.method)
             .map(|result| result.map_err(anyhow::Error::msg))
     }
 
-    /// Without the browser capability a file URL is left to the HTTP
-    /// transport, which rejects it. With it, a file may be read by a
-    /// navigation the browser itself granted, or by a document that is itself
-    /// a file, never by a web page.
-    fn local_file_response(&self, request: &Request) -> Option<Result<Response>> {
-        if self.local_file_navigation_access() != LocalFileNavigationAccess::BrowserGranted {
-            return None;
-        }
-        let browser_navigation = request.request_mode == moli_fetch::RequestMode::Navigate
-            && request.local_file_navigation_access() == LocalFileNavigationAccess::BrowserGranted;
-        let file_initiator = request
-            .initiator_url()
-            .is_some_and(|initiator_url| initiator_url.scheme() == "file");
-        if request.method != "GET" || !(browser_navigation || file_initiator) {
-            return Some(Err(anyhow!(
-                "file URL `{}` is not accessible from this request",
-                request.url
-            )));
-        }
-        Some(crate::network_host::file_url_response(&request.url).map_err(anyhow::Error::msg))
+    async fn fetch_file_stream(
+        &self,
+        request: Request,
+        cancel: FetchCancelHandle,
+    ) -> Result<StreamingRawResponse> {
+        use BrowserRequestMetadata as Destination;
+        let navigation =
+            self.file_navigation_access(&request) == LocalFileNavigationAccess::BrowserGranted;
+        let display_resource = matches!(
+            request.browser_request_metadata(),
+            Some(
+                Destination::Image
+                    | Destination::Style
+                    | Destination::Script
+                    | Destination::Font
+                    | Destination::Audio
+                    | Destination::Video
+                    | Destination::TextTrack
+            )
+        );
+        let resource = self.has_document_file_access()
+            && request.request_mode != RequestMode::Navigate
+            && request.method == "GET"
+            && request.redirect_count() == 0
+            && ((display_resource && request.request_mode == RequestMode::NoCors)
+                || request.browser_request_metadata() == Some(Destination::Font)
+                || self.permits_file_script_read(&request.url));
+        ensure!(
+            navigation || resource,
+            "file URL is not accessible from this request"
+        );
+        file_loader::stream_file(
+            request.url,
+            self.resource_runtime.client().http_max_response_size(),
+            cancel,
+        )
+        .await
     }
 
     /// Captures page request configuration for an owned operation. Headers,
@@ -200,6 +279,7 @@ impl ResourceRequestClient {
             self.page_network_policy.frozen_request_view(),
         );
         client.browser_site_context = self.browser_site_context.clone();
+        client.document_file_access = self.document_file_access.clone();
         client
     }
 
@@ -223,10 +303,14 @@ impl ResourceRequestClient {
 
     /// Creates a Document-owned adapter inside this client's Page target.
     pub(crate) fn fork_with_isolated_document_network_policy(&self) -> Self {
-        Self::from_browser_resource_runtime_with_page_network_policy(
+        let mut client = Self::from_browser_resource_runtime_with_page_network_policy(
             self.resource_runtime.clone(),
             self.page_network_policy.isolated_same_page_copy(),
-        )
+        );
+        if let DocumentFileAccess::Navigation(url) = &self.document_file_access {
+            client.document_file_access = DocumentFileAccess::Navigation(url.clone());
+        }
+        client
     }
 
     /// Creates a Worker-owned adapter while retaining the creator Document's
@@ -261,6 +345,13 @@ impl ResourceRequestClient {
     /// chunks or pass them into another streaming boundary.
     pub async fn fetch_raw(&self, request: Request) -> Result<RawResponse> {
         let request = self.apply_network_policy(request)?;
+        if request.url.scheme() == "file" {
+            return self
+                .fetch_file_stream(request, FetchCancelHandle::new())
+                .await?
+                .into_materialized_raw_response()
+                .await;
+        }
         self.resource_runtime.client().fetch_raw(request).await
     }
 
@@ -278,6 +369,14 @@ impl ResourceRequestClient {
         cancel_handle: FetchCancelHandle,
     ) -> Result<NetworkFetchResult<RawResponse>> {
         let request = self.apply_network_policy(request)?;
+        if request.url.scheme() == "file" {
+            let response = self
+                .fetch_file_stream(request, cancel_handle)
+                .await?
+                .into_materialized_raw_response()
+                .await?;
+            return Ok(NetworkFetchResult::without_request_observation(response));
+        }
         self.resource_runtime
             .client()
             .fetch_raw_with_cancel_and_network_metadata(request, cancel_handle)
@@ -369,7 +468,10 @@ impl ResourceRequestClient {
         cancel_handle: FetchCancelHandle,
     ) -> Result<NetworkFetchResult<Response>> {
         let request = self.apply_network_policy(request)?;
-        if request.auth_requires_buffered_transport() || !request.transport_follows_redirects() {
+        if request.url.scheme() != "file"
+            && (request.auth_requires_buffered_transport()
+                || !request.transport_follows_redirects())
+        {
             return self
                 .resource_runtime
                 .client()
@@ -748,7 +850,10 @@ impl ResourceRequestClient {
         request: Request,
         cancel_handle: FetchCancelHandle,
     ) -> Result<Response> {
-        if request.auth_requires_buffered_transport() || !request.transport_follows_redirects() {
+        if request.url.scheme() != "file"
+            && (request.auth_requires_buffered_transport()
+                || !request.transport_follows_redirects())
+        {
             // Challenge-response schemes still need libcurl's buffered auth
             // retry behavior until the streaming collector models
             // intermediate authentication challenges explicitly. Manual
@@ -776,6 +881,16 @@ impl ResourceRequestClient {
     where
         F: FnOnce(Result<Response>) + Send + 'static,
     {
+        if request.url.scheme() == "file" {
+            let client = self.clone();
+            self.resource_task_runner().spawn(async move {
+                let result = client
+                    .fetch_text_stream_with_cancel_after_policy(request, cancel_handle)
+                    .await;
+                callback(result);
+            });
+            return Ok(());
+        }
         if let Some(result) = self.local_text_response(&request) {
             callback(result);
             return Ok(());
@@ -810,6 +925,9 @@ impl ResourceRequestClient {
         request: Request,
         cancel_handle: FetchCancelHandle,
     ) -> Result<StreamingRawResponse> {
+        if request.url.scheme() == "file" {
+            return self.fetch_file_stream(request, cancel_handle).await;
+        }
         if let Some(response) = self.local_text_response(&request) {
             return streaming_raw_response_from_local_response(response?);
         }
@@ -839,6 +957,12 @@ impl ResourceRequestClient {
         request: Request,
         cancel_handle: FetchCancelHandle,
     ) -> Result<NetworkFetchResult<StreamingRawResponse>> {
+        if request.url.scheme() == "file" {
+            return self
+                .fetch_file_stream(request, cancel_handle)
+                .await
+                .map(NetworkFetchResult::without_request_observation);
+        }
         if let Some(response) = self.local_text_response(&request) {
             return Ok(NetworkFetchResult::without_request_observation(
                 streaming_raw_response_from_local_response(response?)?,
@@ -1020,7 +1144,10 @@ impl ResourceRequestClient {
         cancel_handle: Option<FetchCancelHandle>,
     ) -> Result<Response> {
         let request = self.apply_network_policy(request)?;
-        if request.auth_requires_buffered_transport() || !request.transport_follows_redirects() {
+        if request.url.scheme() != "file"
+            && (request.auth_requires_buffered_transport()
+                || !request.transport_follows_redirects())
+        {
             // Digest auth retries are still completed inside libcurl on the
             // buffered path. Keep auth requests there until the streaming
             // collector can distinguish intermediate auth challenges from

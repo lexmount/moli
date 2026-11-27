@@ -196,14 +196,11 @@ impl ParserScriptOwner<PendingParsingBlockingClassicScriptContext>
         &mut self,
         blocking_signatures_before: HashSet<DocumentBlockingStylesheetSignature>,
     ) -> ParserScriptExecutionGate {
-        let vm = self.page_vm.vm_mut();
-        let still_blocked = vm
-            .document_runtime
-            .has_pending_parser_script_blocking_stylesheet_signatures(
-                blocking_signatures_before.iter(),
-            );
-        vm.record_ready_stylesheet_network_results();
-        if still_blocked {
+        if self
+            .page_vm
+            .vm_mut()
+            .prepare_parser_stylesheet_gate(&blocking_signatures_before)
+        {
             ParserScriptExecutionGate::Blocked(ParserScriptExecutionBlocker::Stylesheet)
         } else {
             ParserScriptExecutionGate::Ready

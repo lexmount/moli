@@ -253,7 +253,7 @@ async fn range_exposes_constructor_create_range_and_clone_contents_basics() -> R
 #[tokio::test]
 async fn range_internal_algorithms_ignore_page_tampered_methods() -> Result<()> {
     let server = FixtureServer::spawn().await?;
-    let browser = Browser::new(AppConfig::default().with_layout_policy(LayoutPolicy::OnDemand))?;
+    let browser = Browser::new(AppConfig::default().with_layout_policy(LayoutPolicy::Lazy))?;
 
     let mut page = browser
         .fetch(&server.url("/compat/range-internal-algorithms-ignore-page-tampered-methods"))
@@ -1152,8 +1152,8 @@ async fn supports_selector_corner_cases_for_attributes_and_syntax_errors() -> Re
     );
 
     assert_eq!(
-        diagnostic_global(&page, "selectorCornerInvalidMissingBracket"),
-        Some(&JsValueSnapshot::String("SyntaxError:12".to_owned()))
+        diagnostic_global(&page, "selectorCornerRecoveredMissingBracket"),
+        Some(&JsValueSnapshot::String("case-target".to_owned()))
     );
     assert_eq!(
         diagnostic_global(&page, "selectorCornerInvalidMissingValue"),
@@ -1172,8 +1172,8 @@ async fn supports_selector_corner_cases_for_attributes_and_syntax_errors() -> Re
         Some(&JsValueSnapshot::Number(0.0))
     );
     assert_eq!(
-        diagnostic_global(&page, "selectorCornerInvalidMatchesAttribute"),
-        Some(&JsValueSnapshot::String("SyntaxError:12".to_owned()))
+        diagnostic_global(&page, "selectorCornerMatchesRecoveredAttribute"),
+        Some(&JsValueSnapshot::Bool(true))
     );
     assert_eq!(
         diagnostic_global(&page, "selectorCornerMatchesDuplicateIdNoMatch"),

@@ -2,12 +2,16 @@ use cssparser::color::clamp_unit_f32;
 use moli_webapi::canvas_context_values::ImageSmoothingQuality;
 
 use super::backing_store::{
-    canvas_like_pixels_copy, canvas_owner_from_context, with_canvas_like_pixels_mut,
+    canvas_like_origin_clean, canvas_like_pixels, canvas_like_pixels_copy,
+    canvas_owner_from_context, set_canvas_like_origin_clean, with_canvas_like_pixels_mut,
 };
 use super::color::{CanvasColorStyle, canvas_srgb_components, serialize_canvas_color};
 use super::helpers::canvas_unrestricted_double_arg;
 use super::path2d::path_2d_object;
-use super::state::{canvas_color, canvas_path_state, set_canvas_color};
+use super::state::{
+    canvas_color, canvas_path_state, canvas_text_baseline, set_canvas_color,
+    set_canvas_text_baseline,
+};
 use super::*;
 use crate::context_bootstrap::image_data::{
     build_image_data_object, build_image_data_object_with_bytes, image_data_bytes_from_object,
@@ -19,8 +23,9 @@ use crate::web_api_interfaces;
 use crate::webidl;
 use crate::webidl::dom_string_property_value as canvas_context_dom_string_value;
 use moli_canvas::{
-    DEFAULT_FONT, DrawImageBlit, ScaleFilter, blit_draw_image_filtered, blit_image_data, byte_len,
-    data_image_rgba8_pixels, draw_text, extract_image_data, measure_text_width,
+    DEFAULT_FONT, DrawImageBlit, ScaleFilter, TextBaseline, blit_draw_image_filtered,
+    blit_image_data, byte_len, composite_rgba8_over, data_image_rgba8_pixels,
+    draw_text_with_baseline, extract_image_data, measure_text_vertical_bounds, measure_text_width,
     normalize_rect as canvas_normalize_rect, paint_rect,
 };
 use moli_layout::{
@@ -1634,38 +1639,6 @@ fn canvas_raster_bounds(rect: moli_layout::PaintRect) -> kurbo::Rect {
     )
 }
 
-/// Composites straight-alpha RGBA8 source and destination using source-over.
-fn composite_rgba8_over(destination: &mut [u8], source: &[u8]) {
-    for (dst, src) in destination
-        .as_chunks_mut::<4>()
-        .0
-        .iter_mut()
-        .zip(source.as_chunks::<4>().0.iter())
-    {
-        let src_alpha = u32::from(src[3]);
-        if src_alpha == 0 {
-            continue;
-        }
-        let dst_alpha = u32::from(dst[3]);
-        if src_alpha == 255 {
-            dst.copy_from_slice(src);
-            continue;
-        }
-        let out_alpha = src_alpha + dst_alpha * (255 - src_alpha) / 255;
-        if out_alpha == 0 {
-            dst.copy_from_slice(&[0, 0, 0, 0]);
-            continue;
-        }
-        for channel in 0..3 {
-            let src_premultiplied = (u32::from(src[channel]) * src_alpha + 127) / 255;
-            let dst_premultiplied = u32::from(dst[channel]) * dst_alpha / 255;
-            let out_premultiplied = src_premultiplied + dst_premultiplied * (255 - src_alpha) / 255;
-            dst[channel] = ((out_premultiplied * 255 + out_alpha / 2) / out_alpha) as u8;
-        }
-        dst[3] = out_alpha as u8;
-    }
-}
-
 pub(crate) fn canvas_context_is_point_in_path_callback(
     scope: &mut v8::PinScope<'_, '_>,
     _args: v8::FunctionCallbackArguments<'_>,
@@ -1729,10 +1702,42 @@ fn draw_canvas_context_text<'s>(
 ) {
     let font = context_string_slot(scope, context, CANVAS_CONTEXT_FONT_SLOT)
         .unwrap_or_else(|| DEFAULT_FONT.to_owned());
+    let baseline = canvas_text_baseline(scope, context);
     let color = canvas_srgb_components(canvas_color(scope, context, style)).map(clamp_unit_f32);
     let _ = with_canvas_like_pixels_mut(scope, canvas, |pixels, width, height| {
-        draw_text(pixels, width, height, text, x, y, &font, color);
+        draw_text_with_baseline(pixels, width, height, text, x, y, &font, baseline, color);
     });
+}
+
+pub(crate) fn canvas_context_text_baseline_getter_callback<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    mut rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    if !require_canvas_context_receiver(scope, args.this(), "textBaseline getter") {
+        return;
+    }
+    let baseline = canvas_text_baseline(scope, args.this());
+    rv.set(v8::String::new(scope, baseline.as_str()).unwrap().into());
+}
+
+pub(crate) fn canvas_context_text_baseline_setter_callback<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    _rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    if !require_canvas_context_receiver(scope, args.this(), "textBaseline setter") {
+        return;
+    }
+    if let Some(value) = canvas_context_dom_string_value(
+        scope,
+        args.get(0),
+        "CanvasRenderingContext2D",
+        "textBaseline",
+    ) && let Some(baseline) = TextBaseline::parse(&value)
+    {
+        set_canvas_text_baseline(scope, args.this(), baseline);
+    }
 }
 
 pub(crate) fn canvas_context_draw_image_callback<'s>(
@@ -1746,16 +1751,53 @@ pub(crate) fn canvas_context_draw_image_callback<'s>(
     let Ok(source) = v8::Local::<v8::Object>::try_from(args.get(0)) else {
         return;
     };
-    let Some((source_pixels, source_width, source_height)) =
-        html_image_pixels_copy(scope, source).or_else(|| canvas_like_pixels_copy(scope, source))
-    else {
+    let image = html_image_for_draw(scope, args.this(), source);
+    let owned_pixels;
+    let canvas_pixels;
+    let (source_pixels, source_width, source_height, density, origin_clean) =
+        if let Some((image, density, origin_clean)) = &image {
+            canvas_pixels = None;
+            (
+                image.rgba.as_slice(),
+                image.width,
+                image.height,
+                *density,
+                *origin_clean,
+            )
+        } else if let Some((pixels, width, height)) = html_image_pixels_copy(scope, source) {
+            canvas_pixels = None;
+            owned_pixels = pixels;
+            (owned_pixels.as_slice(), width, height, 1.0, true)
+        } else {
+            let Some(storage) = canvas_like_pixels(scope, source) else {
+                return;
+            };
+            let (width, height) = (storage.width, storage.height);
+            canvas_pixels = Some(storage);
+            (
+                &[][..],
+                width,
+                height,
+                1.0,
+                canvas_like_origin_clean(scope, source),
+            )
+        };
+    if !density.is_finite() {
+        return;
+    }
+    let Some(mut blit) = normalized_draw_image_args(
+        scope,
+        &args,
+        f64::from(source_width) / density,
+        f64::from(source_height) / density,
+    ) else {
         return;
     };
-    let Some(blit) =
-        normalized_draw_image_args(scope, &args, source_width as f64, source_height as f64)
-    else {
-        return;
-    };
+    // Script coordinates are in density-corrected image pixels.
+    blit.source_x *= density;
+    blit.source_y *= density;
+    blit.source_width *= density;
+    blit.source_height *= density;
 
     let filter = if context_bool_slot(
         scope,
@@ -1768,18 +1810,61 @@ pub(crate) fn canvas_context_draw_image_callback<'s>(
     } else {
         ScaleFilter::Nearest
     };
-    let _ = with_canvas_like_pixels_mut(scope, canvas, |pixels, width, height| {
+    let drawn = with_canvas_like_pixels_mut(scope, canvas, |pixels, width, height| {
+        // No V8 code runs while the source and destination slices are live.
+        let canvas_source = canvas_pixels
+            .as_ref()
+            .map(|source| unsafe { source.draw_source(pixels) });
+        let source_pixels = canvas_source.as_deref().unwrap_or(source_pixels);
         blit_draw_image_filtered(
             pixels,
             width,
             height,
-            &source_pixels,
+            source_pixels,
             source_width,
             source_height,
             blit,
             filter,
         );
     });
+    if drawn && !origin_clean {
+        set_canvas_like_origin_clean(scope, canvas, false);
+    }
+}
+
+fn html_image_for_draw<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    context: v8::Local<'s, v8::Object>,
+    source: v8::Local<'s, v8::Object>,
+) -> Option<(std::sync::Arc<moli_image::RgbaImage>, f64, bool)> {
+    if !web_api_interfaces::HTMLImageElement::is_instance(scope, source) {
+        return None;
+    }
+    let (host, handle) =
+        crate::native_bridge::node_runtime_and_handle_from_object_or_detached(scope, source)
+            .ok()?;
+    let realm = canvas_context_relevant_context(scope, context)?;
+    let origin = canvas_window_origin(realm)?;
+    let caller = scope
+        .get_incumbent_context()
+        .unwrap_or_else(|| scope.get_current_context());
+    if caller != realm
+        && !canvas_window_origin(caller).is_some_and(|caller| caller.same_origin(&origin))
+    {
+        return None;
+    }
+    unsafe { &*host }.canvas_image_for_draw(handle, &origin)
+}
+
+fn canvas_window_origin(context: v8::Local<'_, v8::Context>) -> Option<moli_url::WebOrigin> {
+    let host = crate::util::context_host_ptr_from_context_slot(context)?;
+    let host = unsafe { &*host };
+    let identity = host.window_execution_context_identity_for_access_check(context)?;
+    if !host.window_execution_context_identity_is_current(identity) {
+        return None;
+    }
+    let origin = host.window_document_origin(identity.dispatch_scope())?;
+    Some(moli_url::WebOrigin::from_serialized(&origin))
 }
 
 fn html_image_pixels_copy<'s>(
@@ -1927,8 +2012,13 @@ pub(crate) fn canvas_context_measure_text_callback<'s>(
     };
     let font = context_string_slot(scope, args.this(), CANVAS_CONTEXT_FONT_SLOT)
         .unwrap_or_else(|| DEFAULT_FONT.to_owned());
+    let baseline = canvas_text_baseline(scope, args.this());
+    let (actual_bounding_box_ascent, actual_bounding_box_descent) =
+        measure_text_vertical_bounds(&parsed.text, &font, baseline);
     let declaration = CanvasTextMetricsDeclaration {
         width: measure_text_width(&parsed.text, &font),
+        actual_bounding_box_ascent,
+        actual_bounding_box_descent,
     };
     let relevant_context = canvas_context_relevant_context(scope, args.this())
         .unwrap_or_else(|| scope.get_current_context());
@@ -2053,6 +2143,10 @@ pub(crate) fn canvas_context_get_image_data_callback<'s>(
         return;
     }
     let bytes = if let Some(canvas) = canvas_owner_from_context(scope, args.this()) {
+        if !canvas_like_origin_clean(scope, canvas) {
+            webidl::throw_dom_exception(scope, "SecurityError", "Canvas is not origin-clean.");
+            return;
+        }
         canvas_like_pixels_copy(scope, canvas)
             .map(|(pixels, canvas_width, canvas_height)| {
                 extract_image_data(&pixels, canvas_width, canvas_height, rect)

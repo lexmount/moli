@@ -292,6 +292,7 @@ DEFAULT_HTML_FILENAME_ALLOW_TOKENS_BY_DIR_PREFIX: tuple[
     tuple[str, tuple[str, ...]], ...
 ] = (
     ("IndexedDB", (".https.", ".sub.")),
+    ("clear-site-data", (".https.",)),
 )
 
 ANY_JS_GLOBAL_CHOICES: tuple[str, ...] = (
@@ -400,6 +401,14 @@ SUPPORTED_WASM_WEBAPI_WPTSERVE_HANDLER_REFERENCES: tuple[str, ...] = (
     "status.py",
 )
 WPTSERVE_HANDLER_TRAILING_BOUNDARY = r"(?=$|[?#'\"`)\]\}}\s,;])"
+SUPPORTED_CLEAR_SITE_DATA_WPTSERVE_HANDLER_PATTERNS: tuple[re.Pattern[str], ...] = tuple(
+    re.compile(
+        rf"(?<![A-Za-z0-9_./-]){re.escape(prefix + name)}"
+        rf"{WPTSERVE_HANDLER_TRAILING_BOUNDARY}"
+    )
+    for prefix in ("/clear-site-data/support/", "support/", "./support/", "", "./")
+    for name in ("controlled-endpoint.py", "echo-clear-site-data.py", "clear-site-data-cache.py")
+)
 SUPPORTED_FETCH_ABORT_WPTSERVE_HANDLER_PATTERNS: tuple[re.Pattern[str], ...] = tuple(
     re.compile(
         rf"(?<![A-Za-z0-9_./-]){re.escape(prefix + name)}"
@@ -997,6 +1006,8 @@ def _supported_wptserve_handler_references(
     rel: str | None,
 ) -> tuple[re.Pattern[str], ...]:
     supported: tuple[re.Pattern[str], ...] = ()
+    if rel is not None and rel.startswith("clear-site-data/"):
+        supported += SUPPORTED_CLEAR_SITE_DATA_WPTSERVE_HANDLER_PATTERNS
     if rel is not None and rel.startswith("fetch/api/"):
         supported += _empty_location_handler_reference_patterns(posixpath.dirname(rel))
     if rel is not None:

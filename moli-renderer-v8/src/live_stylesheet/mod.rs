@@ -57,7 +57,6 @@ thread_local! {
     static LIVE_STYLESHEET_PARSE_COUNT: Cell<usize> = const { Cell::new(0) };
     static LIVE_STYLESHEET_MUTATION_METRICS: Cell<LiveStylesheetMutationMetrics> =
         const { Cell::new(LiveStylesheetMutationMetrics::new()) };
-    static LIVE_STYLESHEET_DEPENDENCY_SUMMARY_PROJECTION_COUNT: Cell<usize> = const { Cell::new(0) };
     static LIVE_STYLESHEET_FONT_FACE_PROJECTION_COUNT: Cell<usize> = const { Cell::new(0) };
 }
 
@@ -158,16 +157,6 @@ pub(crate) fn reset_live_stylesheet_parse_count_for_test() {
 #[cfg(test)]
 pub(crate) fn live_stylesheet_parse_count_for_test() -> usize {
     LIVE_STYLESHEET_PARSE_COUNT.with(Cell::get)
-}
-
-#[cfg(test)]
-pub(crate) fn reset_live_stylesheet_dependency_summary_projection_count_for_test() {
-    LIVE_STYLESHEET_DEPENDENCY_SUMMARY_PROJECTION_COUNT.with(|count| count.set(0));
-}
-
-#[cfg(test)]
-pub(crate) fn live_stylesheet_dependency_summary_projection_count_for_test() -> usize {
-    LIVE_STYLESHEET_DEPENDENCY_SUMMARY_PROJECTION_COUNT.with(Cell::get)
 }
 
 #[cfg(test)]
@@ -1016,12 +1005,6 @@ struct FontFaceRuleIdentities {
 pub(crate) struct LiveStylesheetDerivedState {
     font_face_rule_identities: Mutex<FontFaceRuleIdentities>,
     serialized_css_text_cache: Mutex<Option<(u64, StdArc<str>)>>,
-    dependency_summary_cache: Mutex<
-        Option<(
-            (u64, u64),
-            StdArc<moli_selector::StyloSourceDependencySummary>,
-        )>,
-    >,
 }
 
 impl LiveStylesheetDerivedState {
@@ -1095,32 +1078,6 @@ impl LiveStylesheetDerivedState {
 
     fn clear_serialized_css_text(&self) {
         self.serialized_css_text_cache.lock().take();
-    }
-
-    pub(crate) fn source_dependency_summary(
-        &self,
-        contents_revision: u64,
-        cascade_generation: u64,
-        build: impl FnOnce() -> moli_selector::StyloSourceDependencySummary,
-    ) -> StdArc<moli_selector::StyloSourceDependencySummary> {
-        let revision = (contents_revision, cascade_generation);
-        let mut cache = self.dependency_summary_cache.lock();
-        if let Some((cached_revision, summary)) = cache.as_ref()
-            && *cached_revision == revision
-        {
-            return StdArc::clone(summary);
-        }
-
-        #[cfg(test)]
-        LIVE_STYLESHEET_DEPENDENCY_SUMMARY_PROJECTION_COUNT
-            .with(|count| count.set(count.get() + 1));
-        let summary = StdArc::new(build());
-        *cache = Some((revision, StdArc::clone(&summary)));
-        summary
-    }
-
-    fn clear_dependency_summary(&self) {
-        self.dependency_summary_cache.lock().take();
     }
 }
 

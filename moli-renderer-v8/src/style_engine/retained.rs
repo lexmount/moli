@@ -1,4 +1,3 @@
-use std::collections::HashSet;
 use std::sync::atomic::{AtomicU64, Ordering};
 use style::{
     author_styles::AuthorStyles,
@@ -16,9 +15,6 @@ use super::{
     active_stylesheets::{notify_document_stylesheet_rule_changes, update_document_stylesheet_set},
     shadow_scopes::{ShadowScopeStyles, reconcile_dirty_shadow_scopes, reconcile_shadow_scopes},
     source::store::StyloStylesheetSource,
-    source_cascade::{build_source_cascade_data, update_source_cascade_data_for_scopes},
-    source_id::{StyleScopeId, StyleSourceId},
-    source_record::RetainedStylesheetSourceRecord,
     state::RetainedStyleSystem,
     stylesheet::{
         append_stylesheet_to_stylist, install_active_stylesheet, install_active_stylesheets,
@@ -86,7 +82,6 @@ pub(super) fn build_retained_style_system(
     key: StyleWorldKey,
     inputs: &FullStyleWorldSnapshot,
     shared_lock: &SharedRwLock,
-    retained_source_records: &[RetainedStylesheetSourceRecord<'_>],
     author_styles_disabled: bool,
 ) -> RetainedStyleSystem {
     let mut stylist =
@@ -138,15 +133,6 @@ pub(super) fn build_retained_style_system(
             author_styles,
         ));
     }
-    let (source_cascade_data, source_cascade_keys) = build_source_cascade_data(
-        &mut stylist,
-        shared_lock,
-        &document_stylesheets,
-        &shadow_scopes,
-        retained_source_records,
-        None,
-        |source| install_active_stylesheet(host, shared_lock, source, key.quirks_mode),
-    );
     let guard = shared_lock.read();
     stylist.flush(&StylesheetGuards::same(&guard));
     let user_agent_cascade_data = ServoArc::new(
@@ -173,8 +159,6 @@ pub(super) fn build_retained_style_system(
         stylesheet_resource_revision: 0,
         user_agent_cascade_data,
         shadow_cascade_data,
-        source_cascade_data,
-        source_cascade_keys,
         script_custom_property_registrations: inputs.script_custom_property_registrations.clone(),
     }
 }
@@ -191,7 +175,6 @@ pub(super) fn update_retained_style_system(
     key: StyleWorldKey,
     inputs: &FullStyleWorldSnapshot,
     shared_lock: &SharedRwLock,
-    retained_source_records: &[RetainedStylesheetSourceRecord<'_>],
 ) -> RetainedStyleInvalidations {
     let mut invalidations = RetainedStyleInvalidations::new();
     let document_update = update_document_scope(
@@ -218,19 +201,6 @@ pub(super) fn update_retained_style_system(
     invalidations.shadow_scope_fallbacks = shadow_reconciliation.scope_fallbacks;
     invalidations.removed_shadow_scopes = shadow_reconciliation.removed_roots;
 
-    let previous_source_cascade_data = std::mem::take(&mut retained.source_cascade_data);
-    let previous_source_cascade_keys = std::mem::take(&mut retained.source_cascade_keys);
-    let (source_cascade_data, source_cascade_keys) = build_source_cascade_data(
-        &mut retained.stylist,
-        shared_lock,
-        &retained.document_stylesheets,
-        &retained.shadow_scopes,
-        retained_source_records,
-        Some((&previous_source_cascade_data, &previous_source_cascade_keys)),
-        |source| install_active_stylesheet(host, shared_lock, source, key.quirks_mode),
-    );
-    retained.source_cascade_data = source_cascade_data;
-    retained.source_cascade_keys = source_cascade_keys;
     refresh_retained_derived_state(
         retained,
         document_update.device_changed,
@@ -246,13 +216,9 @@ pub(super) fn update_retained_style_system(
 pub(super) fn update_retained_style_system_incrementally(
     retained: &mut RetainedStyleSystem,
     host: &DomHost,
-    document: DomHandle,
     key: StyleWorldKey,
     update: &IncrementalStyleWorldUpdate,
     shared_lock: &SharedRwLock,
-    retained_source_records: &[RetainedStylesheetSourceRecord<'_>],
-    dirty_source_ids: &HashSet<StyleSourceId>,
-    full_source_projection_scopes: &HashSet<StyleScopeId>,
 ) -> RetainedStyleInvalidations {
     let mut invalidations = RetainedStyleInvalidations::new();
     let document_update = update_document_scope(
@@ -280,36 +246,6 @@ pub(super) fn update_retained_style_system_incrementally(
     invalidations.shadow_scope_fallbacks = shadow_reconciliation.scope_fallbacks;
     invalidations.removed_shadow_scopes = shadow_reconciliation.removed_roots;
 
-    let mut dirty_source_scopes = full_source_projection_scopes.clone();
-    if document_update
-        .device_affected_origins
-        .contains(OriginSet::ORIGIN_AUTHOR)
-    {
-        dirty_source_scopes.insert(StyleScopeId::Document(document));
-    }
-    dirty_source_scopes.extend(
-        shadow_reconciliation
-            .device_affected_roots
-            .iter()
-            .copied()
-            .map(StyleScopeId::ShadowRoot),
-    );
-    dirty_source_scopes.extend(
-        invalidations
-            .removed_shadow_scopes
-            .iter()
-            .copied()
-            .map(StyleScopeId::ShadowRoot),
-    );
-    update_source_cascade_data_for_scopes(
-        retained,
-        shared_lock,
-        retained_source_records,
-        dirty_source_ids,
-        &dirty_source_scopes,
-        document_update.device_changed,
-        |source| install_active_stylesheet(host, shared_lock, source, key.quirks_mode),
-    );
     refresh_retained_derived_state(
         retained,
         document_update.device_changed,
@@ -325,7 +261,6 @@ struct DocumentScopeUpdate {
     device_changed: bool,
     viewport_size_changed: bool,
     used_color_scheme_changed: bool,
-    device_affected_origins: OriginSet,
     stylesheets_changed: bool,
 }
 
@@ -370,6 +305,8 @@ fn update_document_scope(
 
     let viewport_size_changed = retained.key.viewport_width_bits != key.viewport_width_bits
         || retained.key.viewport_height_bits != key.viewport_height_bits;
+    let device_pixel_ratio_changed =
+        retained.key.device_pixel_ratio_bits != key.device_pixel_ratio_bits;
     let used_color_scheme_changed = retained.key.environment.stylo_prefers_color_scheme()
         != key.environment.stylo_prefers_color_scheme()
         || retained.key.environment.stylo_page_color_schemes()
@@ -377,12 +314,13 @@ fn update_document_scope(
     let device_changed = viewport_size_changed
         || retained.key.screen_width_bits != key.screen_width_bits
         || retained.key.screen_height_bits != key.screen_height_bits
-        || retained.key.device_pixel_ratio_bits != key.device_pixel_ratio_bits
+        || device_pixel_ratio_changed
         || retained.key.environment != key.environment;
     let mut device_affected_origins = OriginSet::empty();
     if device_changed {
         let device =
             new_style_device_with_viewport(key.style_viewport(), key.environment, key.quirks_mode);
+        device.inherit_root_font_relative_state_from(retained.stylist.device());
         let guard = shared_lock.read();
         let guards = StylesheetGuards::same(&guard);
         device_affected_origins = retained.stylist.set_device(device, &guards);
@@ -402,7 +340,9 @@ fn update_document_scope(
             install_active_stylesheet(host, shared_lock, source, key.quirks_mode)
         })
     });
-    let mut scope_fallback = false;
+    // Stylo snaps border widths during cascade using the current device scale.
+    // These values can change even when every media query still matches.
+    let mut scope_fallback = device_pixel_ratio_changed;
     if let Some(reconciliation) = stylesheet_reconciliation.as_ref() {
         let guard = shared_lock.read();
         scope_fallback |= reconciliation.stylesheet_removed();
@@ -438,7 +378,6 @@ fn update_document_scope(
         device_changed,
         viewport_size_changed,
         used_color_scheme_changed,
-        device_affected_origins,
         stylesheets_changed,
     }
 }

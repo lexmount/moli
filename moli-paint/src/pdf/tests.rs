@@ -425,6 +425,30 @@ fn native_path_fill_rules_reach_pdf_vector_operators() {
 }
 
 #[test]
+fn pdf_images_use_the_snapshot_device_grid() {
+    let mut snapshot = PaintSnapshot::new(PaintViewport::new(300, 600, 2.0), PaintColor::WHITE);
+    let image = snapshot.add_image(Arc::new(
+        moli_image::RgbaImage::try_new(1, 1, vec![0, 0, 255, 255]).unwrap(),
+    ));
+    let page_content = |mut snapshot: PaintSnapshot, destination| {
+        snapshot.push_fragment(PaintFragment::Image(moli_layout::PaintImage {
+            image,
+            destination,
+            sampling: moli_layout::PaintImageSampling::Nearest,
+            transform: PaintTransform2D::IDENTITY,
+        }));
+        let pdf = document(&snapshot, &options());
+        let content = pdf.get_page_content(pdf.get_pages()[&1]);
+        assert!(!content.is_empty());
+        content
+    };
+    assert_eq!(
+        page_content(snapshot.clone(), PaintRect::new(10.26, 12.26, 8.0, 6.0)),
+        page_content(snapshot, PaintRect::new(10.5, 12.5, 8.0, 6.0))
+    );
+}
+
+#[test]
 fn repeated_images_fill_the_clipped_pdf_region() {
     let mut snapshot = snapshot();
     let image = snapshot.add_image(Arc::new(
@@ -433,13 +457,20 @@ fn repeated_images_fill_the_clipped_pdf_region() {
     snapshot.push_fragment(PaintFragment::push_clip(PaintRect::new(
         12.0, 10.0, 32.0, 16.0,
     )));
-    snapshot.push_fragment(PaintFragment::Image(moli_layout::PaintImage {
-        image,
-        destination: PaintRect::new(8.0, 8.0, 2.0, 1.0),
-        repeat_bounds: Some(PaintRect::new(8.0, 8.0, 40.0, 20.0)),
-        sampling: moli_layout::PaintImageSampling::Nearest,
+    snapshot.push_fragment(PaintFragment::Tiles(Box::new(moli_layout::PaintTiles {
+        source: moli_layout::PaintTileSource::Image(
+            image,
+            moli_layout::PaintImageSampling::Nearest,
+        ),
+        source_rect: PaintRect::new(0.0, 0.0, 2.0, 1.0),
+        grid: moli_layout::PaintTileGrid {
+            x: moli_layout::PaintTileAxis::new(8.0, 2.0, 2.0, 20),
+            y: moli_layout::PaintTileAxis::new(8.0, 1.0, 1.0, 20),
+            coverage: PaintRect::new(8.0, 8.0, 40.0, 20.0),
+            snap_tiles: false,
+        },
         transform: PaintTransform2D::IDENTITY,
-    }));
+    })));
     snapshot.push_fragment(PaintFragment::PopLayer);
     let doc = document(&snapshot, &options());
     let repeated_images: Vec<_> = doc
@@ -466,18 +497,25 @@ fn repeated_images_fill_the_clipped_pdf_region() {
 }
 
 #[test]
-fn pdf_rejects_nonfinite_image_repeat_bounds() {
+fn pdf_rejects_nonfinite_image_tile_bounds() {
     let mut snapshot = snapshot();
     let image = snapshot.add_image(Arc::new(
         moli_image::RgbaImage::try_new(1, 1, vec![255; 4]).unwrap(),
     ));
-    snapshot.push_fragment(PaintFragment::Image(moli_layout::PaintImage {
-        image,
-        destination: PaintRect::new(0.0, 0.0, 1.0, 1.0),
-        repeat_bounds: Some(PaintRect::new(0.0, 0.0, f32::NAN, 20.0)),
-        sampling: moli_layout::PaintImageSampling::Nearest,
+    snapshot.push_fragment(PaintFragment::Tiles(Box::new(moli_layout::PaintTiles {
+        source: moli_layout::PaintTileSource::Image(
+            image,
+            moli_layout::PaintImageSampling::Nearest,
+        ),
+        source_rect: PaintRect::new(0.0, 0.0, 1.0, 1.0),
+        grid: moli_layout::PaintTileGrid {
+            x: moli_layout::PaintTileAxis::new(0.0, 1.0, 1.0, 20),
+            y: moli_layout::PaintTileAxis::new(0.0, 1.0, 1.0, 20),
+            coverage: PaintRect::new(0.0, 0.0, f32::NAN, 20.0),
+            snap_tiles: false,
+        },
         transform: PaintTransform2D::IDENTITY,
-    }));
+    })));
     assert!(matches!(
         pdf_snapshot(&snapshot, &options()),
         Err(PdfError::Encoding(_))

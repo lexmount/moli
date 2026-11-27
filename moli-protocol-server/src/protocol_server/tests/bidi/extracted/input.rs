@@ -155,6 +155,62 @@ async fn websocket_bidi_input_perform_and_release_actions_use_shared_input() {
     protocol_server.abort();
 }
 #[tokio::test]
+async fn websocket_bidi_host_file_policy_blocks_client_paths() {
+    let host_file = TempPath::new("bidi-host-file-policy");
+    fs::write(&host_file.path, b"local fixture").unwrap();
+    let output_dir = TempDir::new("bidi-host-file-policy-download");
+    let (addr, server) =
+        spawn_test_protocol_server_with_fetch_config(host_file_access_blocked_config()).await;
+    let (mut socket, context) = bidi_session_with_context(addr).await;
+    let navigated = send_bidi_command(&mut socket, 3, "browsingContext.navigate", json!({
+        "context": context, "url": "data:text/html,<input id=file type=file>", "wait": "complete"
+    })).await;
+    assert_eq!(navigated["type"], "success");
+    let element = send_bidi_command_response(
+        &mut socket,
+        4,
+        "script.evaluate",
+        json!({
+            "expression": "document.getElementById('file')",
+            "target": {"context": context}, "awaitPromise": false
+        }),
+    )
+    .await;
+    let shared_id = element["result"]["result"]["sharedId"].as_str().unwrap();
+    let file = send_bidi_command_response(
+        &mut socket,
+        5,
+        "input.setFiles",
+        json!({
+            "context": context, "element": {"sharedId": shared_id}, "files": [&host_file.path]
+        }),
+    )
+    .await;
+    assert_eq!(file["error"], "invalid argument");
+    assert_eq!(
+        file["message"],
+        "Host file access is disabled by browser policy"
+    );
+
+    let download = send_bidi_command_response(
+        &mut socket,
+        6,
+        "browser.setDownloadBehavior",
+        json!({
+            "downloadBehavior": {"type": "allowed", "destinationFolder": output_dir.path}
+        }),
+    )
+    .await;
+    assert_eq!(download["error"], "invalid argument");
+    assert_eq!(
+        download["message"],
+        "Host file access is disabled by browser policy"
+    );
+    assert!(!output_dir.path.exists());
+    server.abort();
+}
+
+#[tokio::test]
 async fn websocket_bidi_input_set_files_updates_file_input() {
     let first_file = TempPath::new("bidi-set-files-first");
     let second_file = TempPath::new("bidi-set-files-second");

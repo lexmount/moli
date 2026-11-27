@@ -18,6 +18,7 @@ const PAGE: &str = r#"<!doctype html>
 <img id="pixel" src="images/pixel.png">
 <p id="script">script did not run</p>
 <script src="scripts/page.js"></script>
+<script type="module" src="scripts/module.js"></script>
 "#;
 
 const PAGE_PROBE: &str = "[document.getElementById('script').textContent, \
@@ -38,6 +39,10 @@ fn write_local_page() -> Result<Url> {
     std::fs::write(
         dir.join("scripts/page.js"),
         "document.getElementById('script').textContent = 'script ran';",
+    )?;
+    std::fs::write(
+        dir.join("scripts/module.js"),
+        "window.localModuleRan = true;",
     )?;
     Ok(Url::from_file_path(dir.join("page.html")).expect("temporary path is absolute"))
 }
@@ -60,25 +65,30 @@ fn run_fetch_eval(url: &str, expression: &str, extra_args: &[&str]) -> Result<su
 }
 
 #[test]
-fn fetch_cli_refuses_file_urls_without_the_capability() -> Result<()> {
+fn fetch_cli_file_policy_blocks_browser_navigation_with_web_security_disabled() -> Result<()> {
     let page = write_local_page()?;
-    let output = run_fetch_eval(page.as_str(), PAGE_PROBE, &[])?;
-
-    assert!(!output.status.success());
-    assert!(
-        clean_output(&output.stderr).contains(
-            "Navigation to a local file URL requires an explicitly granted browser capability."
-        ),
-        "{}",
-        clean_output(&output.stderr)
-    );
+    for option in ["--block-file-urls", "--block-host-file-access"] {
+        let output = run_fetch_eval(
+            page.as_str(),
+            PAGE_PROBE,
+            &[option, "--disable-web-security"],
+        )?;
+        assert!(!output.status.success());
+        assert!(
+            clean_output(&output.stderr).contains(
+                "Navigation to a local file URL requires an explicitly granted browser capability."
+            ),
+            "{}",
+            clean_output(&output.stderr)
+        );
+    }
     Ok(())
 }
 
 #[test]
-fn fetch_cli_allow_file_urls_loads_a_file_document_with_relative_subresources() -> Result<()> {
+fn fetch_cli_loads_a_file_document_with_relative_subresources() -> Result<()> {
     let page = write_local_page()?;
-    let output = run_fetch_eval(page.as_str(), PAGE_PROBE, &["--allow-file-urls"])?;
+    let output = run_fetch_eval(page.as_str(), PAGE_PROBE, &[])?;
 
     assert!(output.status.success(), "{}", clean_output(&output.stderr));
     assert_eq!(clean_output(&output.stdout), "script ran|rgb(1, 2, 3)|1\n");
@@ -86,7 +96,27 @@ fn fetch_cli_allow_file_urls_loads_a_file_document_with_relative_subresources() 
 }
 
 #[test]
-fn fetch_cli_allow_file_urls_keeps_files_away_from_web_documents() -> Result<()> {
+fn fetch_cli_local_links_and_location_keep_file_subresource_authority() -> Result<()> {
+    let target = write_local_page()?;
+    let initial = target.join("initial.html")?;
+    std::fs::write(
+        initial.to_file_path().expect("fixture is a file URL"),
+        "<!doctype html><a href='page.html'>Open fixture</a>",
+    )?;
+
+    for expression in [
+        "location.assign('page.html'); undefined",
+        "document.querySelector('a').click(); undefined",
+    ] {
+        let output = run_fetch_eval(initial.as_str(), expression, &["--dump", "html"])?;
+        assert!(output.status.success(), "{}", clean_output(&output.stderr));
+        assert!(clean_output(&output.stdout).contains("script ran"));
+    }
+    Ok(())
+}
+
+#[test]
+fn fetch_cli_web_document_has_no_file_authority_with_web_security_disabled() -> Result<()> {
     let page = write_local_page()?;
     let pixel = page.join("images/pixel.png")?;
     let pixel_data_url = format!(
@@ -116,11 +146,88 @@ fn fetch_cli_allow_file_urls_keeps_files_away_from_web_documents() -> Result<()>
                 }\
             })(),\
         ].join('|'))";
-    let output = run_fetch_eval(&web_document, probe, &["--allow-file-urls"])?;
+    let output = run_fetch_eval(&web_document, probe, &["--disable-web-security"])?;
 
     assert!(output.status.success(), "{}", clean_output(&output.stderr));
     let result = clean_output(&output.stdout);
     assert!(result.starts_with("1|0|refused|popup "), "{result}");
     assert!(!result.contains("popup read"), "{result}");
+    Ok(())
+}
+
+#[test]
+fn fetch_cli_file_origin_filters_script_reads_and_accepts_the_developer_switch() -> Result<()> {
+    let page = write_local_page()?;
+    let probe = r#"(async () => {
+        const outcomes = [];
+        const read = async (operation) => {
+            try { await operation(); outcomes.push('read'); }
+            catch (error) { outcomes.push(error.name); }
+        };
+        await read(() => document.querySelector('link').sheet.cssRules);
+        const canvas = document.createElement('canvas');
+        const context = canvas.getContext('2d');
+        context.drawImage(document.getElementById('pixel'), 0, 0);
+        await read(() => context.getImageData(0, 0, 1, 1));
+        await read(() => canvas.toDataURL());
+        await read(async () => {
+            const blob = await new Promise(resolve => canvas.toBlob(resolve));
+            if (blob?.type !== 'image/png' || !blob.size) throw new Error('invalid PNG');
+        });
+        const copy = document.createElement('canvas');
+        const copyContext = copy.getContext('2d');
+        copyContext.drawImage(canvas, 0, 0);
+        await read(() => copyContext.getImageData(0, 0, 1, 1));
+        copy.width = copy.width;
+        await read(() => copyContext.getImageData(0, 0, 1, 1));
+        await read(async () => (await fetch('style/page.css')).text());
+        await read(() => new Promise((resolve, reject) => {
+            const request = new XMLHttpRequest();
+            request.open('GET', 'style/page.css');
+            request.onload = () => resolve(request.responseText);
+            request.onerror = () => reject(new DOMException('Fixture read rejected', 'NetworkError'));
+            request.send();
+        }));
+        outcomes.push(window.localModuleRan ? 'module' : 'no module');
+        return outcomes.join('|');
+    })()"#;
+    for (args, expected) in [
+        (
+            &["--lazy"][..],
+            "SecurityError|SecurityError|SecurityError|SecurityError|SecurityError|read|TypeError|NetworkError|no module\n",
+        ),
+        (
+            &["--lazy", "--disable-web-security"][..],
+            "read|read|read|read|read|read|read|read|module\n",
+        ),
+    ] {
+        let output = run_fetch_eval(page.as_str(), probe, args)?;
+        assert!(output.status.success(), "{}", clean_output(&output.stderr));
+        assert_eq!(clean_output(&output.stdout), expected);
+    }
+    Ok(())
+}
+
+#[test]
+fn fetch_cli_validates_file_policy_environment_even_with_flags() -> Result<()> {
+    let page = write_local_page()?;
+    let run = |name, value, flags: &[&str]| {
+        std::process::Command::new(env!("CARGO_BIN_EXE_moli"))
+            .args(["fetch", "--disable-web-security"])
+            .args(flags)
+            .arg(page.as_str())
+            .env_remove("MOLI_BLOCK_FILE_URLS")
+            .env_remove("MOLI_BLOCK_HOST_FILE_ACCESS")
+            .env(name, value)
+            .output()
+    };
+    for variable in ["MOLI_BLOCK_FILE_URLS", "MOLI_BLOCK_HOST_FILE_ACCESS"] {
+        let blocked = run(variable, "1", &[])?;
+        assert!(!blocked.status.success());
+        assert!(clean_output(&blocked.stderr).contains("Navigation to a local file URL"));
+        let invalid = run(variable, "not-a-boolean", &["--block-host-file-access"])?;
+        assert!(!invalid.status.success());
+        assert!(clean_output(&invalid.stderr).contains(variable));
+    }
     Ok(())
 }

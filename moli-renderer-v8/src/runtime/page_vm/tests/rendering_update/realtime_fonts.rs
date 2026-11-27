@@ -382,7 +382,7 @@ fn realtime_font_resolution_allows_geometry_reads_from_a_then_getter() {
 fn legacy_font_readiness_keeps_its_existing_cost_and_delivery_path() {
     run_page_vm_large_stack_async_test("legacy-font-readiness", || async move {
         let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default()).unwrap();
-        for policy in [LayoutPolicy::Mock, LayoutPolicy::OnDemand] {
+        for policy in [LayoutPolicy::Mock, LayoutPolicy::Lazy] {
             let (mut page, _, _) = page_vm_with_bound_task_sources_and_owner_wake(
                 &loader,
                 Url::parse("https://example.com/legacy-font-readiness").unwrap(),

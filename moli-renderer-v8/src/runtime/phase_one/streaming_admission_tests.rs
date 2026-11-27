@@ -361,7 +361,7 @@ fn complete_current_chunk_does_not_manufacture_a_budget_continuation() {
 }
 
 #[test]
-fn open_streaming_residence_does_not_treat_link_event_as_parser_obstruction() {
+fn open_streaming_residence_waits_for_link_event_before_parser_continuation() {
     super::tests::run_phase_one_large_stack_test("open-stream-link-event-independence", || {
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
@@ -514,10 +514,9 @@ fn open_streaming_residence_does_not_treat_link_event_as_parser_obstruction() {
                     "the bounded Networking FIFO must reach stylesheet completion"
                 );
 
-                // The `<link>` event is independent DOM-manipulation work,
-                // while stylesheet unblock publishes a separate Networking
-                // parser continuation. Observing the DOM wake does not grant
-                // permission to skip that continuation task.
+                // The `<link>` event retains the script blocker through its
+                // DOM-manipulation task. Only its completed dispatch publishes
+                // the separate Networking parser continuation.
                 wait_for_owner_wake_source(
                     &mut wake_rx,
                     RendererOwnerWakeSource::DomManipulationTask,
@@ -529,9 +528,15 @@ fn open_streaming_residence_does_not_treat_link_event_as_parser_obstruction() {
                 )
                 .await;
                 assert!(
-                    has_ready_main_parser_continuation(&residence),
-                    "stylesheet unblock must remain an explicit parser continuation"
+                    !has_ready_main_parser_continuation(&residence),
+                    "physical completion must wait for the link event"
                 );
+                assert!(has_ready_connected_style_event(&residence));
+                let (residence, applied) = apply_oldest_ready_page_task(residence).await;
+                assert!(applied, "the posted link event must run through the production dispatcher");
+                assert!(!has_ready_connected_style_event(&residence));
+                assert!(has_ready_main_parser_continuation(&residence),
+                    "link event dispatch must publish an explicit parser continuation");
                 let residence = apply_next_main_parser_continuation(residence).await;
                 let residence = resume_open_stream(
                     residence,
@@ -539,8 +544,8 @@ fn open_streaming_residence_does_not_treat_link_event_as_parser_obstruction() {
                 )
                 .await;
                 assert!(
-                    has_ready_connected_style_event(&residence),
-                    "the posted <link> event must not become a parser prerequisite"
+                    !has_ready_connected_style_event(&residence),
+                    "the completed link event must not be dispatched twice"
                 );
 
                 drop(residence);

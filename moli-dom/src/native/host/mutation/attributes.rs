@@ -1,8 +1,246 @@
 use std::sync::Arc;
 
 use super::*;
+use crate::native::inline_style::{CssInlineStyleDeclarationState, CssomStyleAttribute};
+
+struct AttributeBeforeMutation {
+    local_name: String,
+    namespace: Option<String>,
+    prior_value: Option<Arc<str>>,
+}
 
 impl DomHost {
+    /// Tracks attributes consumed directly by layout, independently of CSS
+    /// selectors and presentation hints. Inline style has its own tracked-input
+    /// path. Foreign markup can also be serialized into an inline SVG scene.
+    pub fn attribute_affects_native_layout(
+        &self,
+        handle: DomHandle,
+        namespace: Option<&str>,
+        name: &str,
+    ) -> bool {
+        let Some(element) = self.node(handle).and_then(Node::as_element) else {
+            return false;
+        };
+        if element.namespace() != "http://www.w3.org/1999/xhtml" {
+            return namespace.is_some() || (name != "class" && !name.starts_with("data-"));
+        }
+        if matches!(
+            name,
+            "id" | "style" | "slot" | "popover" | "contenteditable"
+        ) {
+            return true;
+        }
+        match element.local_name() {
+            "a" => matches!(name, "href" | "name"),
+            "base" => name == "href",
+            "slot" => name == "name",
+            "details" => matches!(name, "open" | "name"),
+            "dialog" => name == "open",
+            "ol" | "ul" | "menu" => matches!(name, "start" | "reversed"),
+            "li" => name == "value",
+            "td" | "th" => matches!(name, "colspan" | "rowspan"),
+            "col" | "colgroup" => name == "span",
+            "input" | "textarea" | "select" | "button" | "option" | "optgroup" | "fieldset"
+            | "legend" | "output" | "progress" | "meter" => matches!(
+                name,
+                "type"
+                    | "value"
+                    | "placeholder"
+                    | "size"
+                    | "cols"
+                    | "rows"
+                    | "disabled"
+                    | "multiple"
+                    | "checked"
+                    | "selected"
+                    | "label"
+                    | "name"
+                    | "form"
+                    | "list"
+                    | "min"
+                    | "max"
+                    | "step"
+                    | "low"
+                    | "high"
+                    | "optimum"
+                    | "width"
+                    | "height"
+                    | "src"
+            ),
+            "iframe" | "frame" => {
+                matches!(
+                    name,
+                    "width" | "height" | "scrolling" | "src" | "srcdoc" | "name"
+                )
+            }
+            "canvas" => matches!(name, "width" | "height"),
+            "img" | "source" => {
+                matches!(
+                    name,
+                    "width" | "height" | "src" | "srcset" | "sizes" | "media" | "type"
+                )
+            }
+            "audio" | "video" => matches!(name, "width" | "height" | "src" | "poster" | "controls"),
+            "embed" | "object" => matches!(name, "width" | "height" | "src" | "data" | "type"),
+            _ => false,
+        }
+    }
+
+    fn record_attribute_mutation(
+        &self,
+        handle: DomHandle,
+        namespace: Option<&str>,
+        local_name: &str,
+    ) {
+        let affects_native_layout =
+            self.attribute_affects_native_layout(handle, namespace, local_name);
+        self.record_mutation_and_layout_input(
+            MutationScope::QueryState,
+            affects_native_layout.then_some(handle),
+            namespace.is_none() && local_name == "style",
+        );
+    }
+
+    fn qualified_attribute_before_mutation(
+        &self,
+        handle: DomHandle,
+        name: &str,
+    ) -> Option<AttributeBeforeMutation> {
+        let normalized_name = self.dom.normalized_attribute_name(handle, name)?;
+        let attribute = self
+            .node(handle)
+            .and_then(Node::as_element)
+            .and_then(|element| {
+                element
+                    .attributes()
+                    .iter()
+                    .find(|attribute| attribute.name_matches(&normalized_name))
+            });
+        Some(match attribute {
+            Some(attribute) => AttributeBeforeMutation {
+                local_name: attribute.local_name().to_owned(),
+                namespace: (!attribute.namespace().is_empty())
+                    .then(|| attribute.namespace().to_owned()),
+                prior_value: Some(Arc::from(attribute.value())),
+            },
+            None => AttributeBeforeMutation {
+                local_name: normalized_name,
+                namespace: None,
+                prior_value: None,
+            },
+        })
+    }
+
+    /// Commit the node's CSSOM source. Exact text is supplied when attribute
+    /// consumers need historical values or attribute mutation facts.
+    pub fn set_cssom_style_attribute(
+        &mut self,
+        handle: DomHandle,
+        source: Box<CssomStyleAttribute>,
+        text: Option<&str>,
+    ) -> DomAttributeMutationOutcome {
+        let before = text.and_then(|_| self.qualified_attribute_before_mutation(handle, "style"));
+        let Some(element) = self
+            .node_mut(handle)
+            .and_then(|node| node.data_mut().as_element_mut())
+        else {
+            return DomAttributeMutationOutcome::default();
+        };
+        if text.is_none()
+            && element
+                .find_attribute("style")
+                .is_some_and(|attribute| !attribute.namespace().is_empty())
+        {
+            return DomAttributeMutationOutcome::default();
+        }
+        let old_value = before
+            .as_ref()
+            .and_then(|attribute| attribute.prior_value.clone());
+        element.set_cssom_style_attribute(source);
+        let exact = before.zip(text);
+        let effects = if let Some((before, text)) = exact.as_ref()
+            && old_value.as_deref() == Some(*text)
+        {
+            self.same_value_attribute_effects(
+                handle,
+                &before.local_name,
+                before.namespace.as_deref(),
+                old_value.clone(),
+                text,
+                self.mutation_records_enabled(),
+            )
+        } else {
+            self.cssom_style_attribute_effects(handle, exact)
+        };
+        DomAttributeMutationOutcome::new(effects, old_value)
+    }
+
+    pub fn edit_cssom_style_attribute(
+        &mut self,
+        handle: DomHandle,
+        edit: impl FnOnce(&mut CssInlineStyleDeclarationState) -> bool,
+    ) -> DomMutationEffects {
+        let changed = self
+            .node_mut(handle)
+            .and_then(|node| node.data_mut().as_element_mut())
+            .and_then(Element::style_attribute_mut)
+            .is_some_and(|attribute| attribute.edit_cssom_style(edit));
+        if changed {
+            return self.cssom_style_attribute_effects(handle, None);
+        }
+        DomMutationEffects::default()
+    }
+
+    /// Install a declaration source with the same text as the committed attribute.
+    pub fn replace_style_attribute_source(
+        &mut self,
+        handle: DomHandle,
+        source: Box<CssomStyleAttribute>,
+    ) {
+        if let Some(element) = self
+            .node_mut(handle)
+            .and_then(|node| node.data_mut().as_element_mut())
+        {
+            element.replace_style_attribute_source(source);
+        }
+    }
+
+    fn cssom_style_attribute_effects(
+        &self,
+        handle: DomHandle,
+        exact: Option<(AttributeBeforeMutation, &str)>,
+    ) -> DomMutationEffects {
+        let (name, namespace) = exact.as_ref().map_or(("style", None), |(attribute, _)| {
+            (
+                attribute.local_name.as_str(),
+                attribute.namespace.as_deref(),
+            )
+        });
+        self.record_attribute_mutation(handle, namespace, name);
+        let mut effects = self.node_update_effects(handle);
+        let records_enabled = self.mutation_records_enabled();
+        if let Some((before, text)) = exact {
+            self.mark_stylesheet_owner_attribute_change(
+                &mut effects,
+                handle,
+                before.namespace.as_deref(),
+                &before.local_name,
+            );
+            effects.mark_attribute_change(
+                handle,
+                &before.local_name,
+                before.namespace.as_deref(),
+                before.prior_value,
+                Some(text),
+                records_enabled,
+            );
+        } else if records_enabled {
+            effects.queue_attribute_mutation_record(handle, "style", None, None, None);
+        }
+        effects
+    }
+
     pub fn explicit_element_references(
         &self,
         handle: DomHandle,
@@ -88,25 +326,13 @@ impl DomHost {
             self.reset_parser_form_owner_for_form_attribute_mutation(handle);
         }
         let records_enabled = self.mutation_records_enabled();
-        let Some(normalized_name) = self.dom.normalized_attribute_name(handle, name) else {
+        let Some(AttributeBeforeMutation {
+            local_name,
+            namespace,
+            prior_value,
+        }) = self.qualified_attribute_before_mutation(handle, name)
+        else {
             return DomAttributeMutationOutcome::new(DomMutationEffects::default(), None);
-        };
-        let attribute = self
-            .node(handle)
-            .and_then(Node::as_element)
-            .and_then(|element| {
-                element
-                    .attributes()
-                    .iter()
-                    .find(|attribute| attribute.name_matches(&normalized_name))
-            });
-        let (local_name, namespace, prior_value) = match attribute {
-            Some(attribute) => (
-                attribute.local_name().to_owned(),
-                (!attribute.namespace().is_empty()).then(|| attribute.namespace().to_owned()),
-                Some(Arc::from(attribute.value())),
-            ),
-            None => (normalized_name, None, None),
         };
         let prior_slot_name = if name.eq_ignore_ascii_case("slot") {
             self.node(handle)
@@ -150,7 +376,7 @@ impl DomHost {
             if name.eq_ignore_ascii_case("id") || name.eq_ignore_ascii_case("name") {
                 self.record_named_index_candidate(handle);
             }
-            self.record_mutation(MutationScope::QueryState);
+            self.record_attribute_mutation(handle, namespace.as_deref(), &local_name);
             if name.eq_ignore_ascii_case("id") || name.eq_ignore_ascii_case("name") {
                 self.update_target_after_indicated_part_mutation(handle);
             }
@@ -291,7 +517,7 @@ impl DomHost {
             if local_name.eq_ignore_ascii_case("id") || local_name.eq_ignore_ascii_case("name") {
                 self.record_named_index_candidate(handle);
             }
-            self.record_mutation(MutationScope::QueryState);
+            self.record_attribute_mutation(handle, namespace, local_name);
             if local_name.eq_ignore_ascii_case("id") || local_name.eq_ignore_ascii_case("name") {
                 self.update_target_after_indicated_part_mutation(handle);
             }
@@ -378,7 +604,15 @@ impl DomHost {
         name: &str,
     ) -> DomAttributeMutationOutcome {
         let records_enabled = self.mutation_records_enabled();
-        let prior_value = self.get_attribute(handle, name).map(Arc::from);
+        let Some(AttributeBeforeMutation {
+            local_name,
+            namespace,
+            prior_value,
+        }) = self.qualified_attribute_before_mutation(handle, name)
+        else {
+            return DomAttributeMutationOutcome::default();
+        };
+        let namespace = namespace.as_deref();
         if prior_value.is_some() && name.eq_ignore_ascii_case("form") {
             self.reset_parser_form_owner_for_form_attribute_mutation(handle);
         }
@@ -420,16 +654,21 @@ impl DomHost {
             if name.eq_ignore_ascii_case("id") || name.eq_ignore_ascii_case("name") {
                 self.record_named_index_candidate(handle);
             }
-            self.record_mutation(MutationScope::QueryState);
+            self.record_attribute_mutation(handle, namespace, &local_name);
             if name.eq_ignore_ascii_case("id") || name.eq_ignore_ascii_case("name") {
                 self.update_target_after_indicated_part_mutation(handle);
             }
             let mut effects = self.node_update_effects(handle);
-            self.mark_stylesheet_owner_attribute_change(&mut effects, handle, None, name);
+            self.mark_stylesheet_owner_attribute_change(
+                &mut effects,
+                handle,
+                namespace,
+                &local_name,
+            );
             effects.mark_attribute_change(
                 handle,
-                name,
-                None,
+                &local_name,
+                namespace,
                 prior_value.clone(),
                 None,
                 records_enabled,
@@ -487,7 +726,7 @@ impl DomHost {
             if local_name.eq_ignore_ascii_case("id") || local_name.eq_ignore_ascii_case("name") {
                 self.record_named_index_candidate(handle);
             }
-            self.record_mutation(MutationScope::QueryState);
+            self.record_attribute_mutation(handle, namespace, local_name);
             if local_name.eq_ignore_ascii_case("id") || local_name.eq_ignore_ascii_case("name") {
                 self.update_target_after_indicated_part_mutation(handle);
             }
@@ -591,6 +830,79 @@ mod tests {
         let mutation = &effects.style().attribute_mutations()[0];
         assert_eq!(mutation.local_name(), "CONTENT");
         assert_eq!(mutation.namespace(), None);
+    }
+
+    #[test]
+    fn html_attribute_mutations_track_layout_only_for_native_inputs() {
+        let mut host = DomHost::from_dom(NativeDom::new_html(
+            url::Url::parse("https://example.test/").unwrap(),
+        ));
+        let document = host.document_handle();
+        let container = host.create_element("div");
+        assert!(host.append_child(document, container));
+        let version = host.document_layout_version(document);
+        let dom_version = host.dom_version();
+        for attribute in ["x", "width", "align", "rows", "unknown"] {
+            assert!(host.set_attribute(container, attribute, "2"));
+            assert_eq!(
+                host.document_layout_version(document),
+                version,
+                "{attribute}"
+            );
+        }
+        assert!(host.dom_version() > dom_version);
+
+        for (tag, attribute) in [
+            ("canvas", "width"),
+            ("textarea", "rows"),
+            ("td", "colspan"),
+            ("li", "value"),
+            ("iframe", "scrolling"),
+            ("a", "href"),
+        ] {
+            let element = host.create_element(tag);
+            assert!(host.append_child(container, element));
+            let version = host.document_layout_version(document);
+            assert!(host.set_attribute(element, attribute, "2"));
+            assert!(
+                host.document_layout_version(document) > version,
+                "{tag}.{attribute}"
+            );
+        }
+    }
+
+    #[test]
+    fn removing_an_svg_reference_by_qualified_name_invalidates_layout() {
+        let mut host = DomHost::from_dom(NativeDom::new_html(
+            url::Url::parse("https://example.test/").unwrap(),
+        ));
+        let document = host.document_handle();
+        let reference = host
+            .create_element_ns(Some("http://www.w3.org/2000/svg"), "use")
+            .unwrap();
+        assert!(host.append_child(document, reference));
+        let xlink = Some("http://www.w3.org/1999/xlink");
+        host.set_attribute_ns(reference, xlink, Some("data-link"), "href", "#shape");
+        host.set_mutation_observer_records_enabled(true);
+        let version = host.document_layout_version(document);
+
+        let removal = host.remove_attribute_mutation_outcome(reference, "data-link:href");
+
+        assert_eq!(removal.old_value(), Some("#shape"));
+        assert_eq!(host.get_attribute_ns(reference, xlink, "href"), None);
+        assert_eq!(host.document_layout_version(document), version + 1);
+        let [mutation] = removal.effects().style().attribute_mutations() else {
+            panic!("expected one attribute mutation");
+        };
+        assert_eq!(mutation.local_name(), "href");
+        assert_eq!(mutation.namespace(), xlink);
+        let [record] = removal.effects().observer_records().records() else {
+            panic!("expected one observer record");
+        };
+        let DomMutationRecordKind::Attributes(record) = record.kind() else {
+            panic!("expected an attribute record");
+        };
+        assert_eq!(record, mutation);
     }
 
     #[test]

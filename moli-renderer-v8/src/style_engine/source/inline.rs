@@ -10,7 +10,6 @@ pub(in crate::style_engine) struct InlineStyleMetadataStore {
 #[derive(Clone, Debug, Default)]
 pub(in crate::style_engine) struct InlineStyleMetadata {
     base_url: Option<url::Url>,
-    resolution_text: Option<String>,
     csp_state: InlineStyleCspState,
 }
 
@@ -52,27 +51,6 @@ impl InlineStyleMetadataStore {
             .borrow()
             .get(&handle)
             .and_then(|metadata| metadata.base_url.clone())
-    }
-
-    pub(in crate::style_engine) fn set_resolution_text(&self, handle: DomHandle, text: String) {
-        self.metadata_by_handle
-            .borrow_mut()
-            .entry(handle)
-            .or_default()
-            .resolution_text = Some(text);
-    }
-
-    pub(in crate::style_engine) fn clear_resolution_text(&self, handle: DomHandle) {
-        self.update(handle, |metadata| {
-            metadata.resolution_text = None;
-        });
-    }
-
-    pub(in crate::style_engine) fn resolution_text(&self, handle: DomHandle) -> Option<String> {
-        self.metadata_by_handle
-            .borrow()
-            .get(&handle)
-            .and_then(|metadata| metadata.resolution_text.clone())
     }
 
     pub(in crate::style_engine) fn set_csp_state(
@@ -123,9 +101,6 @@ impl InlineStyleMetadataStore {
         if metadata.base_url.is_none() {
             metadata.base_url = incoming.base_url;
         }
-        if metadata.resolution_text.is_none() {
-            metadata.resolution_text = incoming.resolution_text;
-        }
         if metadata.csp_state == InlineStyleCspState::Unchecked {
             metadata.csp_state = incoming.csp_state;
         }
@@ -161,8 +136,6 @@ impl InlineStyleMetadataStore {
 
 impl InlineStyleMetadata {
     fn is_empty(&self) -> bool {
-        self.base_url.is_none()
-            && self.resolution_text.is_none()
-            && self.csp_state == InlineStyleCspState::Unchecked
+        self.base_url.is_none() && self.csp_state == InlineStyleCspState::Unchecked
     }
 }

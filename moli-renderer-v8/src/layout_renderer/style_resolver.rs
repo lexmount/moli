@@ -3,13 +3,17 @@ use moli_layout::{
     ResolvedLayoutElementStyles, ResolvedLayoutPseudoStyle, ResolvedLayoutStyle,
 };
 use std::time::Instant;
+use style::{
+    matching::StyleChange, properties::ComputedValues, servo::restyle_damage::ServoRestyleDamage,
+};
 
 use crate::{
     document_runtime::DomHandle,
     dom_presentation::suppresses_noscript_box,
     native_bridge::{PageScriptHost, element::StyleObservation},
     style_engine::{
-        StyleResolutionPass, StyleViewport, StyloAnonymousBoxKind, StyloStyleEnvironment,
+        ScreenStyleCoverage, StyleResolutionPass, StyleViewport, StyloAnonymousBoxKind,
+        StyloStyleEnvironment,
     },
 };
 
@@ -17,6 +21,7 @@ pub(super) struct NativeLayoutStyleResolver<'a, 'world, 'dom> {
     runtime: &'a PageScriptHost,
     pass: &'a mut StyleResolutionPass<'world, 'dom>,
     scripting_enabled: bool,
+    screen_style_coverage: Option<&'a mut ScreenStyleCoverage>,
     profile: Option<NativeLayoutStyleResolverProfile>,
 }
 
@@ -41,15 +46,20 @@ pub(super) fn with_layout_styles<R>(
     document: DomHandle,
     viewport: LayoutViewport,
     environment_override: Option<StyloStyleEnvironment>,
+    mut screen_style_coverage: Option<&mut ScreenStyleCoverage>,
     prepare: impl FnOnce(&mut NativeLayoutStyleResolver<'_, '_, '_>) -> R,
 ) -> R {
     let mut observation =
         layout_style_read_scope(runtime, document, viewport, environment_override);
     observation.with_resolution_pass(document, |pass| {
+        if let Some(coverage) = screen_style_coverage.as_deref_mut() {
+            *coverage = pass.screen_style_coverage();
+        }
         let mut resolver = NativeLayoutStyleResolver {
             runtime,
             pass,
             scripting_enabled: runtime.document_scripting_enabled(document),
+            screen_style_coverage,
             profile: moli_trace::cpu_profile_enabled()
                 .then(NativeLayoutStyleResolverProfile::default),
         };
@@ -121,6 +131,20 @@ fn layout_style_viewport(runtime: &PageScriptHost, viewport: LayoutViewport) -> 
 }
 
 impl LayoutStyleResolver<DomHandle> for NativeLayoutStyleResolver<'_, '_, '_> {
+    fn can_reuse_element_style(&mut self, node: DomHandle, previous: &ResolvedLayoutStyle) -> bool {
+        // Pending damage schedules the check. Intermediate computed styles can
+        // accumulate damage even when the published box already matches.
+        self.pass.element_styles(node).is_some_and(|styles| {
+            let (primary, before, after) = styles.into_element_computed_values();
+            before.is_none()
+                && after.is_none()
+                && previous
+                    .stylo_computed_values()
+                    .is_some_and(|previous| same_layout_style(previous, &primary))
+                && !suppresses_noscript_box(self.runtime.dom_host(), node, self.scripting_enabled)
+        })
+    }
+
     fn element_styles(
         &mut self,
         node: DomHandle,
@@ -193,6 +217,9 @@ impl LayoutStyleResolver<DomHandle> for NativeLayoutStyleResolver<'_, '_, '_> {
         &mut self,
         node: DomHandle,
     ) -> Result<Option<ResolvedLayoutPseudoStyle>, LayoutError> {
+        if let Some(coverage) = &mut self.screen_style_coverage {
+            coverage.lazy_pseudo_owners.insert(node);
+        }
         let phase_started = self.profile.as_ref().map(|_| Instant::now());
         let computed = self.pass.marker_for_generation(node);
         if let Some(profile) = self.profile.as_mut() {
@@ -217,10 +244,24 @@ impl LayoutStyleResolver<DomHandle> for NativeLayoutStyleResolver<'_, '_, '_> {
         Ok(resolved)
     }
 
+    fn can_reuse_marker_style(
+        &self,
+        previous: &ResolvedLayoutStyle,
+        current: &ResolvedLayoutStyle,
+    ) -> bool {
+        previous
+            .stylo_computed_values()
+            .zip(current.stylo_computed_values())
+            .is_some_and(|(previous, current)| same_layout_style(previous, current))
+    }
+
     fn placeholder_style(
         &mut self,
         node: DomHandle,
     ) -> Result<Option<ResolvedLayoutPseudoStyle>, LayoutError> {
+        if let Some(coverage) = &mut self.screen_style_coverage {
+            coverage.lazy_pseudo_owners.insert(node);
+        }
         Ok(self.pass.pseudo_style(node, "placeholder").map(|computed| {
             ResolvedLayoutPseudoStyle::new(ResolvedLayoutStyle::from_stylo(computed))
         }))
@@ -270,6 +311,28 @@ impl LayoutStyleResolver<DomHandle> for NativeLayoutStyleResolver<'_, '_, '_> {
         }
         Ok(resolved)
     }
+}
+
+fn same_layout_style(previous: &ComputedValues, current: &ComputedValues) -> bool {
+    if std::ptr::eq(previous, current) {
+        return true;
+    }
+    if previous.effective_zoom != current.effective_zoom
+        || previous.writing_mode != current.writing_mode
+        || previous.flags != current.flags
+        || match (previous.visited_style(), current.visited_style()) {
+            (None, None) => false,
+            (Some(previous), Some(current)) => !std::ptr::eq(previous, current),
+            _ => true,
+        }
+    {
+        return false;
+    }
+    // A DOM move can re-resolve an unchanged style into a new allocation.
+    let difference = ServoRestyleDamage::compute_style_difference::<moli_selector::StyloElement<'_>>(
+        previous, current,
+    );
+    difference.damage.is_empty() && matches!(difference.change, StyleChange::Unchanged)
 }
 
 const fn anonymous_box_kind(display: LayoutDisplay) -> StyloAnonymousBoxKind {
@@ -353,7 +416,7 @@ mod tests {
         let owner = host.dom_host().element_handle_by_id("owner").unwrap();
         let viewport = host.layout_viewport_for_document(document);
         take_style_resolution_context_count_for_test();
-        with_layout_styles(&host, document, viewport, None, |resolver| {
+        with_layout_styles(&host, document, viewport, None, None, |resolver| {
             assert_eq!(take_style_resolution_context_count_for_test(), 0);
             let world = layout_world(resolver, root);
             let parent = parent_context(&world, owner);
@@ -401,8 +464,13 @@ mod tests {
             .document_element_handle_for_document(foreign_document)
             .unwrap();
         let foreign_viewport = host.layout_viewport_for_document(foreign_document);
-        let foreign_world =
-            with_layout_styles(&host, foreign_document, foreign_viewport, None, |foreign| {
+        let foreign_world = with_layout_styles(
+            &host,
+            foreign_document,
+            foreign_viewport,
+            None,
+            None,
+            |foreign| {
                 let world = layout_world(foreign, foreign_root);
                 let parent = parent_context(&world, foreign_root);
                 assert!(
@@ -411,12 +479,14 @@ mod tests {
                         .is_ok()
                 );
                 world
-            });
+            },
+        );
         let foreign_parent = parent_context(&foreign_world, foreign_root);
         with_layout_styles(
             &host,
             document,
             host.layout_viewport_for_document(document),
+            None,
             None,
             |resolver| {
                 let error = resolver
@@ -445,6 +515,7 @@ mod tests {
             &host,
             document,
             host.layout_viewport_for_document(document),
+            None,
             None,
             |resolver| {
                 let world = layout_world(resolver, root);
@@ -513,6 +584,7 @@ mod tests {
                 document,
                 host.layout_viewport_for_document(document),
                 None,
+                None,
                 |resolver| {
                     let world = layout_world(resolver, root);
                     let parent = parent_context(&world, owner);
@@ -553,7 +625,7 @@ mod tests {
         let input = host.dom_host().element_handle_by_id("input").unwrap();
 
         take_style_resolution_context_count_for_test();
-        let interrupted = with_layout_styles(&host, document, viewport, None, |resolver| {
+        let interrupted = with_layout_styles(&host, document, viewport, None, None, |resolver| {
             assert!(resolver.pass.element_styles(owner).is_some());
             Err::<(), _>("stop layout preparation")
         });
@@ -561,7 +633,7 @@ mod tests {
         assert_eq!(take_style_resolution_context_count_for_test(), 1);
 
         for contexts in [1, 0] {
-            with_layout_styles(&host, document, viewport, None, |resolver| {
+            with_layout_styles(&host, document, viewport, None, None, |resolver| {
                 for (target, expected) in [(shallow, "47px"), (deep, "31px"), (shallow, "47px")] {
                     let style = resolver.pass.element_styles(target).unwrap();
                     assert_eq!(style.property_value("font-size").as_deref(), Some(expected));

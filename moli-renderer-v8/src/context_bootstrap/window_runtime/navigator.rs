@@ -1877,6 +1877,14 @@ fn storage_bucket_cache_match_all_callback<'s>(
                     return;
                 }
             }
+            if responses.set_integrity_level(scope, v8::IntegrityLevel::Frozen) != Some(true) {
+                reject_type_error(
+                    scope,
+                    resolver,
+                    "Cache.matchAll failed to freeze its result.",
+                );
+                return;
+            }
             let _ = resolver.resolve(scope, responses.into());
         }
         Some(None) => reject_storage_bucket_unknown_error(scope, resolver, "cache.matchAll"),
@@ -1933,6 +1941,10 @@ fn storage_bucket_cache_keys_callback<'s>(
                 reject_type_error(scope, resolver, "Cache.keys failed to build a Request.");
                 return;
             };
+            if requests.set_integrity_level(scope, v8::IntegrityLevel::Frozen) != Some(true) {
+                reject_type_error(scope, resolver, "Cache.keys failed to freeze its result.");
+                return;
+            }
             let _ = resolver.resolve(scope, requests.into());
         }
         Some(None) => reject_storage_bucket_unknown_error(scope, resolver, "cache.keys"),

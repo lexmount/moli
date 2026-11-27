@@ -99,18 +99,17 @@ impl TableIntrinsicInlineSizes {
     }
 }
 
-pub(crate) fn prepare_tables<N>(world: &mut LayoutWorld<N>, mut tables: Vec<LayoutBoxId>)
+pub(crate) fn prepare_tables<N>(world: &mut LayoutWorld<N>, tables: &[LayoutBoxId])
 where
     N: Copy + Debug + Eq + Hash,
 {
-    tables.sort_unstable_by_key(|id| id.index());
-    for root in tables {
-        let table = &world.boxes[root.index()];
+    for &root in tables {
+        let table = &world.boxes[root];
         let collapsed = table.style.table_border_is_collapsed();
         let fixed = table.style.uses_fixed_table_layout();
         if (!collapsed && !fixed)
             || !table.children.iter().any(|child| {
-                let kind = world.boxes[child.index()].kind;
+                let kind = world.boxes[child].kind;
                 kind.is_internal_table_box() || kind == LayoutBoxKind::TableCaption
             })
         {
@@ -147,7 +146,7 @@ fn apply_parent_facing_table_inline_constraints<N>(
 ) where
     N: Copy + Debug + Eq + Hash,
 {
-    let style = &world.boxes[root.index()].style;
+    let style = &world.boxes[root].style;
     let collapsed = style.table_border_is_collapsed();
     let spacing = table_spacing(style, collapsed);
     let column_count = structure.column_count;
@@ -156,7 +155,7 @@ fn apply_parent_facing_table_inline_constraints<N>(
     let mut cell_spans = Vec::new();
     for cell in structure.first_row_cells() {
         let (constraint, _) = authored_table_cell_inline_constraint(
-            &world.boxes[cell.id.index()].style.taffy,
+            &world.boxes[cell.id].style.taffy,
             style.writing_mode(),
             TableLayoutMode::Fixed,
         );
@@ -170,7 +169,7 @@ fn apply_parent_facing_table_inline_constraints<N>(
         TableLayoutMode::Fixed,
     );
 
-    let style = &mut world.boxes[root.index()].style.taffy;
+    let style = &mut world.boxes[root].style.taffy;
     let padding = style
         .padding
         .resolve_or_zero(None, resolve_stylo_calc_value);
@@ -211,12 +210,10 @@ where
     let mut context = build_table_context(world, root, structure);
     context.collect_cell_inline_constraints(world);
     let mut grid_inputs = context.resolve_column_tracks(inputs);
-    let allocated_wrapper = world.boxes[root.index()]
-        .layout_parent
-        .is_some_and(|parent| {
-            let display = world.boxes[parent.index()].style.display();
-            display.is_flex_container() || display.is_grid_container()
-        });
+    let allocated_wrapper = world.boxes[root].layout_parent.is_some_and(|parent| {
+        let display = world.boxes[parent].style.display();
+        display.is_flex_container() || display.is_grid_container()
+    });
     if allocated_wrapper
         && !context.structure.captions.is_empty()
         && context.writing_mode.is_horizontal()
@@ -233,7 +230,7 @@ where
                 context.writing_mode,
                 RunMode::ComputeSize,
             );
-            let style = &world.boxes[root.index()].style.taffy;
+            let style = &world.boxes[root].style.taffy;
             let basis = space.margin_padding_percentage_basis();
             let decorations = style
                 .padding
@@ -262,8 +259,8 @@ where
             // before it has measured the complete wrapper.
             let mut grid_minimum =
                 resolve(context.writing_mode.to_logical(style.size).block_size).unwrap_or(0.0);
-            if let Some(parent) = world.boxes[root.index()].layout_parent {
-                let parent_style = &world.boxes[parent.index()].style;
+            if let Some(parent) = world.boxes[root].layout_parent {
+                let parent_style = &world.boxes[parent].style;
                 let main_axis = if matches!(
                     parent_style.taffy.flex_direction,
                     taffy::FlexDirection::Row | taffy::FlexDirection::RowReverse
@@ -300,20 +297,20 @@ where
     }
 
     {
-        let caption_parent_writing_mode = world.boxes[root.index()].style.writing_mode();
+        let caption_parent_writing_mode = world.boxes[root].style.writing_mode();
         let top_captions = context
             .structure
             .captions
             .iter()
             .copied()
-            .filter(|caption| !world.boxes[caption.index()].style.caption_is_bottom())
+            .filter(|caption| !world.boxes[caption].style.caption_is_bottom())
             .collect::<Vec<_>>();
         let bottom_captions = context
             .structure
             .captions
             .iter()
             .copied()
-            .filter(|caption| world.boxes[caption.index()].style.caption_is_bottom())
+            .filter(|caption| world.boxes[caption].style.caption_is_bottom())
             .collect::<Vec<_>>();
         let top_height = layout_captions(
             world,
@@ -362,7 +359,7 @@ fn build_table_context<N>(
 where
     N: Copy + Debug + Eq + Hash,
 {
-    let root_style = &world.boxes[root.index()].style;
+    let root_style = &world.boxes[root].style;
     let collapsed = root_style.table_border_is_collapsed();
     let spacing = table_spacing(root_style, collapsed);
     let writing_mode = root_style.writing_mode();
@@ -382,7 +379,7 @@ where
         .sections
         .iter()
         .map(|section| {
-            let layout_box = &world.boxes[section.id.index()];
+            let layout_box = &world.boxes[section.id];
             let dimension = writing_mode
                 .to_logical(layout_box.style.taffy.size)
                 .block_size;
@@ -408,7 +405,7 @@ where
         .cells
         .iter()
         .map(|cell| {
-            let authored = &world.boxes[cell.id.index()].style;
+            let authored = &world.boxes[cell.id].style;
             let mut style = authored.taffy.clone();
             style.margin = Rect::ZERO.map(style_helpers::length);
             if style.align_content.keyword() == taffy::AlignContentKeyword::Normal {
@@ -508,7 +505,7 @@ where
 {
     let mut tracks = vec![TableColumnConstraint::auto(); structure.column_count];
     for column in &structure.columns {
-        let authored = world.boxes[column.id.index()].style.taffy.size.width;
+        let authored = world.boxes[column.id].style.taffy.size.width;
         tracks[column.tracks()].fill(dimension_track(authored));
     }
     tracks
@@ -526,7 +523,7 @@ impl TableContext {
         N: Copy + Debug + Eq + Hash,
     {
         for &caption in &self.structure.captions {
-            let style = &world.boxes[caption.index()].style.taffy;
+            let style = &world.boxes[caption].style.taffy;
             let margin = style.margin.resolve_or_zero(None, resolve_stylo_calc_value);
             let output = world.compute_child_size(
                 caption.to_taffy(),
@@ -819,7 +816,7 @@ fn table_cell_inline_constraint<N>(
 where
     N: Copy + Debug + Eq + Hash,
 {
-    let style = &world.boxes[cell.index()].style.taffy;
+    let style = &world.boxes[cell].style.taffy;
     let (mut constraint, inline_insets) =
         authored_table_cell_inline_constraint(style, table_writing_mode, mode);
     let preferred = constraint
@@ -969,7 +966,7 @@ where
 {
     let start = y;
     for (order, caption) in captions.iter().copied().enumerate() {
-        let style = world.boxes[caption.index()].style.taffy.clone();
+        let style = world.boxes[caption].style.taffy.clone();
         let margin = style
             .margin
             .resolve_or_zero(Some(width), resolve_stylo_calc_value);
@@ -1023,7 +1020,7 @@ where
         return;
     }
     for cell in cells {
-        world.boxes[cell.id.index()].unrounded_layout.location.y += offset;
+        world.boxes[cell.id].unrounded_layout.location.y += offset;
     }
 }
 
@@ -1143,7 +1140,7 @@ fn apply_structural_layout<N>(
     {
         let group = section.id;
         if matches!(
-            world.boxes[group.index()].kind,
+            world.boxes[group].kind,
             LayoutBoxKind::TableRow | LayoutBoxKind::AnonymousTableRow
         ) {
             continue;
@@ -1212,7 +1209,7 @@ fn set_table_part_layout<N>(
     // are ignored in the separated model and represented by the table-owned
     // conflict grid in the collapsed model; keep the authored style intact
     // while publishing zero used decoration edges to generic paint.
-    world.boxes[id.index()].unrounded_layout = Layout {
+    world.boxes[id].unrounded_layout = Layout {
         order: 0,
         location: Point { x, y },
         size: Size { width, height },
@@ -1234,7 +1231,7 @@ fn set_box_layout<N>(
 ) where
     N: Copy + Debug + Eq + Hash,
 {
-    let style = &world.boxes[id.index()].style.taffy;
+    let style = &world.boxes[id].style.taffy;
     let padding = style
         .padding
         .resolve_or_zero(parent_width, resolve_stylo_calc_value);
@@ -1244,7 +1241,7 @@ fn set_box_layout<N>(
     let margin = style
         .margin
         .resolve_or_zero(parent_width, resolve_stylo_calc_value);
-    world.boxes[id.index()].unrounded_layout = Layout {
+    world.boxes[id].unrounded_layout = Layout {
         order: u32::try_from(order).unwrap_or(u32::MAX),
         location,
         size: output.size,
@@ -1313,11 +1310,11 @@ where
         let cell = self.context.structure.cells[cell_index].id;
         self.world.cache_clear(cell.to_taffy());
         let authored_style = std::mem::replace(
-            &mut self.world.boxes[cell.index()].style.taffy,
+            &mut self.world.boxes[cell].style.taffy,
             self.context.cell_layouts[cell_index].style.clone(),
         );
         let result = operation(self.world, cell);
-        self.world.boxes[cell.index()].style.taffy = authored_style;
+        self.world.boxes[cell].style.taffy = authored_style;
         self.world.cache_clear(cell.to_taffy());
         result
     }
@@ -1367,7 +1364,7 @@ where
 
     fn set_unrounded_layout(&mut self, node_id: NodeId, layout: &Layout) {
         let cell = self.context.structure.cells[usize::from(node_id)].id;
-        self.world.boxes[cell.index()].unrounded_layout = *layout;
+        self.world.boxes[cell].unrounded_layout = *layout;
     }
 
     fn compute_child_layout(&mut self, node_id: NodeId, inputs: LayoutInput) -> LayoutOutput {
@@ -1471,9 +1468,9 @@ mod tests {
             LayoutDisplay::TableRowGroup,
             Some(80.0),
         ));
-        world.boxes[root.index()].children = vec![caption, group];
-        world.boxes[caption.index()].parent = Some(root);
-        world.boxes[group.index()].parent = Some(root);
+        world.boxes[root].children = vec![caption, group];
+        world.boxes[caption].parent = Some(root);
+        world.boxes[group].parent = Some(root);
         let mut cells = Vec::new();
         for height in [10.0, 30.0] {
             let row = world.allocate(make_box(
@@ -1486,16 +1483,18 @@ mod tests {
                 LayoutDisplay::TableCell,
                 Some(height),
             ));
-            world.boxes[group.index()].children.push(row);
-            world.boxes[row.index()].children.push(cell);
-            world.boxes[row.index()].parent = Some(group);
-            world.boxes[cell.index()].parent = Some(row);
+            world.boxes[group].children.push(row);
+            world.boxes[row].children.push(cell);
+            world.boxes[row].parent = Some(group);
+            world.boxes[cell].parent = Some(row);
             cells.push(cell);
         }
         let mut prepared = crate::taffy_tree::prepare_world_layout(
             &mut world,
             crate::PaintViewport::new(800, 600, 1.0),
-        );
+            false,
+        )
+        .unwrap();
         let inputs = LayoutInput {
             known_dimensions: Size {
                 width: Some(200.0),
@@ -1531,12 +1530,12 @@ mod tests {
             }
         );
         for id in cells.iter().chain([&caption, &group]) {
-            assert_eq!(world.boxes[id.index()].unrounded_layout.size, Size::ZERO);
+            assert_eq!(world.boxes[id].unrounded_layout.size, Size::ZERO);
         }
         assert_eq!(cold.baselines.first, Some(40.0));
         assert_eq!(cold, world.compute_child_layout(root.to_taffy(), inputs));
         assert_eq!(
-            world.boxes[root.index()]
+            world.boxes[root]
                 .table_measure_cache
                 .as_ref()
                 .unwrap()
@@ -1553,26 +1552,17 @@ mod tests {
         let warm = world.compute_child_layout(root.to_taffy(), inputs);
         assert_eq!(cold.size, final_layout.size);
         assert_eq!(cold, warm);
-        assert_eq!(
-            world.boxes[group.index()].unrounded_layout.size.height,
-            80.0
-        );
-        assert_eq!(
-            world.boxes[cells[0].index()].unrounded_layout.size.height,
-            20.0
-        );
-        assert_eq!(
-            world.boxes[cells[1].index()].unrounded_layout.size.height,
-            60.0
-        );
-        world.boxes[group.index()].style.taffy.size.height = Dimension::length(120.0);
-        prepared.invalidate_scrollbar_feedback(&mut world, &[group], false);
+        assert_eq!(world.boxes[group].unrounded_layout.size.height, 80.0);
+        assert_eq!(world.boxes[cells[0]].unrounded_layout.size.height, 20.0);
+        assert_eq!(world.boxes[cells[1]].unrounded_layout.size.height, 60.0);
+        world.boxes[group].style.taffy.size.height = Dimension::length(120.0);
+        prepared.invalidate_cached_layout_paths(&mut world, &[group], false);
         let changed = world.compute_child_layout(root.to_taffy(), inputs);
         assert_eq!(changed.size.height, 140.0);
         assert_eq!(changed.baselines.first, Some(50.0));
         assert!(Arc::ptr_eq(&structure, &world.table_structures[&root]));
         assert_eq!(
-            world.boxes[root.index()]
+            world.boxes[root]
                 .table_measure_cache
                 .as_ref()
                 .unwrap()
@@ -1650,15 +1640,17 @@ mod tests {
                     },
                 ));
                 for (parent, child) in [(table, row), (row, cell), (cell, child)] {
-                    world.boxes[parent.index()].children.push(child);
-                    world.boxes[child.index()].parent = Some(parent);
+                    world.boxes[parent].children.push(child);
+                    world.boxes[child].parent = Some(parent);
                 }
                 table = child;
             }
             crate::taffy_tree::prepare_world_layout(
                 &mut world,
                 crate::PaintViewport::new(800, 600, 1.0),
-            );
+                false,
+            )
+            .unwrap();
             let inputs = LayoutInput {
                 run_mode: RunMode::ComputeSize,
                 known_dimensions: Size {
@@ -1667,12 +1659,12 @@ mod tests {
                 },
                 ..LayoutInput::HIDDEN
             };
-            let before: Vec<_> = world.boxes.iter().map(|b| b.unrounded_layout).collect();
+            let before: Vec<_> = world.boxes.ordered().map(|b| b.unrounded_layout).collect();
             let cold = world.compute_child_layout(root.to_taffy(), inputs);
             assert_eq!(
                 world
                     .boxes
-                    .iter()
+                    .ordered()
                     .map(|b| b.unrounded_layout)
                     .collect::<Vec<_>>(),
                 before,
@@ -1689,7 +1681,7 @@ mod tests {
             let computations = |world: &LayoutWorld<usize>| {
                 world
                     .boxes
-                    .iter()
+                    .ordered()
                     .filter_map(|b| b.table_measure_cache.as_ref())
                     .map(|c| c.computations)
                     .sum::<usize>()
@@ -1698,7 +1690,7 @@ mod tests {
             assert_eq!(
                 world
                     .boxes
-                    .iter()
+                    .ordered()
                     .filter(|b| b.table_measure_cache.is_some())
                     .count(),
                 depth

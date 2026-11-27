@@ -1516,7 +1516,7 @@ fn overflow_overlay_uses_pdb_supplemental_backing_across_cssom_surfaces() {
     assert_eq!(result, "PASS");
 }
 #[test]
-fn css_style_set_property_reappends_existing_declaration_order() {
+fn css_style_set_property_preserves_order_except_for_overlapping_logical_properties() {
     let mut vm = new_storage_test_vm("https://css-style-set-property-order.test/");
 
     let result = vm
@@ -1556,7 +1556,7 @@ fn css_style_set_property_reappends_existing_declaration_order() {
 
     assert_eq!(
         result,
-        "padding-right,padding-bottom,padding-left,padding-block-start,padding-block-end,padding-inline-start,padding-inline-end,padding-top|padding-block-start,padding-block-end,padding-inline-start,padding-inline-end,padding-top,padding-right,padding-bottom,padding-left|opacity,color"
+        "padding-right,padding-bottom,padding-left,padding-block-start,padding-block-end,padding-inline-start,padding-inline-end,padding-top|padding-block-start,padding-block-end,padding-inline-start,padding-inline-end,padding-top,padding-right,padding-bottom,padding-left|color,opacity"
     );
 }
 #[test]

@@ -1,9 +1,9 @@
-//! One-shot CSS box construction, numeric layout, and owned paint projection.
+//! CSS box construction, numeric layout, and owned paint projection.
 //!
 //! The crate knows Stylo and Taffy but never knows Moli's live DOM or V8
 //! runtime. Renderer-owned adapters lend a canonical source view and resolve
-//! styles; all source/style borrows and per-pass caches are gone before the
-//! returned [`FrozenLayoutTree`] or [`PaintSnapshot`] crosses into a consumer.
+//! styles. A renderer may keep an owned screen working tree between passes.
+//! Geometry queries and paint snapshots use separate published output.
 
 /// Number of fixed layout subpixels in one CSS pixel, matching Blink's
 /// `LayoutUnit` precision.
@@ -73,13 +73,13 @@ pub use normalize_source::{
     NormalizedLayoutSourceNode, NormalizedLayoutSourceTree, normalize_layout_source,
 };
 pub use pass::{
-    AutoScrollbars, EmbeddedFrameRenderer, EmbeddedFrameSnapshot, LayoutFrameCoverage,
-    LayoutPassRequest, MeasuredLayoutPass, PreparedLayoutPass, ScreenshotLayoutRequest,
-    build_layout_pass, build_layout_pass_with_embedded_frames, build_screenshot_snapshot,
-    finish_measured_layout_pass, finish_prepared_layout_pass, measure_prepared_layout_pass,
-    prepare_layout_pass,
+    AutoScrollbars, EmbeddedFramePaintRequest, EmbeddedFrameRenderer, EmbeddedFrameSnapshot,
+    LayoutFrameCoverage, LayoutPassRequest, LayoutSourceChange, MeasuredLayoutPass,
+    PreparedLayoutPass, RetainedLayoutWorld, ScreenshotLayoutRequest, build_layout_pass,
+    build_layout_pass_with_embedded_frames, build_screenshot_snapshot, finish_measured_layout_pass,
+    finish_prepared_layout_pass, measure_prepared_layout_pass, prepare_layout_pass,
+    prepare_layout_pass_reusing,
 };
-pub use projection::ScreenPaintLayout;
 pub use scrollbar::{
     LayoutControlSurfaceHit, LayoutScrollbarAxis, LayoutScrollbarColors, LayoutScrollbarCornerHit,
     LayoutScrollbarGeometry, LayoutScrollbarGutter, LayoutScrollbarHit, LayoutScrollbarPart,
@@ -93,19 +93,20 @@ pub use snapshot::{
     PaintGradientColorSpace, PaintGradientExtend, PaintGradientHueDirection,
     PaintGradientInterpolation, PaintGradientStop, PaintImage, PaintImageId, PaintImageResource,
     PaintImageSampling, PaintLineCap, PaintLineJoin, PaintLinearGradient, PaintLink,
-    PaintLinkTarget, PaintPath, PaintPathElement, PaintPoint, PaintRadialGradient, PaintRect,
-    PaintShape, PaintSize, PaintSnapshot, PaintStroke, PaintSvgImage, PaintSvgImageId,
+    PaintLinkTarget, PaintPath, PaintPathElement, PaintPixelGrid, PaintPoint, PaintRadialGradient,
+    PaintRect, PaintShape, PaintSize, PaintSnapshot, PaintStroke, PaintSvgImage, PaintSvgImageId,
     PaintSvgImageResource, PaintTextDecoration, PaintTextDecorationStyle, PaintTextSemantics,
-    PaintTextShadow, PaintTextStroke, PaintTransform2D, PaintViewport, pixel_snap_paint_axis,
-    pixel_snap_paint_axis_allowing_zero, pixel_snap_paint_rect,
+    PaintTextShadow, PaintTextStroke, PaintTileAxis, PaintTileGrid, PaintTileSource, PaintTiles,
+    PaintTransform2D, PaintViewport,
 };
 pub use source::{
-    ChildBoxPolicy, LayoutElementCategory, LayoutElementMetadata, LayoutElementSemantics,
+    ChildBoxPolicy, InlineSvgConsumers, InlineSvgImageLookup, InlineSvgInput, InlineSvgInputLookup,
+    LayoutCssImageState, LayoutElementCategory, LayoutElementMetadata, LayoutElementSemantics,
     LayoutFormControlData, LayoutFormControlKind, LayoutHyperlink, LayoutImageResource,
     LayoutInputControlKind, LayoutListData, LayoutListRole, LayoutNamespace, LayoutPseudo,
-    LayoutReplacedKind, LayoutSource, LayoutSourceKind, LayoutStyleResolver, LayoutSvgContent,
-    LayoutTableData, LayoutTableRole, LayoutTextSelection, ReplacedMetrics,
-    ResolvedLayoutElementStyles, ResolvedLayoutPseudoStyle, html_display_contents_is_none,
+    LayoutReplacedKind, LayoutSource, LayoutSourceKind, LayoutStyleResolver, LayoutTableData,
+    LayoutTableRole, LayoutTextSelection, ReplacedMetrics, ResolvedLayoutElementStyles,
+    ResolvedLayoutPseudoStyle, html_display_contents_is_none,
 };
 pub use style::{
     LayoutDisplay, LayoutInlineAlignment, LayoutListMarkerPosition, LayoutListMarkerType,

@@ -1,0 +1,30 @@
+[package]
+name = "molio"
+version = "0.1.0"
+edition = "2024"
+license.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+anyhow = "1.0"
+dirs = "5.0.1"
+gpui = { package = "gpui-ce", git = "https://github.com/lexmount/gpui-ce", rev = "1d433ddc675f9946ca91e0c705e4bc9b0360a78c" }
+gpui_platform = { package = "gpui_ce_platform", git = "https://github.com/lexmount/gpui-ce", rev = "1d433ddc675f9946ca91e0c705e4bc9b0360a78c", features = ["wayland", "x11"] }
+image = { version = "0.25.10", default-features = false, features = ["bmp", "gif", "ico", "jpeg", "png", "webp"] }
+moli-core = { path = "../../moli-core", features = ["molio", "media-ext"] }
+moli-fetch = { path = "../../moli-fetch" }
+moli-image = { path = "../../moli-image" }
+moli-web-mime = { path = "../../moli-web-mime" }
+resvg = { version = "=0.48.1", default-features = false }
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.145"
+tempfile = "3.27.0"
+tokio = { version = "1.53.1", features = ["fs", "io-util", "macros", "net", "rt", "sync", "time"] }
+unicode-segmentation = "1.12"
+url = "2.5.7"
+
+[dev-dependencies]
+gpui = { package = "gpui-ce", git = "https://github.com/lexmount/gpui-ce", rev = "1d433ddc675f9946ca91e0c705e4bc9b0360a78c", features = ["test-support"] }

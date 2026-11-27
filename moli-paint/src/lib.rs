@@ -19,3 +19,5 @@ pub use raster::{
     MAX_TRANSIENT_RASTER_BYTES, RasterBufferLayout, RasterPixelFormat, raster_buffer_layout,
     raster_snapshot, raster_snapshot_into,
 };
+#[cfg(feature = "molio")]
+pub use raster::{raster_damage_rows, raster_snapshot_rows_into};

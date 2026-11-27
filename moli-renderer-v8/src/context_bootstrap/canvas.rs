@@ -82,6 +82,7 @@ struct HtmlCanvasElementPrototypeAccessorsDeclaration {
 }
 
 mod backing_store;
+pub(crate) use backing_store::CanvasPixels;
 mod color;
 mod constructors;
 mod context2d;
@@ -100,7 +101,7 @@ use moli_webapi::webgl;
 pub(crate) use transform::install_canvas_transform_bindings;
 
 pub(crate) use backing_store::{
-    attach_canvas_like_context_object, canvas_like_to_data_url,
+    attach_canvas_like_context_object, canvas_like_to_blob, canvas_like_to_data_url,
     reset_html_canvas_backing_store_for_dimension_assignment,
 };
 pub(crate) use constructors::{
@@ -133,6 +134,7 @@ pub(crate) use context2d::{
     canvas_context_set_transform_callback, canvas_context_stroke_callback,
     canvas_context_stroke_rect_callback, canvas_context_stroke_style_getter_callback,
     canvas_context_stroke_style_setter_callback, canvas_context_stroke_text_callback,
+    canvas_context_text_baseline_getter_callback, canvas_context_text_baseline_setter_callback,
     canvas_context_transform_callback, canvas_context_translate_callback, canvas_path_arc_callback,
     canvas_path_arc_to_callback, canvas_path_bezier_curve_to_callback,
     canvas_path_close_path_callback, canvas_path_ellipse_callback, canvas_path_line_to_callback,

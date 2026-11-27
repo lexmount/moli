@@ -19,7 +19,7 @@ pub(super) fn order_vm() -> StandaloneScriptVmHarness {
         "https://font-selection-order.test/",
         "<!doctype html><html><head></head><body><span id='probe' style='display:inline-block;font:40px OrderFace'>AAAA</span><iframe id='frame'></iframe></body></html>",
     );
-    vm.set_layout_policy(moli_page_types::LayoutPolicy::OnDemand);
+    vm.set_layout_policy(moli_page_types::LayoutPolicy::Lazy);
     vm
 }
 
@@ -40,7 +40,7 @@ async fn detached_css_faces_can_be_registered_manually_before_or_after_native_cl
                     "<!doctype html><span id=probe style='display:inline-block;font:40px OrderFace'>AAAA</span>",
                     &loader,
                 );
-            vm.set_layout_policy(moli_page_types::LayoutPolicy::OnDemand);
+            vm.set_layout_policy(moli_page_types::LayoutPolicy::Lazy);
             vm.eval(&format!(r#"
                 globalThis.style=document.createElement('style');
                 style.textContent='@font-face{{font-family:OrderFace;src:url(data:font/ttf;base64,{wide})}}';document.head.append(style);
@@ -127,7 +127,7 @@ async fn font_face_css_selection_keeps_declaration_order_without_js_projection()
             "<!doctype html><html><head></head><body><span id='probe' style='display:inline-block;font:40px OrderFace'>AAAA</span></body></html>",
             &loader,
         );
-        vm.set_layout_policy(moli_page_types::LayoutPolicy::OnDemand);
+        vm.set_layout_policy(moli_page_types::LayoutPolicy::Lazy);
         take_owner_font_face_projection_count_for_test();
         vm.eval(&format!(r#"
             Object.defineProperty(document, 'fonts', {{get() {{throw new Error('unexpected document.fonts access')}}}});
@@ -157,7 +157,7 @@ async fn font_face_css_reordering_preserves_last_duplicate_and_manual_priority()
         "<!doctype html><html><head></head><body><span id='probe' style='display:inline-block;font:40px OrderFace'>AAAA</span></body></html>",
         &loader,
     );
-    vm.set_layout_policy(moli_page_types::LayoutPolicy::OnDemand);
+    vm.set_layout_policy(moli_page_types::LayoutPolicy::Lazy);
     let (narrow, wide) = order_font_data();
     take_owner_font_face_projection_count_for_test();
     vm.eval(&format!(r#"
@@ -227,7 +227,7 @@ async fn font_face_css_order_is_published_before_child_font_admission() {
         "<!doctype html><iframe id='frame'></iframe>",
         &loader,
     );
-    vm.set_layout_policy(moli_page_types::LayoutPolicy::OnDemand);
+    vm.set_layout_policy(moli_page_types::LayoutPolicy::Lazy);
     let (narrow, wide) = order_font_data();
     take_owner_font_face_projection_count_for_test();
     for (first, second, expected) in [(&narrow, &wide, "160"), (&wide, &narrow, "80")] {
@@ -434,7 +434,7 @@ async fn local_only_css_font_is_admitted_without_js_projection() {
         "<!doctype html><html><head></head><body>local font</body></html>",
         &loader,
     );
-    vm.set_layout_policy(moli_page_types::LayoutPolicy::OnDemand);
+    vm.set_layout_policy(moli_page_types::LayoutPolicy::Lazy);
     take_owner_font_face_projection_count_for_test();
     vm.eval(r#"
         Object.defineProperty(document, 'fonts', {get() {throw new Error('unexpected document.fonts access')}});

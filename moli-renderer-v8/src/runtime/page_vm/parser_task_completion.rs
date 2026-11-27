@@ -136,7 +136,7 @@ impl PageVm {
             // this task-end boundary.
             self.vm_mut().start_pending_main_parser_deferred_scripts()?;
             self.vm_mut()
-                .prime_document_lifecycle_processing_and_record_stylesheet_network_results();
+                .prime_document_lifecycle_and_publish_stylesheets();
         }
         Ok(())
     }

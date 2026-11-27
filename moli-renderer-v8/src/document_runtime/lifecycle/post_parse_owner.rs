@@ -63,13 +63,18 @@ impl DocumentRuntime {
         {
             return false;
         }
-        let blocking_signatures = self
-            .parser_module_document_scripts()
+        !self.parser_deferred_script_is_blocked_by_stylesheets(owner)
+    }
+
+    pub(crate) fn parser_deferred_script_is_blocked_by_stylesheets(
+        &self,
+        owner: crate::module_script_continuation::MainParserDocumentOwner,
+    ) -> bool {
+        self.parser_module_document_scripts()
             .next_after_parsing_blocking_signatures(owner)
-            .cloned();
-        !blocking_signatures.is_some_and(|signatures| {
-            self.has_pending_parser_script_blocking_stylesheet_signatures(signatures.iter())
-        })
+            .is_some_and(|signatures| {
+                self.has_pending_parser_script_blocking_stylesheet_signatures(signatures)
+            })
     }
 
     pub(super) fn ready_main_parser_deferred_script_action(

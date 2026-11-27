@@ -148,7 +148,7 @@ impl DomHost {
             &previous_qualified_name,
             &current_qualified_name,
         );
-        self.record_mutation(MutationScope::QueryState);
+        self.record_mutation(MutationScope::QueryState, [handle]);
         true
     }
 
@@ -167,7 +167,7 @@ impl DomHost {
             element.set_custom_element_is_name(is_name)
         };
         if did_change {
-            self.record_mutation(MutationScope::QueryState);
+            self.record_mutation(MutationScope::QueryState, [handle]);
         }
         did_change
     }
@@ -187,7 +187,7 @@ impl DomHost {
             element.set_custom_element_state(state)
         };
         if did_change {
-            self.record_mutation(MutationScope::QueryState);
+            self.record_mutation(MutationScope::QueryState, [handle]);
         }
         did_change
     }
@@ -216,7 +216,7 @@ impl DomHost {
             element.insert_custom_state(state)
         };
         if did_change {
-            self.record_mutation(MutationScope::QueryState);
+            self.record_mutation(MutationScope::QueryState, [handle]);
         }
         did_change
     }
@@ -232,7 +232,7 @@ impl DomHost {
             element.remove_custom_state(state)
         };
         if did_change {
-            self.record_mutation(MutationScope::QueryState);
+            self.record_mutation(MutationScope::QueryState, [handle]);
         }
         did_change
     }
@@ -248,7 +248,7 @@ impl DomHost {
             element.clear_custom_states()
         };
         if did_change {
-            self.record_mutation(MutationScope::QueryState);
+            self.record_mutation(MutationScope::QueryState, [handle]);
         }
         did_change
     }
@@ -269,7 +269,7 @@ impl DomHost {
             did_change
         };
         if did_change {
-            self.record_mutation(MutationScope::LocalState);
+            self.record_mutation(MutationScope::LocalState, [handle]);
         }
         did_change
     }
@@ -295,7 +295,7 @@ impl DomHost {
             did_change
         };
         if did_change {
-            self.record_mutation(MutationScope::LocalState);
+            self.record_mutation(MutationScope::LocalState, [handle]);
         }
         did_change
     }
@@ -316,7 +316,7 @@ impl DomHost {
             did_change
         };
         if did_change {
-            self.record_mutation(MutationScope::LocalState);
+            self.record_mutation(MutationScope::LocalState, [handle]);
         }
         did_change
     }
@@ -332,7 +332,7 @@ impl DomHost {
             element.set_autofilled(autofilled)
         };
         if did_change {
-            self.record_mutation(MutationScope::QueryState);
+            self.record_mutation(MutationScope::QueryState, [handle]);
         }
         did_change
     }
@@ -348,7 +348,7 @@ impl DomHost {
             element.set_selected_files(files)
         };
         if did_change {
-            self.record_mutation(MutationScope::LocalState);
+            self.record_mutation(MutationScope::LocalState, [handle]);
         }
         did_change
     }
@@ -364,7 +364,7 @@ impl DomHost {
             element.set_selection_range(start, end)
         };
         if did_change {
-            self.record_mutation(MutationScope::LocalState);
+            self.record_mutation(MutationScope::LocalState, [handle]);
         }
         did_change
     }
@@ -386,7 +386,7 @@ impl DomHost {
             element.set_selection_range_with_direction(start, end, direction)
         };
         if did_change {
-            self.record_mutation(MutationScope::LocalState);
+            self.record_mutation(MutationScope::LocalState, [handle]);
         }
         did_change
     }
@@ -402,7 +402,7 @@ impl DomHost {
             element.set_selection_start(start)
         };
         if did_change {
-            self.record_mutation(MutationScope::LocalState);
+            self.record_mutation(MutationScope::LocalState, [handle]);
         }
         did_change
     }
@@ -418,7 +418,7 @@ impl DomHost {
             element.set_selection_end(end)
         };
         if did_change {
-            self.record_mutation(MutationScope::LocalState);
+            self.record_mutation(MutationScope::LocalState, [handle]);
         }
         did_change
     }
@@ -434,7 +434,7 @@ impl DomHost {
             element.set_selection_direction(direction)
         };
         if did_change {
-            self.record_mutation(MutationScope::LocalState);
+            self.record_mutation(MutationScope::LocalState, [handle]);
         }
         did_change
     }
@@ -450,7 +450,7 @@ impl DomHost {
             element.set_custom_validation_message(message)
         };
         if did_change {
-            self.record_mutation(MutationScope::LocalState);
+            self.record_mutation(MutationScope::LocalState, [handle]);
         }
         did_change
     }
@@ -466,7 +466,7 @@ impl DomHost {
             element.set_popover_open(open)
         };
         if did_change {
-            self.record_mutation(MutationScope::LocalState);
+            self.record_mutation(MutationScope::LocalState, [handle]);
         }
         did_change
     }
@@ -477,7 +477,7 @@ impl DomHost {
             .and_then(|node| node.data_mut().as_element_mut())
             .is_some_and(|element| element.set_web_mcp_activity(form, submit));
         if changed {
-            self.record_mutation(MutationScope::QueryState);
+            self.record_mutation(MutationScope::QueryState, [handle]);
         }
         changed
     }
@@ -485,7 +485,7 @@ impl DomHost {
     pub fn set_dialog_modal(&mut self, handle: DomHandle, modal: bool) -> bool {
         let did_change = self.dom.set_dialog_modal(handle, modal);
         if did_change {
-            self.record_mutation(MutationScope::LocalState);
+            self.record_mutation(MutationScope::LocalState, [handle]);
         }
         did_change
     }
@@ -501,7 +501,7 @@ impl DomHost {
             element.set_dialog_return_value(value)
         };
         if did_change {
-            self.record_mutation(MutationScope::LocalState);
+            self.record_mutation(MutationScope::LocalState, [handle]);
         }
         did_change
     }
@@ -517,7 +517,7 @@ impl DomHost {
             element.set_media_paused(paused)
         };
         if did_change {
-            self.record_mutation(MutationScope::LocalState);
+            self.record_mutation(MutationScope::LocalState, [handle]);
         }
         did_change
     }
@@ -533,7 +533,7 @@ impl DomHost {
             element.set_media_volume(volume)
         };
         if did_change {
-            self.record_mutation(MutationScope::LocalState);
+            self.record_mutation(MutationScope::LocalState, [handle]);
         }
         did_change
     }
@@ -549,7 +549,7 @@ impl DomHost {
             element.set_media_muted(muted)
         };
         if did_change {
-            self.record_mutation(MutationScope::LocalState);
+            self.record_mutation(MutationScope::LocalState, [handle]);
         }
         did_change
     }
@@ -565,7 +565,7 @@ impl DomHost {
             element.set_media_seeking(seeking)
         };
         if did_change {
-            self.record_mutation(MutationScope::LocalState);
+            self.record_mutation(MutationScope::LocalState, [handle]);
         }
         did_change
     }
@@ -594,7 +594,7 @@ impl DomHost {
             element.set_media_playback_rate(rate)
         };
         if did_change {
-            self.record_mutation(MutationScope::LocalState);
+            self.record_mutation(MutationScope::LocalState, [handle]);
         }
         did_change
     }
@@ -610,7 +610,7 @@ impl DomHost {
             element.set_media_current_time(current_time)
         };
         if did_change {
-            self.record_mutation(MutationScope::LocalState);
+            self.record_mutation(MutationScope::LocalState, [handle]);
         }
         did_change
     }
@@ -626,7 +626,7 @@ impl DomHost {
             element.set_media_ready_state(ready_state)
         };
         if did_change {
-            self.record_mutation(MutationScope::LocalState);
+            self.record_mutation(MutationScope::LocalState, [handle]);
         }
         did_change
     }
@@ -642,7 +642,7 @@ impl DomHost {
             element.set_media_network_state(network_state)
         };
         if did_change {
-            self.record_mutation(MutationScope::LocalState);
+            self.record_mutation(MutationScope::LocalState, [handle]);
         }
         did_change
     }
@@ -658,7 +658,7 @@ impl DomHost {
             element.set_media_error_code(error_code)
         };
         if did_change {
-            self.record_mutation(MutationScope::LocalState);
+            self.record_mutation(MutationScope::LocalState, [handle]);
         }
         did_change
     }
@@ -721,7 +721,7 @@ impl DomHost {
             changed_handles.push(handle);
         }
         if !changed_handles.is_empty() {
-            self.record_mutation(MutationScope::LocalState);
+            self.record_mutation(MutationScope::LocalState, changed_handles.iter().copied());
         }
         changed_handles
     }
@@ -817,7 +817,7 @@ impl DomHost {
             changed_handles.extend(self.uncheck_checked_radio_peers(radio, true, None));
         }
         if !changed_handles.is_empty() {
-            self.record_mutation(MutationScope::LocalState);
+            self.record_mutation(MutationScope::LocalState, changed_handles.iter().copied());
         }
     }
 
@@ -841,7 +841,7 @@ impl DomHost {
             element.set_selected_with_dirty(selected, dirty)
         };
         if did_change {
-            self.record_mutation(MutationScope::QueryState);
+            self.record_mutation(MutationScope::QueryState, [handle]);
         }
         did_change
     }
@@ -861,7 +861,7 @@ impl DomHost {
             element.set_select_explicit_none(explicit_none)
         };
         if did_change {
-            self.record_mutation(MutationScope::QueryState);
+            self.record_mutation(MutationScope::QueryState, [handle]);
         }
         did_change
     }
@@ -881,7 +881,7 @@ impl DomHost {
             element.set_output_default_value(value)
         };
         if did_change {
-            self.record_mutation(MutationScope::LocalState);
+            self.record_mutation(MutationScope::LocalState, [handle]);
         }
         did_change
     }
@@ -897,7 +897,7 @@ impl DomHost {
             element.set_indeterminate(indeterminate)
         };
         if did_change {
-            self.record_mutation(MutationScope::LocalState);
+            self.record_mutation(MutationScope::LocalState, [handle]);
         }
         did_change
     }
@@ -913,7 +913,7 @@ impl DomHost {
             element.set_script_force_async(force_async)
         };
         if did_change {
-            self.record_mutation(MutationScope::LocalState);
+            self.record_mutation(MutationScope::LocalState, [handle]);
         }
         did_change
     }
@@ -929,7 +929,7 @@ impl DomHost {
             element.set_script_already_started(already_started)
         };
         if did_change {
-            self.record_mutation(MutationScope::LocalState);
+            self.record_mutation(MutationScope::LocalState, [handle]);
         }
         did_change
     }
@@ -949,7 +949,7 @@ impl DomHost {
             element.set_script_parser_inserted_for_prepare(parser_inserted)
         };
         if did_change {
-            self.record_mutation(MutationScope::LocalState);
+            self.record_mutation(MutationScope::LocalState, [handle]);
         }
         did_change
     }
@@ -965,7 +965,7 @@ impl DomHost {
             element.set_script_text_internal_slot(source)
         };
         if did_change {
-            self.record_mutation(MutationScope::LocalState);
+            self.record_mutation(MutationScope::LocalState, [handle]);
         }
         did_change
     }
@@ -981,7 +981,7 @@ impl DomHost {
             element.note_script_children_changed_by_api()
         };
         if did_change {
-            self.record_mutation(MutationScope::LocalState);
+            self.record_mutation(MutationScope::LocalState, [handle]);
         }
         did_change
     }
@@ -1000,7 +1000,7 @@ impl DomHost {
             element.finish_parsing_script_children(&source)
         };
         if did_change {
-            self.record_mutation(MutationScope::LocalState);
+            self.record_mutation(MutationScope::LocalState, [handle]);
         }
         did_change
     }
@@ -1016,7 +1016,7 @@ impl DomHost {
             element.finish_parsing_link_children()
         };
         if did_change {
-            self.record_mutation(MutationScope::LocalState);
+            self.record_mutation(MutationScope::LocalState, [handle]);
         }
         did_change
     }
@@ -1031,7 +1031,7 @@ impl DomHost {
         if !did_change {
             return DomMutationEffects::default();
         }
-        self.record_mutation(MutationScope::LocalState);
+        self.record_mutation(MutationScope::LocalState, [handle]);
         let mut effects = DomMutationEffects::changed();
         effects.mark_stylesheet_owner_parsing_finished(
             handle,
@@ -1069,7 +1069,7 @@ impl DomHost {
             element.set_cryptographic_nonce(nonce)
         };
         if did_change {
-            self.record_mutation(MutationScope::LocalState);
+            self.record_mutation(MutationScope::LocalState, [handle]);
         }
         did_change
     }
@@ -1089,7 +1089,7 @@ impl DomHost {
             element.set_link_explicitly_enabled(explicitly_enabled)
         };
         if did_change {
-            self.record_mutation(MutationScope::LocalState);
+            self.record_mutation(MutationScope::LocalState, [handle]);
         }
         did_change
     }

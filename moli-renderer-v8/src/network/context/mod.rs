@@ -7,8 +7,8 @@ mod worker;
 mod tests;
 
 pub(crate) use document::{
-    DocumentResourceAuthoritySource, DocumentResourceLoaderBootstrap,
-    DocumentResourceLoaderIdentity,
+    DocumentResourceAuthoritySource, DocumentResourceLoaderAuthority,
+    DocumentResourceLoaderBootstrap, DocumentResourceLoaderIdentity,
 };
 pub use document::{
     DocumentResourceLoader, DocumentResourceLoaderDiagnostics, DocumentResourceLoaderState,

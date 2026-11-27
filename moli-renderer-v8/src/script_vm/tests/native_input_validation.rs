@@ -3,7 +3,7 @@ use super::native_node_event_outcomes::{native_outcome_vm, node_handle};
 async fn beforeinput_target_change(mutation: &str, should_edit: bool) {
     for policy in [
         moli_page_types::LayoutPolicy::Mock,
-        moli_page_types::LayoutPolicy::OnDemand,
+        moli_page_types::LayoutPolicy::Lazy,
         moli_page_types::LayoutPolicy::Realtime,
     ] {
         let mut vm = native_outcome_vm(policy).await;
@@ -73,7 +73,7 @@ async fn native_edit_continues_with_a_valid_target_and_after_a_callback_exceptio
 async fn native_click_revalidates_the_target_after_focus_before_preactivation() {
     for policy in [
         moli_page_types::LayoutPolicy::Mock,
-        moli_page_types::LayoutPolicy::OnDemand,
+        moli_page_types::LayoutPolicy::Lazy,
         moli_page_types::LayoutPolicy::Realtime,
     ] {
         let mut vm = native_outcome_vm(policy).await;

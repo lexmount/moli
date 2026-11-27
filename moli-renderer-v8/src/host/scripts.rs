@@ -1328,7 +1328,11 @@ impl HostScriptScheduler {
         self.main_document_completion_recheck_turn_queued = false;
     }
 
-    fn enqueue_script_event_lifecycle_work(&mut self, kind: ScriptEventKind, handle: &str) {
+    pub(crate) fn enqueue_script_event_lifecycle_work(
+        &mut self,
+        kind: ScriptEventKind,
+        handle: &str,
+    ) {
         if let Some(work) = self.plan_script_event_lifecycle_work(kind, handle) {
             self.enqueue_post_parse_lifecycle_work(work);
         }

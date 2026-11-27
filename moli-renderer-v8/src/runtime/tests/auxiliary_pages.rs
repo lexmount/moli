@@ -11,8 +11,8 @@ async fn related_popup_initial_document_inherits_layout_configuration() {
     let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
     for (policy, scrollbars_hidden, client_size) in [
         (LayoutPolicy::Mock, false, [100, 20]),
-        (LayoutPolicy::OnDemand, false, [185, 85]),
-        (LayoutPolicy::OnDemand, true, [200, 100]),
+        (LayoutPolicy::Lazy, false, [185, 85]),
+        (LayoutPolicy::Lazy, true, [200, 100]),
         (LayoutPolicy::Realtime, false, [185, 85]),
         (LayoutPolicy::Realtime, true, [200, 100]),
     ] {

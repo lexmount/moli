@@ -132,6 +132,12 @@ impl ScriptVm {
             Self::admit_realtime_lazy_images(scope, host_ptr, id, root)?;
         }
         if unsafe { &*host_ptr }.realtime_rendering_opportunity_is_current(id, root) {
+            let images = unsafe { &*host_ptr }.take_realtime_css_image_preparation();
+            if let Some(images) = images {
+                crate::document_runtime::DocumentRuntime::prepare_css_images_in_current_scope(
+                    scope, host_ptr, &images, true,
+                );
+            }
             // Layout has published the actual child viewports, and rAF/RO may
             // have changed CSS font sources. Admit those resources through the
             // existing owner-checked loader after sampling this frame. A ready

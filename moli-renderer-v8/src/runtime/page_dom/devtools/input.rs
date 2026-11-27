@@ -1,8 +1,18 @@
 use super::super::*;
 use super::child_frame_nodes::child_frame_document_contains_live_handle;
-use crate::script_vm::MouseDispatchCompletion;
+use crate::script_vm::{MouseDispatchCompletion, WheelDispatchOptions};
 
 impl PageVm {
+    pub(in crate::runtime) fn bind_wheel_input_controller(
+        &mut self,
+        controller: std::rc::Rc<std::cell::RefCell<crate::wheel_input::WheelInputController>>,
+    ) {
+        if !std::rc::Rc::ptr_eq(&self.vm().wheel_input, &controller) {
+            controller.borrow_mut().retire_document();
+            self.vm_mut().wheel_input = controller;
+        }
+    }
+
     pub(crate) fn dispatch_mouse_event_at_point_with_pointer(
         &mut self,
         x: f64,
@@ -40,6 +50,73 @@ impl PageVm {
         }
         self.bind_input_dispatch_file_chooser_backend_node_id(&mut outcome);
         Ok(outcome)
+    }
+
+    pub(in crate::runtime) fn wheel_position_in_bounds(&self, x: f64, y: f64) -> bool {
+        let (width, height) = self
+            .vm()
+            .document_runtime
+            .viewport_surface()
+            .unwrap_or_default()
+            .visible_size();
+        x >= 0.0 && y >= 0.0 && x < f64::from(width) && y < f64::from(height)
+    }
+
+    pub(crate) fn validate_synthetic_wheel_anchor(
+        &self,
+        x: f64,
+        y: f64,
+        gesture: &crate::runtime::RendererSyntheticWheelGesture,
+    ) -> Result<RendererInputDispatchOutcome> {
+        anyhow::ensure!(
+            self.wheel_position_in_bounds(x, y),
+            "Position out of bounds"
+        );
+        gesture.validate_anchor(true);
+        Ok(RendererInputDispatchOutcome::default())
+    }
+
+    pub(crate) fn dispatch_synthetic_wheel(
+        &mut self,
+        x: f64,
+        y: f64,
+        delta_x: f64,
+        delta_y: f64,
+        end: bool,
+        intercept_drags: bool,
+        gesture: crate::runtime::RendererSyntheticWheelGesture,
+    ) -> Result<RendererInputDispatchOutcome> {
+        use crate::wheel_input::{WheelInput, WheelPhase, WheelSource};
+        let Some(owner) = self.vm().wheel_document_owner() else {
+            return Ok(RendererInputDispatchOutcome::default());
+        };
+        // Aura filters producer samples (including End) before platform
+        // phase inference. A clipped sample does not bind the round.
+        let in_bounds = self.wheel_position_in_bounds(x, y);
+        if !end {
+            anyhow::ensure!(gesture.validate_anchor(in_bounds), "Position out of bounds");
+        }
+        if !in_bounds || !gesture.accepts_document(owner, !end) {
+            return Ok(RendererInputDispatchOutcome::default());
+        }
+        self.vm_mut().dispatch_wheel_input(
+            WheelInput {
+                position: (x, y),
+                delta: (delta_x, delta_y),
+                modifiers: 0,
+                timestamp: std::time::Instant::now(),
+                phase: if end {
+                    WheelPhase::Ended
+                } else {
+                    WheelPhase::Unspecified
+                },
+                source: WheelSource::Platform,
+            },
+            WheelDispatchOptions {
+                intercept_drags,
+                ..Default::default()
+            },
+        )
     }
 
     pub(crate) fn dispatch_touch_event_at_points(

@@ -2,6 +2,134 @@
 use super::*;
 
 #[tokio::test(flavor = "current_thread")]
+async fn legacy_line_clamp_keeps_flex_playlist_titles_in_their_rows() {
+    run_page_vm_async_test(async move {
+        let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default())?;
+        loader.set_optional_resource_fetch_mask(
+            crate::protocol_types::OptionalResourceFetchMask::FONT,
+        );
+        let mut page = test_page_vm_with_loader_and_document_url(
+            &loader,
+            Vec::new(),
+            Url::parse("https://example.com/playlist.html")?,
+        );
+        page
+            .vm_mut()
+            .set_layout_policy(moli_page_types::LayoutPolicy::Realtime);
+        let font = base64::engine::general_purpose::STANDARD.encode(include_bytes!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../moli-layout/tests/fixtures/moli-ahem.ttf"
+        )));
+        page.vm_mut().eval(&format!(
+            r#"document.head.innerHTML = `<style>
+              @font-face{{font-family:Fixture;src:url(data:font/ttf;base64,{font})}}
+              html,body{{margin:0}}
+              body{{font:20px/31px Fixture}}
+              .row{{display:flex;align-items:center;height:31px;margin-bottom:4px}}
+              .title{{display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:1;
+                 width:80px;overflow:hidden;word-break:break-all;color:red}}
+              #short{{color:green}} #marker{{color:blue}}
+              #english{{width:72px;word-break:normal;color:magenta}}
+              </style>`;
+              document.body.innerHTML = `<div class=row><div id=long class=title>ABCDEFGHIJKLMNO</div></div>
+                <div class=row><div id=short class=title>AB</div></div>
+                <div id=english class=title>ABCDEF GHIJKL</div><div id=marker>…</div>`;
+              'installed'"#
+        ))?;
+        page.vm_mut().prime_document_lifecycle_and_publish_stylesheets();
+        page.vm_mut().publish_layout_for_test()?;
+        assert_eq!(
+            page.vm_mut().eval(
+                "JSON.stringify([long.offsetTop, long.offsetHeight, long.scrollHeight, short.offsetTop, short.offsetHeight])"
+            )?,
+            "[0,31,93,35,31]"
+        );
+        let snapshot = page
+            .vm_mut()
+            .screenshot_layout_snapshot(moli_layout::PaintViewport::new(160, 150, 1.0))?
+            .expect("playlist paint");
+        let glyph_runs = |color| {
+            snapshot.fragments.iter().filter_map(move |fragment| match fragment {
+                moli_layout::PaintFragment::GlyphRun(run) if run.color == color => Some(run),
+                _ => None,
+            })
+        };
+        let reference = glyph_runs(moli_layout::PaintColor::new(0., 0., 1., 1.))
+            .next().expect("reference ellipsis");
+        for (color, row, word_length) in [
+            (moli_layout::PaintColor::new(1., 0., 0., 1.), 0.0..31.0, None),
+            (moli_layout::PaintColor::new(1., 0., 1., 1.), 70.0..101.0, Some(6)),
+        ] {
+            let runs: Vec<_> = glyph_runs(color).collect();
+            let (ellipsis, title) = runs.split_last().expect("title with ellipsis");
+            assert!(!title.is_empty(), "the visible text must precede its ellipsis");
+            assert!(
+                runs.iter().flat_map(|run| run.glyphs_in_surface()).all(|glyph| row.contains(&glyph.y)),
+                "title and ellipsis glyphs must stay inside {row:?}"
+            );
+            assert_eq!(ellipsis.font, reference.font);
+            assert_eq!(
+                ellipsis.glyphs.iter().map(|glyph| glyph.id).collect::<Vec<_>>(),
+                reference.glyphs.iter().map(|glyph| glyph.id).collect::<Vec<_>>()
+            );
+            if let Some(word_length) = word_length {
+                let painted_chars: usize = title.iter().map(|run| run.glyphs.len()).sum();
+                assert!((1..word_length).contains(&painted_chars), "the English word must make room for the ellipsis");
+            }
+        }
+
+        page.vm_mut().eval("long.style.setProperty('-webkit-line-clamp', '2')")?;
+        page.vm_mut().publish_layout_for_test()?;
+        assert_eq!(page.vm_mut().eval("String(long.offsetHeight)")?, "62");
+        page.vm_mut().eval("long.style.display = 'block'")?;
+        page.vm_mut().publish_layout_for_test()?;
+        assert_eq!(page.vm_mut().eval("String(long.offsetHeight)")?, "93");
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .expect("legacy clamping should constrain playlist title layout and paint");
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn legacy_line_clamp_keeps_hidden_range_geometry_out_of_hit_testing() {
+    run_page_vm_async_test(async move {
+        let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default())?;
+        let mut page = test_page_vm_with_loader_and_document_url(
+            &loader,
+            Vec::new(),
+            Url::parse("https://example.com/clamped-hit-test.html")?,
+        );
+        page.vm_mut().set_layout_policy(moli_page_types::LayoutPolicy::Realtime);
+        page.vm_mut().eval(r#"
+            document.head.innerHTML = `<style>
+                html,body { margin:0 }
+                #clamp { display:-webkit-box; -webkit-box-orient:vertical; -webkit-line-clamp:1;
+                         width:120px; height:72px; overflow:visible; font:16px/24px sans-serif }
+            </style>`;
+            document.body.innerHTML = '<div id=clamp><a id=shown href=#shown>Visible</a><br><a id=ghost href=#ghost>Hidden</a></div>';
+        "#)?;
+        page.vm_mut().prime_document_lifecycle_and_publish_stylesheets();
+        page.vm_mut().publish_layout_for_test()?;
+
+        let hits = r#"JSON.stringify([shown, ghost].map(link => {
+            const range = document.createRange();
+            range.selectNodeContents(link.firstChild);
+            const rect = range.getClientRects()[0];
+            const x = rect.x + rect.width / 2, y = rect.y + rect.height / 2;
+            return [rect.width > 0 && rect.height > 0, document.elementFromPoint(x, y)?.id,
+                    document.elementsFromPoint(x, y).includes(link)];
+        }))"#;
+        assert_eq!(page.vm_mut().eval(hits)?, r#"[[true,"shown",true],[true,"clamp",false]]"#);
+        page.vm_mut().eval("clamp.style.setProperty('-webkit-line-clamp', '2')")?;
+        page.vm_mut().publish_layout_for_test()?;
+        assert_eq!(page.vm_mut().eval(hits)?, r#"[[true,"shown",true],[true,"ghost",true]]"#);
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .expect("clamped lines should only become targets when visible");
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn floated_min_width_text_aligns_in_the_constrained_content_box() {
     run_page_vm_async_test(async move {
         let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default())?;
@@ -16,7 +144,7 @@ async fn floated_min_width_text_aligns_in_the_constrained_content_box() {
             serde_json::to_string(markup)?
         ))?;
         page.vm_mut()
-            .prime_document_lifecycle_processing_and_record_stylesheet_network_results();
+            .prime_document_lifecycle_and_publish_stylesheets();
         page.vm_mut().publish_layout_for_test()?;
         let geometry = page.vm_mut().eval(
             r#"JSON.stringify([...document.querySelectorAll('a')].map(a=>{
@@ -120,7 +248,7 @@ document.body.innerHTML = `<div id=bar><header id=header><div id=wrapper><span i
         )?;
         page_vm
             .vm_mut()
-            .prime_document_lifecycle_processing_and_record_stylesheet_network_results();
+            .prime_document_lifecycle_and_publish_stylesheets();
 
         page_vm.vm_mut().publish_layout_for_test()?;
         let geometry = page_vm.vm_mut().eval(
@@ -173,7 +301,7 @@ document.body.innerHTML = `<p id=line>All the <span id=atomic>words</span> after
         )?;
         page_vm
             .vm_mut()
-            .prime_document_lifecycle_processing_and_record_stylesheet_network_results();
+            .prime_document_lifecycle_and_publish_stylesheets();
 
         page_vm.vm_mut().publish_layout_for_test()?;
         let geometry = page_vm.vm_mut().eval(
@@ -247,7 +375,7 @@ document.body.innerHTML = `<div class=row><div class=item id=ask><i class=icon><
         ))?;
         page_vm
             .vm_mut()
-            .prime_document_lifecycle_processing_and_record_stylesheet_network_results();
+            .prime_document_lifecycle_and_publish_stylesheets();
 
         page_vm.vm_mut().publish_layout_for_test()?;
         let geometry = page_vm.vm_mut().eval(
@@ -392,7 +520,7 @@ document.body.innerHTML = `
         )?;
         page_vm
             .vm_mut()
-            .prime_document_lifecycle_processing_and_record_stylesheet_network_results();
+            .prime_document_lifecycle_and_publish_stylesheets();
         page_vm
             .vm_mut()
             .screenshot_layout_snapshot(moli_layout::PaintViewport::new(100, 90, 1.0))?
@@ -474,7 +602,7 @@ return 'installed';
         page_vm.vm_mut().eval(&install_font("FirstDocumentFace"))?;
         page_vm
             .vm_mut()
-            .prime_document_lifecycle_processing_and_record_stylesheet_network_results();
+            .prime_document_lifecycle_and_publish_stylesheets();
         assert_eq!(
             page_vm.vm_mut().document_web_font_counts_for_test(),
             (1, 1, 1),
@@ -528,7 +656,7 @@ document.close();
             .eval(&install_font("ReplacementDocumentFace"))?;
         page_vm
             .vm_mut()
-            .prime_document_lifecycle_processing_and_record_stylesheet_network_results();
+            .prime_document_lifecycle_and_publish_stylesheets();
         assert_eq!(
             page_vm.vm_mut().document_web_font_counts_for_test(),
             (1, 1, 1),
@@ -551,7 +679,7 @@ document.close();
             .eval("document.querySelector('#layout-web-font').remove(); 'removed'")?;
         page_vm
             .vm_mut()
-            .prime_document_lifecycle_processing_and_record_stylesheet_network_results();
+            .prime_document_lifecycle_and_publish_stylesheets();
         page_vm
             .vm_mut()
             .screenshot_layout_snapshot(moli_layout::PaintViewport::new(320, 200, 1.0))?
@@ -614,7 +742,7 @@ document.body.textContent = 'R中';
 
         page_vm
             .vm_mut()
-            .prime_document_lifecycle_processing_and_record_stylesheet_network_results();
+            .prime_document_lifecycle_and_publish_stylesheets();
         let snapshot = page_vm
             .vm_mut()
             .screenshot_layout_snapshot(moli_layout::PaintViewport::new(160, 80, 1.0))?
@@ -685,7 +813,7 @@ document.body.innerHTML = '<div id=normal class=case>中</div><div id=medium cla
         ))?;
         page_vm
             .vm_mut()
-            .prime_document_lifecycle_processing_and_record_stylesheet_network_results();
+            .prime_document_lifecycle_and_publish_stylesheets();
         let snapshot = page_vm
             .vm_mut()
             .screenshot_layout_snapshot(moli_layout::PaintViewport::new(160, 160, 1.0))?
@@ -852,7 +980,7 @@ document.body.innerHTML = `
             .trim_end_matches("px")
             .parse::<f32>()?;
         assert!((control_font_size - 13.3333).abs() <= 0.01);
-        assert_eq!(computed["textInput"]["boxSizing"], "border-box");
+        assert_eq!(computed["textInput"]["boxSizing"], "content-box");
         assert_eq!(computed["textInput"]["padding"], "1px 2px");
         assert_eq!(computed["textInput"]["borderTopWidth"], "2px");
         assert_eq!(computed["textInput"]["borderTopStyle"], "inset");
@@ -1050,7 +1178,7 @@ html,body{{margin:0;padding:0}}
 
         page_vm
             .vm_mut()
-            .prime_document_lifecycle_processing_and_record_stylesheet_network_results();
+            .prime_document_lifecycle_and_publish_stylesheets();
         let snapshot = page_vm
             .vm_mut()
             .screenshot_layout_snapshot(moli_layout::PaintViewport::new(180, 120, 1.0))?
@@ -1131,7 +1259,7 @@ html,body{{margin:0;padding:0;background:white}}
 
         page_vm
             .vm_mut()
-            .prime_document_lifecycle_processing_and_record_stylesheet_network_results();
+            .prime_document_lifecycle_and_publish_stylesheets();
         let snapshot = page_vm
             .vm_mut()
             .screenshot_layout_snapshot(moli_layout::PaintViewport::new(240, 100, 1.0))?
@@ -1212,7 +1340,7 @@ html,body{{margin:0;padding:0}}
             ))?;
             page_vm
                 .vm_mut()
-                .prime_document_lifecycle_processing_and_record_stylesheet_network_results();
+                .prime_document_lifecycle_and_publish_stylesheets();
             page_vm
                 .vm_mut()
                 .screenshot_layout_snapshot(moli_layout::PaintViewport::new(180, 200, 1.0))?

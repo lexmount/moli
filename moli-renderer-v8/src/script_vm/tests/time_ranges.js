@@ -57,9 +57,10 @@
         equal(0 in a, false); equal(a[Symbol.iterator], undefined); equal(Reflect.set(a, 'length', 9), false);
         a.extra = 'author'; equal(b.extra, undefined); equal(getLength.call(a), 0);
       });
-      test(`${property} accepts foreign native media in callee realm`, () => {
-        const foreign = realms[1 - index].document.createElement('video'), ranges = get.call(foreign);
-        equal(Object.getPrototypeOf(ranges), prototype); equal(getLength.call(ranges), 0);
+      test(`${property} accepts foreign native media with receiver-realm snapshots`, () => {
+        const foreignRealm = realms[1 - index];
+        const foreign = foreignRealm.document.createElement('video'), ranges = get.call(foreign);
+        equal(Object.getPrototypeOf(ranges), foreignRealm.TimeRanges.prototype); equal(getLength.call(ranges), 0);
       });
       test(`${property} rejects forged and proxy media without author traps`, () => {
         let traps = 0;

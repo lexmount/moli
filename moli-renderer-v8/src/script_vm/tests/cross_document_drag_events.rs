@@ -258,7 +258,7 @@ fn drag_transitions_project_each_document_and_keep_related_targets_local() {
 fn source_drag_moving_iframe_keeps_destination_coordinates_for_current_update() {
     for scale in [1.0, 0.5] {
         let mut vm = cross_document_drag_vm(scale);
-        vm.set_layout_policy(moli_page_types::LayoutPolicy::OnDemand);
+        vm.set_layout_policy(moli_page_types::LayoutPolicy::Lazy);
         vm.eval(
             r#"
             document.getElementById('parent').addEventListener('drag',()=>{
@@ -285,7 +285,7 @@ fn source_drag_moving_iframe_keeps_destination_coordinates_for_current_update() 
 fn standalone_drag_cancel_restores_frame_coordinates_after_layout_invalidation() {
     let scale = 1.0;
     let mut vm = cross_document_drag_vm(scale);
-    vm.set_layout_policy(moli_page_types::LayoutPolicy::OnDemand);
+    vm.set_layout_policy(moli_page_types::LayoutPolicy::Lazy);
     vm.eval(
         r#"
         document.getElementById('parent').addEventListener('dragenter',()=>{
@@ -295,14 +295,20 @@ fn standalone_drag_cancel_restores_frame_coordinates_after_layout_invalidation()
     )
     .unwrap();
     let data = start_native_drag(&mut vm, "a", scale);
-    dispatch_drag(&mut vm, "dragenter", "parent", scale, &data);
-    assert!(
-        vm._context_host
-            .borrow()
-            .published_frame_geometry()
-            .is_none()
-    );
+    let original_geometry = vm
+        ._context_host
+        .borrow()
+        .published_frame_geometry()
+        .unwrap();
     let builds = vm.layout_pass_observability_for_test().1;
+    dispatch_drag(&mut vm, "dragenter", "parent", scale, &data);
+    let sampled_geometry = vm
+        ._context_host
+        .borrow()
+        .published_frame_geometry()
+        .unwrap();
+    assert!(std::rc::Rc::ptr_eq(&sampled_geometry, &original_geometry));
+    assert_eq!(vm.layout_pass_observability_for_test().1, builds);
 
     vm.cancel_dragging().unwrap();
 
@@ -317,15 +323,24 @@ fn standalone_drag_cancel_restores_frame_coordinates_after_layout_invalidation()
     assert_eq!(log["viewsDisabled"], true);
     assert_eq!(log["sourceDisabled"], true);
     assert_eq!(vm.layout_pass_observability_for_test().1, builds + 1);
+    let refreshed_geometry = vm
+        ._context_host
+        .borrow()
+        .published_frame_geometry()
+        .unwrap();
+    assert!(!std::rc::Rc::ptr_eq(
+        &refreshed_geometry,
+        &original_geometry
+    ));
 
     vm.eval("document.getElementById('frame-b').style.left='530px'")
         .unwrap();
-    assert!(
-        vm._context_host
-            .borrow()
-            .published_frame_geometry()
-            .is_none()
-    );
+    let sampled_geometry = vm
+        ._context_host
+        .borrow()
+        .published_frame_geometry()
+        .unwrap();
+    assert!(std::rc::Rc::ptr_eq(&sampled_geometry, &refreshed_geometry));
     vm.cancel_dragging().unwrap();
     assert_eq!(vm.layout_pass_observability_for_test().1, builds + 1);
 }
@@ -334,7 +349,7 @@ fn standalone_drag_cancel_restores_frame_coordinates_after_layout_invalidation()
 fn standalone_drag_cancel_clears_the_session_without_a_layout_root() {
     let scale = 1.0;
     let mut vm = cross_document_drag_vm(scale);
-    vm.set_layout_policy(moli_page_types::LayoutPolicy::OnDemand);
+    vm.set_layout_policy(moli_page_types::LayoutPolicy::Lazy);
     let data = start_native_drag(&mut vm, "a", scale);
     dispatch_drag(&mut vm, "dragenter", "parent", scale, &data);
     vm.eval(

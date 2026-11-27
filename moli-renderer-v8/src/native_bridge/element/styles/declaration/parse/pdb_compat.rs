@@ -5,6 +5,7 @@ use super::declaration_parser::{
 };
 use super::inline_state::style_entries_equal;
 use super::*;
+use moli_css_parse::ParsedCssomProperty;
 
 pub(super) fn style_entry_is_pdb_safe(entry: &StyleEntry) -> bool {
     let name = canonical_style_property_name(&entry.name);
@@ -104,28 +105,26 @@ pub(super) fn prefixed_style_entry_is_independent_of_unprefixed_property(
     entry_name.starts_with("-webkit-") && !property.starts_with("-webkit-")
 }
 
-pub(super) fn pdb_block_from_style_entries(
-    entries: &[StyleEntry],
+/// Build a block after the caller has classified native and compatibility entries.
+pub(super) fn pdb_block_from_native_style_entries(
+    entries: &[&StyleEntry],
 ) -> Option<moli_css_parse::CssDeclarationBlock> {
     crate::style_engine::ensure_stylo_browser_compat_prefs();
     let mut block = moli_css_parse::CssDeclarationBlock::default();
     let mut previous_important_entries = Vec::new();
     for entry in entries {
-        if !style_entry_is_pdb_safe(entry) || style_entry_is_pdb_supplemental_side_entry(entry) {
-            return None;
-        }
-        let restore_important_entries = if entry.priority {
-            Vec::new()
-        } else {
-            style_entries_affecting_property(&previous_important_entries, &entry.name)
-        };
         if !set_pdb_block_property_from_style_entry(&mut block, entry) {
             return None;
         }
         if entry.priority {
-            previous_important_entries.push(entry.clone());
+            previous_important_entries.push(*entry);
+            continue;
         }
-        for important_entry in &restore_important_entries {
+        let affected_names =
+            style_property_mutation_affected_names_with_pdb(&entry.name).unwrap_or_default();
+        for important_entry in previous_important_entries.iter().filter(|important_entry| {
+            style_entry_affects_property_query(important_entry, &entry.name, &affected_names)
+        }) {
             if !set_pdb_block_property_from_style_entry(&mut block, important_entry) {
                 return None;
             }
@@ -134,7 +133,7 @@ pub(super) fn pdb_block_from_style_entries(
     Some(block)
 }
 
-pub(super) fn set_pdb_block_property_from_style_entry(
+fn set_pdb_block_property_from_style_entry(
     block: &mut moli_css_parse::CssDeclarationBlock,
     entry: &StyleEntry,
 ) -> bool {
@@ -178,21 +177,6 @@ pub(crate) fn set_pdb_block_property_collecting_entries(
         entries.extend(projection.entries.into_iter().map(StyleEntry::from));
     }
     Some(entries)
-}
-
-pub(super) fn style_entries_affecting_property(
-    entries: &[StyleEntry],
-    property: &str,
-) -> Vec<StyleEntry> {
-    let affected_names =
-        style_property_mutation_affected_names_with_pdb(property).unwrap_or_default();
-    entries
-        .iter()
-        .filter(|entry| {
-            entry.priority && style_entry_affects_property_query(entry, property, &affected_names)
-        })
-        .cloned()
-        .collect()
 }
 
 pub(super) fn cssom_style_property_write_uses_pdb(name: &str, value: &str) -> bool {
@@ -672,17 +656,25 @@ pub(crate) fn parse_style_property_entries_with_pdb(
     value: &str,
     priority: bool,
 ) -> Option<ParsedStylePropertyEntries> {
+    parse_pdb_style_property(name, value, priority).map(|(entries, _)| entries)
+}
+
+pub(super) fn parse_pdb_style_property(
+    name: &str,
+    value: &str,
+    priority: bool,
+) -> Option<(ParsedStylePropertyEntries, Option<ParsedCssomProperty>)> {
     crate::style_engine::ensure_stylo_browser_compat_prefs();
     let name = canonical_style_property_name(name);
     if let Some(parsed) = parse_preferred_pdb_supplemental_entries(&name, value, priority) {
-        return Some(parsed);
+        return Some((parsed, None));
     }
-    if let Some(parsed) = stylo_pdb_entries_for_property(&name, value, priority)
-        && !parsed.entries.is_empty()
+    if let Some((entries, native)) = stylo_pdb_style_property(&name, value, priority)
+        && !entries.entries.is_empty()
     {
-        return Some(parsed);
+        return Some((entries, native));
     }
-    parse_pdb_supplemental_entries(&name, value, priority)
+    parse_pdb_supplemental_entries(&name, value, priority).map(|entries| (entries, None))
 }
 
 pub(super) fn stylo_pdb_entries_for_property(
@@ -690,45 +682,47 @@ pub(super) fn stylo_pdb_entries_for_property(
     value: &str,
     priority: bool,
 ) -> Option<ParsedStylePropertyEntries> {
-    if moli_css_parse::escape_top_level_semicolons(value) != value
-        || moli_css_parse::split_important_priority(value).1
-    {
-        return None;
+    stylo_pdb_style_property(name, value, priority).map(|(entries, _)| entries)
+}
+
+fn stylo_pdb_style_property(
+    name: &str,
+    value: &str,
+    priority: bool,
+) -> Option<(ParsedStylePropertyEntries, Option<ParsedCssomProperty>)> {
+    if value.is_empty() {
+        let affected_names =
+            moli_css_parse::CssDeclarationBlock::affected_names_for_property(name)?;
+        return Some((
+            ParsedStylePropertyEntries {
+                entries: Vec::new(),
+                affected_names,
+            },
+            None,
+        ));
     }
-    let mut block = moli_css_parse::CssDeclarationBlock::default();
-    let projection = block.set_property_with_projection(name, value, priority);
-    if projection.set_result == moli_css_parse::CssSetResult::ParseError {
-        return None;
-    }
-    let mut accepted_names = projection.stored_names.clone();
-    append_unique_name(&mut accepted_names, name);
-    let affected_names = projection.affected_names.clone();
-    let block_entries =
-        if projection.has_unresolved_value || css_value_uses_unresolved_cssom_storage(value) {
-            if !block.property_is_declared(name) {
-                return None;
-            }
-            vec![moli_css_parse::CssDeclarationEntry {
-                name: name.to_owned(),
-                value: block.property_value(name)?,
-                priority,
-            }]
-        } else {
-            projection.entries
-        };
-    let mut entries = Vec::new();
+    let native = moli_css_parse::parse_cssom_property_without_document(name, value, priority)?;
+    let unresolved =
+        native.has_unresolved_value() || css_value_uses_unresolved_cssom_storage(value);
+    let block_entries = if unresolved {
+        vec![moli_css_parse::CssDeclarationEntry {
+            name: name.to_owned(),
+            value: native.value()?,
+            priority,
+        }]
+    } else {
+        native.entries()?
+    };
+    let mut entries = Vec::with_capacity(block_entries.len());
     for entry in block_entries {
         let entry_name = canonical_style_property_name(&entry.name);
-        let is_declared_empty_custom_property = entry.value.is_empty()
-            && !value.is_empty()
-            && moli_css_parse::is_cssom_custom_property_name(&entry_name)
-            && block.property_is_declared(&entry_name);
+        let is_declared_empty_custom_property =
+            entry.value.is_empty() && moli_css_parse::is_cssom_custom_property_name(&entry_name);
+        let renamed = entry_name != entry.name && entry_name != name;
         if entry_name.is_empty()
             || entry.value.is_empty() && !is_declared_empty_custom_property
             || entry.priority != priority
-            || !accepted_names
-                .iter()
-                .any(|accepted| accepted == &entry_name)
+            || renamed && (unresolved || !native.contains_entry_name(&entry_name))
         {
             return None;
         }
@@ -738,10 +732,13 @@ pub(super) fn stylo_pdb_entries_for_property(
             priority: entry.priority,
         });
     }
-    Some(ParsedStylePropertyEntries {
-        entries,
-        affected_names,
-    })
+    Some((
+        ParsedStylePropertyEntries {
+            entries,
+            affected_names: native.affected_names(),
+        },
+        (name != "all" && !unresolved).then_some(native),
+    ))
 }
 
 pub(super) fn css_value_uses_unresolved_cssom_storage(value: &str) -> bool {

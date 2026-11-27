@@ -56,7 +56,7 @@ fn png_dimensions(bytes: &[u8]) -> (u32, u32) {
 
 #[tokio::test]
 async fn render_full_page_screenshot_extends_beyond_viewport() -> Result<()> {
-    let config = BrowserConfig::default().with_layout_policy(LayoutPolicy::OnDemand);
+    let config = BrowserConfig::default().with_layout_policy(LayoutPolicy::Lazy);
     let (_browser, mut page, http_server) = load_page_with_config(
         concat!(
             "<!doctype html><style>html,body{margin:0}",

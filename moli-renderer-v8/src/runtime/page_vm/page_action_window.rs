@@ -2,9 +2,9 @@ use std::{collections::HashMap, time::Instant};
 
 use anyhow::{Result, anyhow};
 use moli_action_window::{
-    ActionBarrier, ActionBatch, ActionSequence, ActionWindow, InputModifiers, PlannedAction, Point,
-    ScrollAction, WindowAction,
+    ActionBarrier, ActionBatch, ActionSequence, ActionWindow, PlannedAction, WindowAction,
 };
+use moli_input::{InputModifiers, Point, ScrollAction, ScrollDeltaMode};
 
 use crate::{
     page_task_queue::RendererPageReadyDescriptor,
@@ -50,7 +50,7 @@ impl Default for RendererPageActionWindow {
 impl PageVm {
     pub(in crate::runtime) fn input_dispatch_policy(&self) -> RendererInputDispatchPolicy {
         match self.vm().layout_policy() {
-            moli_page_types::LayoutPolicy::Mock | moli_page_types::LayoutPolicy::OnDemand => {
+            moli_page_types::LayoutPolicy::Mock | moli_page_types::LayoutPolicy::Lazy => {
                 RendererInputDispatchPolicy::LegacyWindow
             }
             moli_page_types::LayoutPolicy::Realtime => RendererInputDispatchPolicy::Interactive,
@@ -58,7 +58,13 @@ impl PageVm {
     }
 
     pub(in crate::runtime) fn next_action_window_deadline(&self) -> Option<Instant> {
-        self.page_action_window.window.next_deadline()
+        [
+            self.page_action_window.window.next_deadline(),
+            self.vm().wheel_input.borrow().next_deadline(),
+        ]
+        .into_iter()
+        .flatten()
+        .min()
     }
 
     pub(in crate::runtime) fn due_page_action_window_ready_descriptor(
@@ -95,7 +101,7 @@ impl PageVm {
                 position: Point::new(x, y),
                 delta_x,
                 delta_y,
-                delta_mode: moli_action_window::ScrollDeltaMode::Pixel,
+                delta_mode: ScrollDeltaMode::Pixel,
                 modifiers: InputModifiers::from_bits(modifiers),
             }),
             admitted_at,
@@ -116,6 +122,7 @@ impl PageVm {
         );
         Ok(RendererInputDispatchOutcome {
             handled: true,
+            wheel: None,
             triggered_top_level_navigation: false,
             pending_download: None,
             pending_file_chooser: None,
@@ -260,10 +267,12 @@ impl PageVm {
         &mut self,
         deadline: Instant,
     ) -> Result<()> {
-        if self.page_action_window.window.next_deadline() != Some(deadline) {
+        if self.next_action_window_deadline() != Some(deadline) {
             return Ok(());
         }
-        let Some(batch) = self.page_action_window.window.take_due(Instant::now()) else {
+        let now = Instant::now();
+        self.vm().wheel_input.borrow_mut().expire(now);
+        let Some(batch) = self.page_action_window.window.take_due(now) else {
             return Ok(());
         };
         self.apply_page_action_batch(batch)

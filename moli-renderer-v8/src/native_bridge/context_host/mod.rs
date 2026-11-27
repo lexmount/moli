@@ -8,7 +8,6 @@ use crate::{
             SharedStorageBucketStore, SharedWebStorageStore, WeakIndexedDbManager,
             new_shared_storage_bucket_store, new_shared_web_storage_store,
         },
-        css_style::CssInlineStyleDeclarationState,
         custom_elements::{
             CustomElementReactionCoordinator, CustomElementRegistryAssociation,
             CustomElementRegistryKey, CustomElementStore, RegistryAssociationRetarget,
@@ -105,8 +104,8 @@ mod image_decodes;
 mod image_loads;
 mod image_resources;
 pub(crate) use image_resources::{
-    CssImageResourceAdmission, CssImageResourceRequestIdentity, ImageResponseDescriptor,
-    ScannedImagePreloadAdmission,
+    CssImagePaintSnapshot, CssImageResourceAdmission, CssImageResourceRequestIdentity,
+    ImageResponseDescriptor, ScannedImagePreloadAdmission,
 };
 mod indexed_db_tasks;
 mod interaction_batch;
@@ -115,6 +114,7 @@ mod font_loading;
 mod internal_node_refs;
 mod intersection_observer_tasks;
 mod layout;
+pub(crate) use layout::LayoutQueryMode;
 mod layout_snapshot;
 #[cfg(feature = "devtools")]
 pub(crate) use layout_snapshot::PublishedFrameGeometry;
@@ -123,6 +123,25 @@ mod live_ranges;
 mod main_document_lifecycle;
 mod media_element_events;
 mod media_loads;
+mod media_queries;
+#[cfg(all(
+    feature = "media-ext",
+    any(target_os = "linux", target_os = "macos"),
+    target_pointer_width = "64"
+))]
+mod media_source_playback;
+#[cfg(all(
+    feature = "media-ext",
+    any(target_os = "linux", target_os = "macos"),
+    target_pointer_width = "64"
+))]
+mod video_playback;
+#[cfg(all(
+    feature = "media-ext",
+    any(target_os = "linux", target_os = "macos"),
+    target_pointer_width = "64"
+))]
+pub(crate) use video_playback::start_video_if_playing;
 mod misc_platform_api_tasks;
 mod realtime_animation_frames;
 mod realtime_environment;
@@ -145,6 +164,8 @@ mod messages;
 mod module_owner_tasks;
 #[cfg(feature = "devtools")]
 mod mouse_click;
+#[cfg(feature = "devtools")]
+mod wheel_targets;
 #[cfg(feature = "devtools")]
 pub(crate) use mouse_click::MouseReleaseFollowUp;
 #[cfg(feature = "devtools")]
@@ -736,6 +757,21 @@ pub(crate) enum PendingImageLoadEventOwner {
     Child(FrameDocumentImageLoadEventBinding),
 }
 
+#[derive(Clone, Copy)]
+pub(super) struct QueuedImageUpdate {
+    pub(super) id: ImageLoadEventId,
+    pub(super) owner_document_handle: DomHandle,
+    pub(super) request_initiator_type: crate::types::SubresourceRequestInitiatorType,
+    pub(super) after_document_adoption: bool,
+}
+
+/// The current update or admitted load for one image element.
+pub(super) enum ImageLoader {
+    Queued(QueuedImageUpdate),
+    Deferred(DomHandle),
+    Admitted(PendingImageLoadEvent),
+}
+
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct PendingImageLoadEvent {
     id: ImageLoadEventId,
@@ -869,7 +905,8 @@ pub(crate) struct PageScriptHost {
     document_runtime: *mut DocumentRuntime,
     layout_policy: moli_page_types::LayoutPolicy,
     scrollbars_hidden: bool,
-    document_layout_state: RefCell<layout_state::DocumentLayoutState>,
+    document_layout_state: Rc<RefCell<layout_state::DocumentLayoutState>>,
+    media_queries: RefCell<media_queries::MediaQueryState>,
     realtime_layout_state: Option<Box<realtime_layout::RealtimeLayoutState>>,
     layout_pass_active: Cell<bool>,
     completed_layout_pass_count: Cell<u64>,
@@ -988,9 +1025,21 @@ pub(crate) struct PageScriptHost {
         Option<Box<intersection_observer_tasks::IntersectionObserverTaskState>>,
     file_entry_file_callbacks: file_entry_file_callbacks::FileEntryFileCallbackState,
     user_interaction_tasks: user_interaction_tasks::UserInteractionTaskState,
-    pending_image_load_events: HashMap<DomHandle, PendingImageLoadEvent>,
+    image_loaders: HashMap<DomHandle, ImageLoader>,
     next_image_load_event_id: u64,
     pending_media_load_sequences: HashMap<DomHandle, PendingMediaLoadSequence>,
+    #[cfg(all(
+        feature = "media-ext",
+        any(target_os = "linux", target_os = "macos"),
+        target_pointer_width = "64"
+    ))]
+    video_playbacks: HashMap<DomHandle, video_playback::VideoPlayback>,
+    #[cfg(all(
+        feature = "media-ext",
+        any(target_os = "linux", target_os = "macos"),
+        target_pointer_width = "64"
+    ))]
+    media_source_urls: HashMap<String, media_source_playback::MediaSourceUrl>,
     next_media_load_sequence_id: u64,
     pending_text_track_load_sequences: HashMap<DomHandle, PendingTextTrackLoadSequence>,
     next_text_track_load_sequence_id: u64,
@@ -998,6 +1047,8 @@ pub(crate) struct PageScriptHost {
     pointers: HashMap<i32, pointer_capture::PointerState>,
     #[cfg(feature = "devtools")]
     mouse_input: mouse_click::MouseInputState,
+    #[cfg(feature = "devtools")]
+    wheel_scroll_targets: RefCell<Vec<wheel_targets::WheelTargetWatch>>,
     lazy_media_load_candidates: HashSet<DomHandle>,
     canvas_resources: canvas_resources::CanvasResourceStore,
     image_resources: image_resources::ImageResourceStore,
@@ -1031,7 +1082,6 @@ pub(crate) struct PageScriptHost {
     disconnected_shadow_roots: HashSet<DomHandle>,
     live_stylesheets: crate::live_stylesheet::LiveStylesheetRegistry,
     style_engine: MoliStyleEngine,
-    inline_style_declarations: HashMap<DomHandle, CssInlineStyleDeclarationState>,
     css_module_texts_by_url: HashMap<String, String>,
     css_module_failed_urls: HashSet<String>,
     popover_focus_restore_targets: HashMap<DomHandle, Option<DomHandle>>,
@@ -1252,10 +1302,25 @@ impl ChildBrowsingContextBootstrap {
             }
         }
     }
+
+    pub(in crate::native_bridge::context_host) fn content_security_policy_inherited(&self) -> bool {
+        match self {
+            Self::AboutBlank | Self::Srcdoc { .. } => true,
+            Self::Url(url) => child_browsing_context_url_inherits_content_security_policy(url),
+            Self::Request(request) => {
+                child_browsing_context_url_inherits_content_security_policy(&request.url)
+            }
+        }
+    }
 }
 
 fn child_browsing_context_url_inherits_security_origin(url: &url::Url) -> bool {
     (url.scheme() == "about" && url.path() == "blank") || url.scheme() == "javascript"
+}
+
+fn child_browsing_context_url_inherits_content_security_policy(url: &url::Url) -> bool {
+    child_browsing_context_url_inherits_security_origin(url)
+        || matches!(url.scheme(), "blob" | "data" | "filesystem")
 }
 
 pub use crate::protocol_types::PendingRuntimeBindingCall;
@@ -1379,6 +1444,12 @@ impl PageScriptHost {
             return;
         }
         self.page_context_resources_closed = true;
+        #[cfg(all(
+            feature = "media-ext",
+            any(target_os = "linux", target_os = "macos"),
+            target_pointer_width = "64"
+        ))]
+        self.discard_video_playbacks_for_teardown();
         self.bridge.web_mcp.clear();
         self.retire_all_window_execution_context_resources_for_teardown();
         self.pending_history_traversal_admissions.clear();
@@ -1412,5 +1483,40 @@ impl Drop for PageScriptHost {
         self.context_host_lifecycle
             .set(crate::util::ContextHostLifecycle::Destroyed);
         self.common.clear_for_context_teardown();
+    }
+}
+
+#[cfg(test)]
+mod child_content_security_policy_inheritance_tests {
+    use super::*;
+
+    #[test]
+    fn local_scheme_csp_inheritance_is_independent_from_origin_inheritance() {
+        let cases = [
+            ("about:blank", true, true),
+            ("javascript:void 0", true, true),
+            ("blob:https://example.test/id", false, true),
+            ("data:text/html,child", false, true),
+            (
+                "filesystem:https://example.test/temporary/child",
+                false,
+                true,
+            ),
+            ("https://example.test/child", false, false),
+        ];
+
+        for (input, inherits_origin, inherits_csp) in cases {
+            let url = Url::parse(input).expect("test URL should parse");
+            assert_eq!(
+                child_browsing_context_url_inherits_security_origin(&url),
+                inherits_origin,
+                "origin inheritance for {input}",
+            );
+            assert_eq!(
+                child_browsing_context_url_inherits_content_security_policy(&url),
+                inherits_csp,
+                "CSP inheritance for {input}",
+            );
+        }
     }
 }

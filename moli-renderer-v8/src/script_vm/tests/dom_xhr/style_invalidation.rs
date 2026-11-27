@@ -1203,58 +1203,34 @@ fn structural_sibling_character_data_invalidation_refreshes_later_cache() {
     assert_eq!(after, "rgb(1, 2, 3)|rgb(4, 5, 6)|rgb(7, 8, 9)");
 }
 #[test]
-fn has_selector_character_data_mutation_invalidates_ancestor_dependent_styles() {
-    let mut vm = new_storage_test_vm("https://has-character-data-style-cache.test/");
-    let document = vm.document_handle_for_test();
-
-    let setup = vm
+fn has_empty_selector_updates_when_text_emptiness_changes() {
+    let mut vm = new_parsed_test_vm(
+        "https://has-character-data-style-cache.test/",
+        r#"<!doctype html>
+<style>
+#outside { color: rgb(1, 2, 3); }
+body:has(#target:empty) #outside { color: rgb(4, 5, 6); }
+</style>
+<div id="outside"></div>
+<div id="target">before</div>"#,
+    );
+    let result = vm
         .eval(
             r#"
 (() => {
-  const root = document.documentElement || document.appendChild(document.createElement('html'));
-  const head = document.head || root.appendChild(document.createElement('head'));
-  const body = document.body || root.appendChild(document.createElement('body'));
-  const style = document.createElement('style');
-  style.textContent = [
-    '#outside { color: rgb(1, 2, 3); }',
-    'body:has(#target) #outside { background-color: rgb(4, 5, 6); }',
-  ].join('\n');
-  head.appendChild(style);
-
-  const outside = document.createElement('div');
-  outside.id = 'outside';
-  const target = document.createElement('div');
-  target.id = 'target';
-  const text = document.createTextNode('before');
-  target.appendChild(text);
-  body.append(outside, target);
-
-  globalThis.__hasCharacterDataText = text;
-  globalThis.__hasCharacterDataOutside = outside;
-  return getComputedStyle(outside).color;
+  const outside = document.getElementById('outside');
+  const text = document.getElementById('target').firstChild;
+  const before = getComputedStyle(outside).color;
+  text.data = '';
+  const empty = getComputedStyle(outside).color;
+  text.data = 'after';
+  return [before, empty, getComputedStyle(outside).color].join('|');
 })()
 "#,
         )
-        .expect("has selector character data setup should evaluate");
+        .expect("relative emptiness selector should respond to text updates");
 
-    assert_eq!(setup, "rgb(1, 2, 3)");
-    assert_eq!(
-        vm.computed_style_cache_entry_count_for_document_for_test(document),
-        1
-    );
-
-    let mutated = vm
-        .eval("globalThis.__hasCharacterDataText.data = 'after'; 'mutated'")
-        .expect("has selector character data mutation should evaluate");
-
-    assert_eq!(mutated, "mutated");
-    vm._context_host
-        .borrow()
-        .drain_pending_style_invalidations_for_document_for_test(document);
-    assert_eq!(
-        vm.computed_style_cache_entry_count_for_document_for_test(document),
-        0
-    );
+    assert_eq!(result, "rgb(1, 2, 3)|rgb(4, 5, 6)|rgb(1, 2, 3)");
 }
 #[test]
 fn manual_slot_assignment_invalidates_host_subtree_style_cache() {
@@ -2432,6 +2408,70 @@ fn has_selector_child_list_mutation_invalidates_ancestor_dependent_styles() {
 
     assert_eq!(result, "rgb(255, 0, 0)|rgb(0, 128, 0)");
 }
+#[test]
+fn relative_validity_selector_tracks_controls_added_to_form() {
+    let mut vm = new_parsed_test_vm(
+        "https://relative-validity.test/",
+        r#"<!doctype html>
+<style>
+#outside { color: rgb(10, 20, 30) }
+body:has(form:invalid) #outside { color: rgb(40, 50, 60) }
+</style>
+<div id="outside"></div>
+<section><form id="form"></form></section>"#,
+    );
+    let colors = vm
+        .eval(
+            r#"(() => {
+  const outside = document.getElementById('outside');
+  const form = document.getElementById('form');
+  const color = () => getComputedStyle(outside).color;
+  const before = color();
+  const input = document.createElement('input');
+  input.required = true;
+  form.append(input);
+  const inserted = color();
+  input.remove();
+  return [before, inserted, color()].join('|');
+})()"#,
+        )
+        .unwrap();
+    assert_eq!(colors, "rgb(10, 20, 30)|rgb(40, 50, 60)|rgb(10, 20, 30)");
+}
+
+#[test]
+fn relative_adjacent_selector_detects_a_fragment_inserted_at_its_boundary() {
+    let mut vm = new_parsed_test_vm(
+        "https://relative-fragment-adjacency.test/",
+        r#"<!doctype html>
+<style>
+#anchor { color: rgb(10, 20, 30) }
+#anchor:has(+ .target) { color: rgb(40, 50, 60) }
+</style>
+<div><div id="anchor"></div><div id="target" class="target"></div></div>"#,
+    );
+    let colors = vm
+        .eval(
+            r#"(() => {
+  const anchor = document.getElementById('anchor');
+  const target = document.getElementById('target');
+  const color = () => getComputedStyle(anchor).color;
+  const before = color();
+  const first = document.createElement('i');
+  const second = document.createElement('b');
+  const fragment = document.createDocumentFragment();
+  fragment.append(first, second);
+  target.parentNode.insertBefore(fragment, target);
+  const inserted = color();
+  first.remove();
+  second.remove();
+  return [before, inserted, color()].join('|');
+})()"#,
+        )
+        .unwrap();
+    assert_eq!(colors, "rgb(40, 50, 60)|rgb(10, 20, 30)|rgb(40, 50, 60)");
+}
+
 #[test]
 fn uppercase_has_selector_child_list_mutation_invalidates_ancestor_dependent_styles() {
     let mut vm = new_storage_test_vm("https://uppercase-has-selector-child-list-style.test/");

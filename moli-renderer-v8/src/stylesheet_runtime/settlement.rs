@@ -11,6 +11,57 @@ use crate::css_resource_urls::{
 };
 
 impl DocumentRuntime {
+    pub(crate) fn css_image_fetch_enabled(host: &PageScriptHost) -> bool {
+        host.current_main_document_resource_loader()
+            .is_some_and(|loader| {
+                loader
+                    .request_client()
+                    .optional_resource_fetch_enabled(crate::types::SubresourceResourceType::Image)
+            })
+    }
+
+    /// Start requests for the computed images selected by this render.
+    pub(crate) fn prepare_css_images_in_current_scope(
+        scope: &mut v8::PinScope<'_, '_>,
+        host_ptr: *mut PageScriptHost,
+        references: &[moli_layout::LayoutCssImageReference<DomHandle>],
+        include_backgrounds: bool,
+    ) {
+        let requests = {
+            let host = unsafe { &mut *host_ptr };
+            if !Self::css_image_fetch_enabled(host) {
+                return;
+            }
+            let mut seen = std::collections::HashSet::new();
+            let mut requests = Vec::new();
+            for reference in references {
+                if !include_backgrounds
+                    && reference.purpose == moli_layout::LayoutCssImagePurpose::Background
+                {
+                    continue;
+                }
+                let Some(document) = host.layout_document_for_source(reference.source) else {
+                    continue;
+                };
+                let url = reference.resolved_url.as_str();
+                if !seen.insert((document, url)) {
+                    continue;
+                }
+                if host.stylesheet_css_image_is_current(document, url) {
+                    continue;
+                }
+                if let Ok(url) = url::Url::parse(url)
+                    && let Some(binding) =
+                        host.accept_current_stylesheet_subresource_load_delay_for_document(document)
+                {
+                    requests.push((binding, StylesheetLoadBlockingResource::image(url)));
+                }
+            }
+            requests
+        };
+        Self::start_stylesheet_subresource_fetches_in_current_scope(scope, host_ptr, requests);
+    }
+
     pub(crate) fn current_stylesheet_resources(
         host: &PageScriptHost,
         root: DomHandle,

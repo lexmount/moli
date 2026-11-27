@@ -15,8 +15,8 @@ moli-css-parse = { path = "../moli-css-parse" }
 moli-image = { path = "../moli-image" }
 moli-system-fonts = { path = "../moli-system-fonts" }
 moli-trace = { path = "../moli-trace" }
-parley = "=0.11.0"
 read-fonts = "0.41.0"
+slotmap = "1.1.1"
 stylo = "0.22"
 stylo_taffy = { git = "https://github.com/DioxusLabs/blitz", rev = "fb8d6c15e9ce062b3b41e71cd48988f0093506cc", default-features = false, features = ["std", "block", "flexbox", "grid", "floats"] }
 taffy = { version = "=0.15.0", default-features = false, features = ["std", "block_layout", "flexbox", "grid", "float_layout", "content_size", "calc", "detailed_layout_info"] }
@@ -24,6 +24,12 @@ thiserror = "2.0.17"
 tracing = "0.1.41"
 unicode-segmentation = "1.13.2"
 wuff = { version = "0.2.9", default-features = false, features = ["z"] }
+
+[target.'cfg(not(target_env = "ohos"))'.dependencies]
+parley = "=0.11.0"
+
+[target.'cfg(target_env = "ohos")'.dependencies]
+parley = { version = "=0.11.0", default-features = false, features = ["std"] }
 
 [lints]
 workspace = true

@@ -26,12 +26,12 @@ pub(super) fn project_replaced_image<N>(
     projection: &PaintProjection<'_, N>,
     id: LayoutBoxId,
     paint_space: PaintSpace,
+    include_placeholder: bool,
     snapshot: &mut PaintSnapshot,
 ) where
     N: Copy + Debug + Eq + Hash,
 {
-    let transform = paint_space.local_transform();
-    let layout_box = &projection.world.boxes[id.index()];
+    let layout_box = &projection.world.boxes[id];
     let Some(kind) = layout_box
         .element_semantics()
         .and_then(|semantics| semantics.replaced)
@@ -40,22 +40,28 @@ pub(super) fn project_replaced_image<N>(
     };
     if !matches!(
         kind,
-        LayoutReplacedKind::Image | LayoutReplacedKind::Svg | LayoutReplacedKind::Canvas
+        LayoutReplacedKind::Image
+            | LayoutReplacedKind::Svg
+            | LayoutReplacedKind::Canvas
+            | LayoutReplacedKind::Media
     ) {
         return;
     }
-    let Some(resource) = layout_box.replaced_image.as_ref() else {
-        if kind == LayoutReplacedKind::Image {
-            project_unavailable_image(projection, id, paint_space, snapshot);
+    let Some(resource) = projection
+        .replaced_image(id)
+        .filter(|resource| resource.pixels.is_some() || resource.svg.is_some())
+    else {
+        match kind {
+            LayoutReplacedKind::Image => {
+                project_unavailable_image(projection, id, paint_space, snapshot)
+            }
+            LayoutReplacedKind::Svg if include_placeholder => {
+                super::project_replaced_placeholder(projection, id, paint_space, snapshot)
+            }
+            _ => {}
         }
         return;
     };
-    if resource.pixels.is_none() && resource.svg.is_none() {
-        if kind == LayoutReplacedKind::Image {
-            project_unavailable_image(projection, id, paint_space, snapshot);
-        }
-        return;
-    }
     let areas = BoxAreas::for_box(projection, id);
     let container = LayoutSize::new(
         areas.content_rect.width.max(0.0),
@@ -128,8 +134,9 @@ pub(super) fn project_replaced_image<N>(
     let content_clip_needed = replaced_content_clip_needed(areas, destination);
     if content_clip_needed {
         snapshot.push_fragment(PaintFragment::PushClip {
-            shape: areas.shape(BoxModelBox::Content),
-            transform,
+            shape: paint_space
+                .pixel_snapped_box_clip(areas.shape(BoxModelBox::Content), snapshot.pixel_grid()),
+            transform: paint_space.property_transform(),
         });
     }
     let destination = paint_space.pre_transform_rect(destination);
@@ -139,7 +146,6 @@ pub(super) fn project_replaced_image<N>(
         snapshot.push_fragment(PaintFragment::Image(PaintImage {
             image,
             destination,
-            repeat_bounds: None,
             sampling,
             transform: image_transform,
         }));
@@ -172,7 +178,7 @@ fn project_unavailable_image<N>(
 ) where
     N: Copy + Debug + Eq + Hash,
 {
-    let layout_box = &projection.world.boxes[id.index()];
+    let layout_box = &projection.world.boxes[id];
     snapshot.push_diagnostic(PaintDiagnostic::new(
         "replaced-content-placeholder",
         format!(

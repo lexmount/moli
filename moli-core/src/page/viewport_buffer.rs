@@ -1,9 +1,10 @@
-use std::sync::Arc;
+use std::{ops::Range, sync::Arc};
 
 use anyhow::{Context as _, Result};
 use moli_page_types::ViewportSurface;
 use moli_paint::{
-    RasterBufferLayout, RasterPixelFormat, raster_buffer_layout, raster_snapshot_into,
+    RasterBufferLayout, RasterPixelFormat, raster_buffer_layout, raster_damage_rows,
+    raster_snapshot_rows_into,
 };
 use moli_renderer_v8::{
     RendererDocumentLifecycleIdentity, RendererRasterStream, RendererViewportCursor,
@@ -14,10 +15,27 @@ use tokio::{sync::watch, task::JoinHandle};
 
 use super::{Page, ViewportFrames};
 
+/// Device-pixel height of an independently updated viewport band.
+pub const VIEWPORT_BAND_HEIGHT: u32 = 256;
+
+struct ViewportSlot {
+    bytes: Arc<Vec<u8>>,
+    versions: Option<Arc<[u64]>>,
+}
+
+#[derive(Clone)]
+struct ViewportPixels {
+    bytes: Arc<Vec<u8>>,
+    band_versions: Arc<[u64]>,
+}
+
 /// Three caller-provided buffers for the visible frame, a reader, and a writer.
 pub struct ViewportBuffers {
     layout: RasterBufferLayout,
-    storage: [Arc<Vec<u8>>; 3],
+    storage: [ViewportSlot; 3],
+    last_frame: Option<RendererViewportFrame>,
+    version: u64,
+    band_versions: Arc<[u64]>,
 }
 
 impl ViewportBuffers {
@@ -42,27 +60,84 @@ impl ViewportBuffers {
         );
         Ok(Self {
             layout,
-            storage: storage.map(Arc::new),
+            storage: storage.map(|bytes| ViewportSlot {
+                bytes: Arc::new(bytes),
+                versions: None,
+            }),
+            last_frame: None,
+            version: 0,
+            band_versions: vec![0; layout.height.div_ceil(VIEWPORT_BAND_HEIGHT) as usize].into(),
         })
     }
 
-    fn paint(&mut self, frame: &RendererViewportFrame) -> Result<Option<Arc<Vec<u8>>>> {
+    fn paint(&mut self, frame: &RendererViewportFrame) -> Result<Option<ViewportPixels>> {
         let Some(snapshot) = &frame.snapshot else {
+            self.last_frame = None;
             return Ok(None);
         };
+        let previous = self
+            .last_frame
+            .as_ref()
+            .filter(|last| {
+                last.document == frame.document && last.viewport_revision == frame.viewport_revision
+            })
+            .and_then(|last| last.snapshot.as_deref());
+        let damage = previous.map_or(0..self.layout.height, |previous| {
+            raster_damage_rows(previous, snapshot, self.layout)
+        });
+        let mut versions = Arc::clone(&self.band_versions);
+        if !damage.is_empty() {
+            self.version = self
+                .version
+                .checked_add(1)
+                .context("viewport band version exhausted")?;
+            let first = damage.start / VIEWPORT_BAND_HEIGHT;
+            let limit = damage.end.div_ceil(VIEWPORT_BAND_HEIGHT);
+            Arc::make_mut(&mut versions)[first as usize..limit as usize].fill(self.version);
+        }
         for slot in &mut self.storage {
-            if let Some(bytes) = Arc::get_mut(slot) {
+            if let Some(bytes) = Arc::get_mut(&mut slot.bytes) {
                 bytes.resize(self.layout.byte_len, 0);
-                let layout = raster_snapshot_into(snapshot, bytes, RasterPixelFormat::Bgra8)?;
+                // A free slot may be older than the latest presented frame.
+                // Track its actual pixels independently of the watch channel.
+                let rows = rows_to_repaint(
+                    slot.versions.take().as_deref(),
+                    &versions,
+                    self.layout.height,
+                );
+                let layout =
+                    raster_snapshot_rows_into(snapshot, bytes, RasterPixelFormat::Bgra8, rows)?;
                 anyhow::ensure!(
                     layout == self.layout,
                     "snapshot and viewport buffer sizes differ"
                 );
-                return Ok(Some(Arc::clone(slot)));
+                slot.versions = Some(versions.clone());
+                self.last_frame = Some(frame.clone());
+                self.band_versions = versions.clone();
+                return Ok(Some(ViewportPixels {
+                    bytes: slot.bytes.clone(),
+                    band_versions: versions,
+                }));
             }
         }
         anyhow::bail!("no writable viewport buffer")
     }
+}
+
+fn rows_to_repaint(previous: Option<&[u64]>, next: &[u64], height: u32) -> Range<u32> {
+    let Some(previous) = previous else {
+        return 0..height;
+    };
+    let mut changed = previous
+        .iter()
+        .zip(next)
+        .enumerate()
+        .filter_map(|(index, (a, b))| (a != b).then_some(index as u32));
+    let Some(first) = changed.next() else {
+        return 0..0;
+    };
+    let last = changed.next_back().unwrap_or(first);
+    first * VIEWPORT_BAND_HEIGHT..((last + 1) * VIEWPORT_BAND_HEIGHT).min(height)
 }
 
 /// A readable view of the latest completed BGRA frame.
@@ -72,6 +147,8 @@ pub struct ViewportFrameRef<'a> {
     pub sequence: u64,
     pub layout: RasterBufferLayout,
     pub pixels: Option<&'a [u8]>,
+    /// Versions of successive full-width bands, valid for this viewport revision.
+    pub band_versions: &'a [u64],
 }
 
 #[derive(Clone)]
@@ -80,14 +157,14 @@ struct ReadyFrame {
     viewport_revision: u64,
     sequence: u64,
     layout: RasterBufferLayout,
-    pixels: Option<Arc<Vec<u8>>>,
+    pixels: Option<ViewportPixels>,
 }
 
 impl ReadyFrame {
     fn new(
         frame: &RendererViewportFrame,
         layout: RasterBufferLayout,
-        pixels: Option<Arc<Vec<u8>>>,
+        pixels: Option<ViewportPixels>,
     ) -> Self {
         Self {
             document: frame.document,
@@ -104,14 +181,17 @@ struct OutputState {
     binding: u64,
     frame: Option<ReadyFrame>,
     cursor: Option<RendererViewportCursor>,
+    display_tick_request: Option<u64>,
 }
 
 impl OutputState {
     fn advance_binding(&mut self) -> bool {
         self.binding += 1;
-        let cleared = self.frame.is_some() || self.cursor.is_some();
+        let cleared =
+            self.frame.is_some() || self.cursor.is_some() || self.display_tick_request.is_some();
         self.frame = None;
         self.cursor = None;
+        self.display_tick_request = None;
         cleared
     }
 }
@@ -143,6 +223,10 @@ impl ViewportOutput {
         self.state.lock().cursor
     }
 
+    pub fn display_tick_request(&self) -> Option<u64> {
+        self.state.lock().display_tick_request
+    }
+
     /// Reads a completed frame without waiting for rasterization. A callback
     /// pins one slot and does its work outside the output-state lock.
     pub fn read<R>(&self, read: impl FnOnce(ViewportFrameRef<'_>) -> R) -> Option<R> {
@@ -153,17 +237,22 @@ impl ViewportOutput {
             viewport_revision: frame.viewport_revision,
             sequence: frame.sequence,
             layout: frame.layout,
-            pixels: frame.pixels.as_ref().map(|bytes| bytes.as_slice()),
+            pixels: frame.pixels.as_ref().map(|pixels| pixels.bytes.as_slice()),
+            band_versions: frame
+                .pixels
+                .as_ref()
+                .map_or(&[], |pixels| pixels.band_versions.as_ref()),
         }))
     }
 
-    fn bind(&self) -> u64 {
-        let (binding, cleared) = {
+    fn bind(&self, display_tick_request: Option<u64>) -> u64 {
+        let (binding, changed) = {
             let mut state = self.state.lock();
             let cleared = state.advance_binding();
-            (state.binding, cleared)
+            state.display_tick_request = display_tick_request;
+            (state.binding, cleared || display_tick_request.is_some())
         };
-        if cleared {
+        if changed {
             self.changes.send_replace(());
         }
         binding
@@ -189,6 +278,15 @@ impl ViewportOutput {
         }
     }
 
+    fn publish_display_tick_request(&self, binding: u64, request: Option<u64>) {
+        let mut state = self.state.lock();
+        if state.binding == binding && state.display_tick_request != request {
+            state.display_tick_request = request;
+            drop(state);
+            self.changes.send_replace(());
+        }
+    }
+
     fn publish(&self, binding: u64, frame: Option<ReadyFrame>) {
         let mut state = self.state.lock();
         if state.binding == binding && (state.frame.is_some() || frame.is_some()) {
@@ -202,6 +300,7 @@ impl ViewportOutput {
 /// Editor state associated with the subscribed viewport's painted document.
 pub struct ViewportState {
     pub document: RendererDocumentLifecycleIdentity,
+    pub sequence: u64,
     pub editor: Option<RendererViewportEditor>,
 }
 
@@ -229,6 +328,11 @@ impl BufferedViewportFrames {
                     let cursor = *self.frames.cursor.borrow_and_update();
                     self.output.publish_cursor(self.binding, cursor);
                 }
+                request = self.frames.display_tick_requests.changed() => {
+                    request?;
+                    let request = *self.frames.display_tick_requests.borrow_and_update();
+                    self.output.publish_display_tick_request(self.binding, request);
+                }
             }
         }
     }
@@ -240,6 +344,7 @@ impl BufferedViewportFrames {
             .as_ref()
             .map(|frame| ViewportState {
                 document: frame.document,
+                sequence: frame.sequence,
                 editor: frame.editor.clone(),
             })
     }
@@ -284,14 +389,14 @@ impl Page {
             buffers.layout == ViewportBuffers::layout_for(surface)?,
             "buffer layout does not match the viewport",
         );
-        let frames = self
+        let mut frames = self
             .subscribe_viewport_frames_with_pointer(
                 surface,
                 viewport_revision,
                 initial_pointer_position,
             )
             .await?;
-        let binding = output.bind();
+        let binding = output.bind(*frames.display_tick_requests.borrow_and_update());
         let rasterizer = tokio::spawn(rasterize_frames(
             frames.updates.clone(),
             buffers,
@@ -381,5 +486,25 @@ async fn rasterize_frames(
         if snapshots.changed().await.is_err() {
             break;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn viewport_damage_checks_all_versions_of_a_stale_slot() {
+        let height = 700;
+        assert_eq!(rows_to_repaint(None, &[1, 2, 3], height), 0..700);
+        assert_eq!(rows_to_repaint(Some(&[1, 2, 3]), &[1, 2, 3], height), 0..0);
+        assert_eq!(
+            rows_to_repaint(Some(&[1, 2, 3]), &[1, 5, 6], height),
+            256..700
+        );
+        assert_eq!(
+            rows_to_repaint(Some(&[1, 2, 3]), &[5, 2, 6], height),
+            0..700
+        );
     }
 }

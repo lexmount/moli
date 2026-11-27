@@ -42,12 +42,16 @@ struct DocumentWriteParserMutationOwner<'a, 'scope, 'pin> {
 #[derive(Clone, Copy)]
 enum DocumentWriteParserMutationTarget {
     LiveDocument,
+    DetachedDocument(DomHandle),
     DetachedFragment,
 }
 
 impl DocumentWriteParserMutationOwner<'_, '_, '_> {
-    fn targets_live_document(&self) -> bool {
-        matches!(self.target, DocumentWriteParserMutationTarget::LiveDocument)
+    fn publishes_dom_mutations(&self) -> bool {
+        !matches!(
+            self.target,
+            DocumentWriteParserMutationTarget::DetachedFragment
+        )
     }
 }
 
@@ -55,7 +59,7 @@ impl LiveDocumentParserOwner for DocumentWriteParserMutationOwner<'_, '_, '_> {}
 
 impl ParserMutationEffectConsumer for DocumentWriteParserMutationOwner<'_, '_, '_> {
     fn consume_parser_mutation_effects(&mut self, effects: DomMutationEffects) {
-        if !self.targets_live_document() {
+        if !self.publishes_dom_mutations() {
             return;
         }
         self.runtime
@@ -66,7 +70,7 @@ impl ParserMutationEffectConsumer for DocumentWriteParserMutationOwner<'_, '_, '
             );
     }
     fn finish_parser_dom_mutations(&mut self) -> std::ops::ControlFlow<()> {
-        if self.targets_live_document() {
+        if matches!(self.target, DocumentWriteParserMutationTarget::LiveDocument) {
             self.runtime
                 .run_pending_parser_post_step_runtime_work(self.scope, self.host_ptr);
         }
@@ -171,7 +175,7 @@ impl ParserDomReadConsumer for DocumentWriteParserMutationOwner<'_, '_, '_> {
 
 impl ParserDomMutationConsumer for DocumentWriteParserMutationOwner<'_, '_, '_> {
     fn apply_parser_dom_mutation(&mut self, mutation: ParserDomMutation) {
-        if !self.targets_live_document() {
+        if !self.publishes_dom_mutations() {
             let _ = mutation
                 .apply_to_detached_dom_host(self.runtime.dom_host_mut_for_active_parser_step());
             return;
@@ -282,15 +286,21 @@ impl ParserDomMutationConsumer for DocumentWriteParserMutationOwner<'_, '_, '_> 
     }
 
     fn push_parse_error(&mut self, error: String) {
-        if self.targets_live_document() {
+        if matches!(self.target, DocumentWriteParserMutationTarget::LiveDocument) {
             self.runtime.push_parse_error_in_live_dom_host(error);
         }
     }
 
     fn set_html_quirks_mode_for_parser(&mut self, quirks_mode: QuirksMode) {
-        if self.targets_live_document() {
-            self.runtime
-                .set_html_quirks_mode_for_parser_in_live_dom_host(quirks_mode);
+        match self.target {
+            DocumentWriteParserMutationTarget::LiveDocument => self
+                .runtime
+                .set_html_quirks_mode_for_parser_in_live_dom_host(quirks_mode),
+            DocumentWriteParserMutationTarget::DetachedDocument(document) => self
+                .runtime
+                .dom_host_mut_for_active_parser_step()
+                .set_html_quirks_mode_for_parser_document(document, quirks_mode),
+            DocumentWriteParserMutationTarget::DetachedFragment => {}
         }
     }
 
@@ -314,6 +324,12 @@ impl ParserDomMutationConsumer for DocumentWriteParserMutationOwner<'_, '_, '_> 
         template_id: DomHandle,
         attrs: Vec<crate::dom::native::Attribute>,
     ) -> bool {
+        if matches!(
+            self.target,
+            DocumentWriteParserMutationTarget::DetachedDocument(_)
+        ) {
+            return false;
+        }
         self.runtime
             .attach_declarative_shadow_for_parser_in_live_dom_host(host_id, template_id, attrs)
     }
@@ -364,6 +380,105 @@ impl ParserElementCreationConsumer for DocumentWriteParserMutationOwner<'_, '_, 
 // "HTML string -> parser output -> document.write/fragment effects" rather than mixing two different
 // mutation models in one refactor slice.
 impl DocumentRuntime {
+    pub(crate) fn open_detached_document_write_stream(
+        &mut self,
+        scope: &mut v8::PinScope<'_, '_>,
+        host_ptr: *mut PageScriptHost,
+        document: DomHandle,
+    ) {
+        let Some(url) = self.dom_host().document_url_for_handle(document).cloned() else {
+            return;
+        };
+        self.detached_document_write_streams.remove(&document);
+        self.remove_all_children_for_document_replacement(scope, host_ptr, document);
+        self.dom_host_mut()
+            .set_html_quirks_mode_for_parser_document(document, QuirksMode::NoQuirks);
+        self.dom_host_mut()
+            .set_document_ready_state_for_handle(document, DocumentReadyState::Loading);
+        let stream =
+            HtmlParser::with_scripting_enabled(false).start_live_document_root(url, document);
+        self.detached_document_write_streams
+            .insert(document, stream);
+    }
+
+    pub(crate) fn write_detached_document(
+        &mut self,
+        scope: &mut v8::PinScope<'_, '_>,
+        host_ptr: *mut PageScriptHost,
+        document: DomHandle,
+        input: &str,
+    ) {
+        if !self.detached_document_write_streams.contains_key(&document) {
+            self.open_detached_document_write_stream(scope, host_ptr, document);
+        }
+        let Some(stream) = self.detached_document_write_streams.remove(&document) else {
+            return;
+        };
+        self.with_dom_host_parse_step(|runtime| {
+            let mut owner = DocumentWriteParserMutationOwner {
+                runtime,
+                scope,
+                host_ptr,
+                target: DocumentWriteParserMutationTarget::DetachedDocument(document),
+            };
+            // Keep the parser's open elements even if the caller moves its
+            // nodes into another Document between writes.
+            let mut chunk = input;
+            loop {
+                let outcome = stream
+                    .pump_parser_step_with_runtime_dom_consumer_without_element_creation(
+                        chunk, &mut owner,
+                    );
+                if let ParserPumpStep::Yield(ParserYield::Script(ref script)) = outcome.result {
+                    let (node, _, _) = script.start_position();
+                    owner.mark_script_already_started_for_parser(node);
+                }
+                if matches!(outcome.result, ParserPumpStep::InputDrained) {
+                    break;
+                }
+                chunk = "";
+            }
+        });
+        let null_registry_elements =
+            stream.take_parser_stream_null_custom_element_registry_elements();
+        self.detached_document_write_streams
+            .insert(document, stream);
+        custom_elements::apply_parser_created_null_registry_associations(
+            host_ptr,
+            &null_registry_elements,
+        );
+        unsafe { &mut *host_ptr }.resync_child_browsing_contexts(scope);
+        self.run_pending_parser_post_step_runtime_work(scope, host_ptr);
+    }
+
+    pub(crate) fn close_detached_document_write_stream(
+        &mut self,
+        scope: &mut v8::PinScope<'_, '_>,
+        host_ptr: *mut PageScriptHost,
+        document: DomHandle,
+    ) {
+        let Some(stream) = self.detached_document_write_streams.remove(&document) else {
+            return;
+        };
+        let finish = self.with_dom_host_parse_step(|runtime| {
+            let mut owner = DocumentWriteParserMutationOwner {
+                runtime,
+                scope,
+                host_ptr,
+                target: DocumentWriteParserMutationTarget::DetachedDocument(document),
+            };
+            stream.finish_with_runtime_dom_consumer_without_element_creation(&mut owner)
+        });
+        custom_elements::apply_parser_created_null_registry_associations(
+            host_ptr,
+            &finish.parser_created_null_registry_elements,
+        );
+        self.dom_host_mut()
+            .set_document_ready_state_for_handle(document, DocumentReadyState::Complete);
+        unsafe { &mut *host_ptr }.resync_child_browsing_contexts(scope);
+        self.run_pending_parser_post_step_runtime_work(scope, host_ptr);
+    }
+
     pub(crate) fn start_root_document_parser_stream(&mut self) {
         debug_assert!(
             self.root_document_parser.is_none(),
@@ -457,13 +572,10 @@ impl DocumentRuntime {
                 .discovery_signals
                 .modulepreload_link_candidates,
         );
-        let completed_stylesheet_clients = self.note_discovered_document_owned_stylesheet_inputs(
-            finish_signals.discovery_signals.stylesheet_inputs.iter(),
-        );
-        self.settle_stylesheet_link_clients_in_current_scope(
+        self.accept_parser_stylesheet_inputs_in_current_scope(
             scope,
             host_ptr,
-            completed_stylesheet_clients,
+            &finish_signals.discovery_signals.stylesheet_inputs,
         );
         unsafe { &mut *host_ptr }.resync_child_browsing_contexts(scope);
         self.run_pending_parser_post_step_runtime_work(scope, host_ptr);
@@ -1016,15 +1128,13 @@ impl DocumentRuntime {
             .is_some_and(|pending| !pending.blocking_signatures.is_empty())
     }
 
-    pub(crate) fn document_write_stylesheet_blocked_script_is_ready(&mut self) -> bool {
-        let Some(signatures) = self
-            .pending_parser_insertion()
-            .filter(|pending| !pending.blocking_signatures.is_empty())
-            .map(|pending| pending.blocking_signatures.clone())
-        else {
-            return false;
-        };
-        !self.has_pending_parser_script_blocking_stylesheet_signatures(signatures.iter())
+    pub(crate) fn document_write_stylesheet_blocked_script_is_ready(&self) -> bool {
+        self.pending_parser_insertion().is_some_and(|pending| {
+            !pending.blocking_signatures.is_empty()
+                && !self.has_pending_parser_script_blocking_stylesheet_signatures(
+                    &pending.blocking_signatures,
+                )
+        })
     }
 
     fn allocate_document_write_external_script_load_id(&mut self) -> u64 {
@@ -1801,7 +1911,7 @@ impl DocumentRuntime {
         host_ptr: *mut PageScriptHost,
     ) -> Option<DocumentWriteExternalScriptLoadApplication> {
         let signatures = self.pending_parser_insertion()?.blocking_signatures.clone();
-        if self.has_pending_parser_script_blocking_stylesheet_signatures(signatures.iter()) {
+        if self.prepare_parser_stylesheet_gate_in_current_scope(scope, host_ptr, &signatures) {
             return None;
         }
         let pending = self.pending_parser_insertion_mut()?;
@@ -2113,7 +2223,7 @@ impl DocumentRuntime {
                 }
             }
             PreparedImportMapSource::ExternalUnsupported => {
-                let _ = self.enqueue_script_event_lifecycle_work(
+                self.enqueue_script_event_lifecycle_work(
                     ScriptEventKind::Error,
                     &host_script_handle,
                 );
@@ -2160,8 +2270,10 @@ impl DocumentRuntime {
                 blocking_signatures_before,
                 script,
             } => {
-                if self.has_pending_parser_script_blocking_stylesheet_signatures(
-                    blocking_signatures_before.iter(),
+                if self.prepare_parser_stylesheet_gate_in_current_scope(
+                    scope,
+                    host_ptr,
+                    &blocking_signatures_before,
                 ) {
                     if matches!(script.source, crate::planning::ScriptSource::External) {
                         self.start_document_write_stylesheet_blocked_external_script(
@@ -2302,6 +2414,7 @@ impl DocumentRuntime {
         // pump frame, matching Blink's nested PumpTokenizer session boundary.
         let _pump_guard = parser_bridge.begin_pump();
         let _parser_insertion_session = self.enter_parser_insertion_session();
+        let document_incarnation = self.document_incarnation.clone();
         let mut begin_insertion = !chunk.is_empty();
 
         loop {
@@ -2344,17 +2457,16 @@ impl DocumentRuntime {
                 discovered_modulepreload_link_candidates,
             );
             self.run_pending_parser_post_step_runtime_work(scope, host_ptr);
+            if self.document_incarnation != document_incarnation {
+                return true;
+            }
             chunk.clear();
             begin_insertion = false;
 
-            let completed_stylesheet_clients = self
-                .note_discovered_document_owned_stylesheet_inputs(
-                    discovered_stylesheet_inputs.iter(),
-                );
-            self.settle_stylesheet_link_clients_in_current_scope(
+            self.accept_parser_stylesheet_inputs_in_current_scope(
                 scope,
                 host_ptr,
-                completed_stylesheet_clients,
+                &discovered_stylesheet_inputs,
             );
 
             match result {
@@ -2376,18 +2488,17 @@ impl DocumentRuntime {
                         .iter()
                         .map(|input| input.signature().clone())
                         .collect::<HashSet<_>>();
-                    if !blocking_signatures.is_empty()
-                        && self.has_pending_parser_script_blocking_stylesheet_signatures(
-                            blocking_signatures.iter(),
-                        )
-                        && self.suspend_document_write_stylesheet_parser_pause(
-                            host_ptr,
-                            document_handle,
-                            parser_bridge,
-                            pause.node_id,
-                            blocking_signatures,
-                        )
-                    {
+                    if self.prepare_parser_stylesheet_gate_in_current_scope(
+                        scope,
+                        host_ptr,
+                        &blocking_signatures,
+                    ) && self.suspend_document_write_stylesheet_parser_pause(
+                        host_ptr,
+                        document_handle,
+                        parser_bridge,
+                        pause.node_id,
+                        blocking_signatures,
+                    ) {
                         return true;
                     }
                 }

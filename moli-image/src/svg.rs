@@ -10,6 +10,8 @@ use std::{
     sync::{Arc, LazyLock},
 };
 
+use roxmltree::{Document, Node, ParsingOptions};
+
 pub use usvg::ElementStyleProperty as SvgStyleProperty;
 /// Shared final style profile, applied after matching the original SVG XML.
 pub type SvgElementStyle = Arc<[SvgStyleProperty]>;
@@ -34,6 +36,8 @@ pub struct SvgScene {
 /// larger tree. Keeping this below the raster input limit bounds that expansion
 /// before `usvg` receives attacker-controlled bytes.
 pub const MAX_ENCODED_SVG_BYTES: usize = 16 * 1024 * 1024;
+/// Maximum XML element nesting admitted to SVG scene conversion.
+pub const MAX_SVG_ELEMENT_DEPTH: usize = 5_000;
 
 const DEFAULT_OBJECT_WIDTH: f32 = 300.0;
 const DEFAULT_OBJECT_HEIGHT: f32 = 150.0;
@@ -60,6 +64,23 @@ impl SvgFonts {
         Self {
             database: Arc::new(database),
             default_family,
+        }
+    }
+
+    fn options(&self, default_size: usvg::Size) -> usvg::Options<'static> {
+        usvg::Options {
+            fontdb: self.database.clone(),
+            // usvg resolves a missing font family before calling the resolver.
+            font_family: self.default_family.clone(),
+            font_resolver: self.resolver(),
+            default_size,
+            // Keep resource fetching and decoding in Moli's image loader.
+            // Skip the converter's built-in data URL and filesystem loading.
+            image_href_resolver: usvg::ImageHrefResolver {
+                resolve_data: Box::new(|_, _, _| None),
+                resolve_string: Box::new(|_, _| None),
+            },
+            ..Default::default()
         }
     }
 
@@ -104,6 +125,16 @@ impl SvgFonts {
 
 static SVG_FONTS: LazyLock<SvgFonts> = LazyLock::new(|| {
     let mut database = usvg::fontdb::Database::new();
+    #[cfg(target_env = "ohos")]
+    {
+        for data in moli_system_fonts::ohos_system_font_data() {
+            database.load_font_source(usvg::fontdb::Source::Binary(data));
+        }
+        database.set_sans_serif_family("HarmonyOS Sans");
+        database.set_serif_family("Noto Serif");
+        database.set_monospace_family("Noto Sans Mono");
+    }
+    #[cfg(not(target_env = "ohos"))]
     database.load_system_fonts();
     SvgFonts::from_database(database)
 });
@@ -248,6 +279,10 @@ pub enum SvgDecodeError {
     InvalidConcreteSize,
     #[error("SVG style profile count {actual} does not match {expected} serialized elements")]
     StyleElementCount { actual: usize, expected: usize },
+    #[error("SVG element nesting exceeds the supported depth of {limit}")]
+    ElementNestingDepthExceeded { limit: usize },
+    #[error("SVG conversion worker failed: {0}")]
+    ConversionWorker(String),
     #[error("SVG tree could not be parsed: {0}")]
     Parse(#[from] usvg::Error),
 }
@@ -311,19 +346,28 @@ pub fn decode_inline_svg_scene(
     styles: &[Option<SvgElementStyle>],
     viewport: (f32, f32),
 ) -> Result<SvgScene, SvgDecodeError> {
-    check_encoded_budget(bytes)?;
-    let source = std::str::from_utf8(bytes).map_err(|_| SvgDecodeError::InvalidUtf8)?;
-    let xml = usvg::roxmltree::Document::parse_with_options(
-        source,
-        usvg::roxmltree::ParsingOptions {
-            allow_dtd: true,
-            ..Default::default()
-        },
-    )
-    .map_err(|error| SvgDecodeError::MalformedXml(error.to_string()))?;
+    decode_inline_svg(bytes, styles, viewport, true)
+}
+
+/// Decodes the paint resource without collecting per-element geometry.
+pub fn decode_inline_svg_image(
+    bytes: &[u8],
+    styles: &[Option<SvgElementStyle>],
+    viewport: (f32, f32),
+) -> Result<SvgImage, SvgDecodeError> {
+    decode_inline_svg(bytes, styles, viewport, false).map(|scene| scene.image)
+}
+
+fn decode_inline_svg(
+    bytes: &[u8],
+    styles: &[Option<SvgElementStyle>],
+    viewport: (f32, f32),
+    collect_object_geometry: bool,
+) -> Result<SvgScene, SvgDecodeError> {
+    let (xml, depth) = parse_svg_xml(bytes)?;
     let elements = xml
         .descendants()
-        .filter(|node| node.is_element())
+        .filter(Node::is_element)
         .collect::<Vec<_>>();
     if elements.len() != styles.len() {
         return Err(SvgDecodeError::StyleElementCount {
@@ -338,26 +382,19 @@ pub fn decode_inline_svg_scene(
         .zip(styles)
         .filter_map(|(node, style)| style.clone().map(|style| (node.id(), style)))
         .collect();
-    let sources = elements
-        .iter()
-        .enumerate()
-        .map(|(index, node)| (node.id(), index))
-        .collect::<HashMap<_, _>>();
-    let fonts = &SVG_FONTS;
+    let sources = collect_object_geometry.then(|| {
+        elements
+            .iter()
+            .enumerate()
+            .map(|(index, node)| (node.id(), index))
+            .collect::<HashMap<_, _>>()
+    });
     let options = usvg::Options {
-        fontdb: fonts.database.clone(),
-        font_family: fonts.default_family.clone(),
-        font_resolver: fonts.resolver(),
-        default_size,
         element_styles: Some(Arc::new(overrides)),
-        collect_object_geometry: true,
-        image_href_resolver: usvg::ImageHrefResolver {
-            resolve_data: Box::new(|_, _, _| None),
-            resolve_string: Box::new(|_, _| None),
-        },
-        ..Default::default()
+        collect_object_geometry,
+        ..SVG_FONTS.options(default_size)
     };
-    let mut tree = usvg::Tree::from_xmltree(&xml, &options)?;
+    let mut tree = convert_svg_tree(&xml, &options, depth)?;
     let objects = tree
         .take_object_geometry()
         .into_iter()
@@ -365,7 +402,7 @@ pub fn decode_inline_svg_scene(
             let rect = geometry.bounding_box;
             let t = geometry.transform;
             Some(SvgObjectGeometry {
-                element_index: *sources.get(&geometry.source)?,
+                element_index: *sources.as_ref()?.get(&geometry.source)?,
                 bounds: [rect.x(), rect.y(), rect.width(), rect.height()],
                 transform: [t.sx, t.ky, t.kx, t.sy, t.tx, t.ty],
             })
@@ -397,27 +434,11 @@ fn decode_svg_image_with_fonts(
     metadata: SvgImageMetadata,
     fonts: &SvgFonts,
 ) -> Result<SvgImage, SvgDecodeError> {
-    check_encoded_budget(bytes)?;
+    let (xml, depth) = parse_svg_xml(bytes)?;
     let default_size = usvg::Size::from_wh(metadata.concrete_width, metadata.concrete_height)
         .ok_or(SvgDecodeError::InvalidConcreteSize)?;
-    let options = usvg::Options {
-        fontdb: fonts.database.clone(),
-        // usvg resolves a missing `font-family` name before consulting
-        // `font_resolver`, so the default must name an installed family.
-        font_family: fonts.default_family.clone(),
-        font_resolver: fonts.resolver(),
-        default_size,
-        // The default usvg resolver accepts data URLs and local filesystem
-        // paths. Image resources must stay behind Moli's fetch and
-        // decode owner, so Phase 10 deliberately omits nested raster/SVG
-        // images instead of reading or decoding them inside this parser.
-        image_href_resolver: usvg::ImageHrefResolver {
-            resolve_data: Box::new(|_, _, _| None),
-            resolve_string: Box::new(|_, _| None),
-        },
-        ..Default::default()
-    };
-    let tree = usvg::Tree::from_data(bytes, &options)?;
+    let options = fonts.options(default_size);
+    let tree = convert_svg_tree(&xml, &options, depth)?;
     Ok(SvgImage { tree, metadata })
 }
 
@@ -448,6 +469,72 @@ fn check_encoded_budget(bytes: &[u8]) -> Result<(), SvgDecodeError> {
         });
     }
     Ok(())
+}
+
+fn parse_svg_xml(bytes: &[u8]) -> Result<(Document<'_>, usize), SvgDecodeError> {
+    check_encoded_budget(bytes)?;
+    let source = std::str::from_utf8(bytes).map_err(|_| SvgDecodeError::InvalidUtf8)?;
+    let xml = Document::parse_with_options(
+        source,
+        ParsingOptions {
+            allow_dtd: true,
+            ..Default::default()
+        },
+    )
+    .map_err(|error| SvgDecodeError::MalformedXml(error.to_string()))?;
+
+    // roxmltree 0.21.2 parses element nesting iteratively. Check the expanded
+    // tree in document order before passing it to recursive SVG conversion.
+    let mut previous = xml.root();
+    let mut depth = 0usize;
+    let mut max_depth = 0;
+    for element in xml.descendants().filter(Node::is_element) {
+        let parent = element.parent().expect("an XML element has a parent");
+        while previous != parent {
+            previous = previous
+                .parent()
+                .expect("the next element's parent is on the current path");
+            depth -= 1;
+        }
+        depth += 1;
+        if depth > MAX_SVG_ELEMENT_DEPTH {
+            return Err(SvgDecodeError::ElementNestingDepthExceeded {
+                limit: MAX_SVG_ELEMENT_DEPTH,
+            });
+        }
+        max_depth = max_depth.max(depth);
+        previous = element;
+    }
+    Ok((xml, max_depth))
+}
+
+fn convert_svg_tree(
+    xml: &Document<'_>,
+    options: &usvg::Options<'_>,
+    depth: usize,
+) -> Result<usvg::Tree, SvgDecodeError> {
+    const CALLER_STACK_DEPTH_LIMIT: usize = 128;
+    const MIN_WORKER_STACK_BYTES: usize = 16 * 1024 * 1024;
+    const WORKER_STACK_BYTES_PER_ELEMENT: usize = 8 * 1024;
+
+    let convert = || usvg::Tree::from_xmltree(xml, options).map_err(SvgDecodeError::from);
+    // usvg recurses through the expanded element tree during conversion.
+    // Keep shallow images on the caller's stack and reserve room for deep images.
+    if depth <= CALLER_STACK_DEPTH_LIMIT {
+        return convert();
+    }
+    // The text chunk collector's debug stack grows by over 6 KiB per nested
+    // tspan. Size the worker from the validated depth to cover long text trees.
+    let stack_size = (depth * WORKER_STACK_BYTES_PER_ELEMENT).max(MIN_WORKER_STACK_BYTES);
+    std::thread::scope(|scope| {
+        std::thread::Builder::new()
+            .name("svg_scene".into())
+            .stack_size(stack_size)
+            .spawn_scoped(scope, convert)
+            .map_err(|error| SvgDecodeError::ConversionWorker(error.to_string()))?
+            .join()
+            .map_err(|_| SvgDecodeError::ConversionWorker("thread panicked".into()))?
+    })
 }
 
 #[derive(Default)]
@@ -537,6 +624,101 @@ fn rounded_dimension(value: f32) -> Option<u32> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn svg_element_depth_is_bounded_before_scene_construction() {
+        let svg = |groups| {
+            format!(
+                "<svg xmlns='http://www.w3.org/2000/svg'>{}<rect width='1' height='1'/>{}</svg>",
+                "<g>".repeat(groups),
+                "</g>".repeat(groups)
+            )
+        };
+        let at_limit = svg(4_998);
+        assert_eq!(parse_svg_xml(at_limit.as_bytes()).unwrap().1, 5_000);
+        let deep = svg(4_999);
+        assert!(matches!(
+            decode_svg_image(deep.as_bytes()),
+            Err(SvgDecodeError::ElementNestingDepthExceeded { .. })
+        ));
+        assert!(matches!(
+            decode_inline_svg_scene(deep.as_bytes(), &[], (100.0, 100.0)),
+            Err(SvgDecodeError::ElementNestingDepthExceeded { .. })
+        ));
+    }
+
+    #[test]
+    fn svg_element_depth_includes_expanded_entity_content() {
+        let svg = |groups| {
+            format!(
+                r#"<!DOCTYPE svg [<!ENTITY nested "{}<rect id='shape' width='1' height='1'/>{}">]>
+                <svg xmlns="http://www.w3.org/2000/svg" width="10" height="10">&nested;</svg>"#,
+                "<g opacity='0.999'>".repeat(groups),
+                "</g>".repeat(groups)
+            )
+        };
+        let at_limit = svg(4_998);
+        assert_eq!(parse_svg_xml(at_limit.as_bytes()).unwrap().1, 5_000);
+
+        let groups = 768;
+        let deep_renderable = svg(groups);
+        let styles = vec![None; groups + 2];
+        let image = decode_svg_image(deep_renderable.as_bytes()).unwrap();
+        assert!(image.tree().node_by_id("shape").is_some());
+        let scene =
+            decode_inline_svg_scene(deep_renderable.as_bytes(), &styles, (10.0, 10.0)).unwrap();
+        assert!(scene.image.tree().node_by_id("shape").is_some());
+
+        let over_limit = svg(4_999);
+        assert!(matches!(
+            decode_svg_image(over_limit.as_bytes()),
+            Err(SvgDecodeError::ElementNestingDepthExceeded { limit: 5_000 })
+        ));
+        assert!(matches!(
+            decode_inline_svg_scene(over_limit.as_bytes(), &[], (10.0, 10.0)),
+            Err(SvgDecodeError::ElementNestingDepthExceeded { limit: 5_000 })
+        ));
+        assert!(matches!(
+            decode_inline_svg_image(over_limit.as_bytes(), &[], (10.0, 10.0)),
+            Err(SvgDecodeError::ElementNestingDepthExceeded { limit: 5_000 })
+        ));
+    }
+
+    #[test]
+    fn svg_text_reaches_the_xml_depth_limit() {
+        let svg = |spans| {
+            format!(
+                "<svg xmlns='http://www.w3.org/2000/svg' width='32' height='32'><text y='24' font-family='Moli Ahem'>{}M{}</text></svg>",
+                "<tspan>".repeat(spans),
+                "</tspan>".repeat(spans),
+            )
+        };
+        let at_limit = svg(4_998);
+        let bytes = at_limit.as_bytes();
+        let fonts = fonts_with_only_ahem();
+        let image = decode_svg_image_with_fonts(bytes, probe_svg_image(bytes).unwrap(), &fonts)
+            .expect("text at the SVG XML depth limit must convert");
+        let mut texts = Vec::new();
+        text_nodes(image.tree().root(), &mut texts);
+        assert_eq!(texts.len(), 1);
+        assert_eq!(texts[0].chunks()[0].text(), "M");
+        assert!(!texts[0].flattened().children().is_empty());
+
+        let styles = vec![None; MAX_SVG_ELEMENT_DEPTH];
+        decode_inline_svg_scene(bytes, &styles, (32.0, 32.0))
+            .expect("inline text at the SVG XML depth limit must convert");
+
+        let over_limit = svg(4_999);
+        for result in [
+            decode_svg_image(over_limit.as_bytes()).map(|_| ()),
+            decode_inline_svg_scene(over_limit.as_bytes(), &[], (32.0, 32.0)).map(|_| ()),
+        ] {
+            assert!(matches!(
+                result,
+                Err(SvgDecodeError::ElementNestingDepthExceeded { limit: 5_000 })
+            ));
+        }
+    }
 
     #[test]
     fn inline_scene_keeps_xml_identity_without_retaining_geometry_in_the_paint_tree() {

@@ -46,7 +46,6 @@ fn parses_explicit_fetch_command_with_compatibility_flags() {
         "--with-frames",
         "--strip-mode",
         "js,css,ui",
-        "--allow-file-urls",
         "--obey-robots",
         "--http-proxy",
         "http://proxy.internal:8080",
@@ -99,7 +98,6 @@ fn parses_explicit_fetch_command_with_compatibility_flags() {
             ],
             disable_js: true,
             disable_css: true,
-            allow_file_urls: true,
             with_base: true,
             with_frames: true,
             trace_network: false,
@@ -151,18 +149,21 @@ fn parses_explicit_fetch_command_with_compatibility_flags() {
                 text_track: false,
                 resource: false,
                 disable_subframes: false,
-                layout: false,
+                lazy: false,
                 realtime: false,
                 scrollbars: false,
                 cookie_file: Vec::new(),
                 document_start_script: Vec::new(),
                 document_start_script_file: Vec::new(),
                 block_private_networks: false,
+                block_file_urls: false,
+                block_host_file_access: false,
                 block_cidrs: None,
                 log_level: Some(LogLevel::Info),
                 log_filter_scopes: Some("http,event".to_owned()),
                 user_agent: None,
                 user_agent_suffix: Some("internal-tester".to_owned()),
+                accept_language: Vec::new(),
                 web_bot_auth_key_file: None,
                 web_bot_auth_keyid: None,
                 web_bot_auth_domain: None,
@@ -511,7 +512,6 @@ fn infers_fetch_mode_from_bare_url() {
             headers: vec![],
             disable_js: false,
             disable_css: false,
-            allow_file_urls: false,
             with_base: false,
             with_frames: false,
             trace_network: false,
@@ -558,7 +558,6 @@ fn parses_bare_dump_with_explicit_fetch_command_and_defaults_to_html() {
             headers: vec![],
             disable_js: false,
             disable_css: false,
-            allow_file_urls: false,
             with_base: false,
             with_frames: false,
             trace_network: false,
@@ -609,7 +608,6 @@ fn parses_header_flag_with_explicit_fetch_command() {
             }],
             disable_js: false,
             disable_css: false,
-            allow_file_urls: false,
             with_base: false,
             with_frames: false,
             trace_network: false,
@@ -1881,12 +1879,14 @@ fn layout_selects_on_demand_policy_for_fetch_and_serve() {
     for args in [
         vec!["moli", "fetch", "--layout", "https://example.com"],
         vec!["moli", "serve", "--layout"],
+        vec!["moli", "fetch", "--lazy", "https://example.com"],
+        vec!["moli", "serve", "--lazy"],
     ] {
         let cli = Cli::try_parse_from(normalize_args_for_compat(args)).unwrap();
         let config = AppConfig::from_cli(&cli).unwrap();
         assert_eq!(
             config.browser.layout_policy(),
-            moli_core::LayoutPolicy::OnDemand
+            moli_core::LayoutPolicy::Lazy
         );
     }
 }
@@ -1907,7 +1907,7 @@ fn scrollbars_are_opt_in_for_layout_fetch_and_serve() {
             assert_eq!(config.browser.scrollbars_hidden(), !visible);
             assert_eq!(
                 config.browser.layout_policy(),
-                moli_core::LayoutPolicy::OnDemand
+                moli_core::LayoutPolicy::Lazy
             );
         }
     }
@@ -2002,10 +2002,10 @@ fn parse_scrollbars_in_child_process() {
         assert!(!config.browser.scrollbars_hidden());
         assert_eq!(
             config.browser.layout_policy(),
-            moli_core::LayoutPolicy::OnDemand
+            moli_core::LayoutPolicy::Lazy
         );
     } else {
-        assert!(result.unwrap_err().to_string().contains("--layout"));
+        assert!(result.unwrap_err().to_string().contains("--lazy"));
     }
 }
 
@@ -2131,7 +2131,7 @@ fn parse_env_flags_in_child_process() {
             Commands::Serve(args) => args.common,
             Commands::Import(_) => panic!("expected fetch or serve command"),
         };
-        assert_eq!(common.layout, expected);
+        assert_eq!(common.lazy, expected);
         assert_eq!(common.scrollbars, expected_scrollbars);
         assert_eq!(common.resource, expected);
         assert_eq!(common.block_private_networks, expected);

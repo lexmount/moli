@@ -773,6 +773,15 @@ impl ResolvedLayoutStyle {
             specified_aspect_ratio,
         );
         let mut taffy = stylo_taffy::to_taffy_style(&computed);
+        if computed.clone_display().inside() == DisplayInside::WebkitBox {
+            use style::computed_values::_webkit_box_orient::T as BoxOrient;
+
+            taffy.display = TaffyDisplay::Flex;
+            taffy.flex_direction = match computed.clone__webkit_box_orient() {
+                BoxOrient::Vertical | BoxOrient::BlockAxis => taffy::FlexDirection::Column,
+                BoxOrient::Horizontal | BoxOrient::InlineAxis => taffy::FlexDirection::Row,
+            };
+        }
         taffy.size = Size {
             width: taffy_size_dimension(&position_style.width, taffy.size.width),
             height: taffy_size_dimension(&position_style.height, taffy.size.height),
@@ -1639,6 +1648,52 @@ impl ResolvedLayoutStyle {
         self.vertical_align
     }
 
+    /// Some paint damage can still change data baked into our published
+    /// geometry or resource references. Preserve those projection inputs.
+    pub(crate) fn can_repaint_with(&self, next: &Self) -> bool {
+        let (Some(old), Some(new)) = (&self.computed, &next.computed) else {
+            return false;
+        };
+        self.taffy == next.taffy
+            && self.display == next.display
+            && self.visible == next.visible
+            && self.pointer_events == next.pointer_events
+            && self.scrollbar_width == next.scrollbar_width
+            && self.scrollbar_gutter == next.scrollbar_gutter
+            && self.scrollbar_colors == next.scrollbar_colors
+            && self.generated_content == next.generated_content
+            && old.clone_background_image() == new.clone_background_image()
+    }
+
+    pub(crate) fn same_inline_preparation(&self, next: &Self) -> bool {
+        self.direction == next.direction
+            && self.writing_mode == next.writing_mode
+            && self.unicode_bidi == next.unicode_bidi
+            && self.white_space_collapse == next.white_space_collapse
+            && self.text_transform == next.text_transform
+            && self.include_used_font_metrics == next.include_used_font_metrics
+            && self.visible == next.visible
+            && self.vertical_align == next.vertical_align
+            && self.text_projection_deferred == next.text_projection_deferred
+            && self.legacy_line_clamp() == next.legacy_line_clamp()
+            && self.parley_text_style() == next.parley_text_style()
+    }
+
+    pub(crate) fn legacy_line_clamp(&self) -> Option<usize> {
+        let computed = self.computed.as_ref()?;
+        let style = computed.get_box();
+        let clamp = &style.line_clamp;
+        // Stylo adjusts a vertical legacy box to a flow root, preserving its
+        // original display so ordinary block boxes keep their existing flow.
+        if !clamp.webkit_legacy
+            || style.original_display.inside() != DisplayInside::WebkitBox
+            || computed.clone_display().inside() != DisplayInside::FlowRoot
+        {
+            return None;
+        }
+        usize::try_from(clamp.max_lines.lines_value()?.0).ok()
+    }
+
     pub(crate) fn parley_text_style(
         &self,
     ) -> parley::TextStyle<'static, 'static, crate::stylo_to_parley::TextBrush> {
@@ -2275,7 +2330,7 @@ fn classify_display(computed: &ComputedValues) -> LayoutDisplay {
                     LayoutDisplay::FlowRoot
                 }
             }
-            DisplayInside::Flex => {
+            DisplayInside::Flex | DisplayInside::WebkitBox => {
                 if outside == DisplayOutside::Inline {
                     LayoutDisplay::InlineFlex
                 } else {

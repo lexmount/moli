@@ -20,11 +20,12 @@ mod sticky;
 use coordinates::{BoxPlacement, resolve_coordinate_spaces};
 pub(crate) use paint_space::PaintSpace;
 pub(crate) use paint_view::PaintProjection;
-use paint_view::{BoxPaintMetadata, PaintMetadata};
-pub(crate) use scroll::ScrollProjection;
+use paint_view::{BoxPaintMetadata, InlineSvgPaint, PaintMetadata};
 use scroll::clamp_scroll_offset;
+pub(crate) use scroll::{ScrollProjection, ScrollTranslation};
 
 use std::{
+    cell::RefCell,
     collections::{HashMap, HashSet},
     fmt::Debug,
     hash::Hash,
@@ -33,7 +34,7 @@ use std::{
 
 use taffy::ResolveOrZero;
 
-use crate::layout_tree::{CssSizing, CssSizingBox, LayoutCoordinateSpace};
+use crate::layout_tree::{CssSizing, CssSizingBox, FrozenInlineSvgInputs, LayoutCoordinateSpace};
 use crate::overflow::{OverflowProjection, inset_rect, offset_rect, outset_rect};
 use crate::stacking::{PaintOrderEvent, build_paint_order};
 use crate::style::ResolvedLayoutTransform;
@@ -44,7 +45,8 @@ use crate::{
     LayoutFragmentBoxModel, LayoutFragmentId, LayoutFragmentKind, LayoutOutputBoxId,
     LayoutPassMetrics, LayoutPassResult, LayoutPoint, LayoutRect, LayoutScrollExtent,
     LayoutScrollbarAxis, LayoutScrollbarGeometry, LayoutSize, LayoutTransform2D, LayoutViewport,
-    LayoutWorld, PaintCaptureRequest, PaintDiagnostic, PaintDiagnosticSeverity, PaintSnapshot,
+    LayoutWorld, PaintCaptureRequest, PaintDiagnostic, PaintDiagnosticSeverity, PaintPixelGrid,
+    PaintSnapshot, RetainedLayoutWorld,
 };
 
 pub(crate) struct LayoutPassPhaseMetrics {
@@ -57,78 +59,115 @@ pub(crate) struct LayoutPassPhaseMetrics {
     pub(crate) numeric_followup_passes_elapsed: std::time::Duration,
     pub(crate) overflow_detection_elapsed: std::time::Duration,
     pub(crate) scrollbar_feedback_elapsed: std::time::Duration,
-    pub(crate) embedded_frame_elapsed: std::time::Duration,
     pub(crate) numeric_layout_pass_count: usize,
     pub(crate) numeric_feedback_invalidated_node_count: usize,
     pub(crate) numeric_feedback_overflow_recomputed_node_count: usize,
+    pub(crate) retained_box_count: usize,
+    pub(crate) pruned_source_count: usize,
+    pub(crate) retained_numeric_layout_hits: usize,
+    pub(crate) retained_numeric_tree: bool,
+    pub(crate) reused_inline_contexts: usize,
+    pub(crate) reused_overflow_projection: bool,
 }
 
-pub(crate) fn finish_layout_pass<N, S: crate::LayoutSource<NodeId = N>>(
+pub(crate) fn finish_layout_pass<N, S, F>(
     mut world: LayoutWorld<N>,
     source: &S,
     viewport: LayoutViewport,
     reason: LayoutFlushReason,
     started: Instant,
     paint_capture: Option<PaintCaptureRequest>,
+    paint_cull_rect: Option<LayoutRect>,
     retain_scroll_projection: bool,
     retain_screen_paint: bool,
-    mut object_geometry: Vec<crate::LayoutObjectGeometry<N>>,
-    mut embedded_frames: HashMap<LayoutBoxId, (N, crate::EmbeddedFrameSnapshot<N>)>,
+    retain_layout_world: bool,
+    frozen_inline_svg: Option<Box<FrozenInlineSvgInputs<N>>>,
+    svg_image_lookup: Option<&crate::InlineSvgImageLookup<'_, N>>,
+    mut embedded_viewports: HashMap<LayoutBoxId, (N, LayoutViewport)>,
+    frames: &mut F,
+    overflow_projection: Option<OverflowProjection>,
     phase_metrics: LayoutPassPhaseMetrics,
 ) -> Result<LayoutPassResult<N>, LayoutError>
 where
     N: Copy + Debug + Eq + Hash,
+    S: crate::LayoutSource<NodeId = N>,
+    F: crate::EmbeddedFrameRenderer<N>,
 {
     let projection_started = Instant::now();
-    let overflow = OverflowProjection::new(&world, viewport);
+    // The final scrollbar iteration used these exact rounded box dimensions.
+    // A pass with hidden scrollbars builds overflow here for the first time.
+    let overflow = overflow_projection.unwrap_or_else(|| OverflowProjection::new(&world, viewport));
     let mut projection = OutputProjection::new(&world, viewport);
     projection.build_local_box_geometry(&overflow);
     projection.build_scroll_extents(&overflow);
     let scroll_projection =
         projection.build_coordinate_spaces(paint_capture.is_some(), retain_scroll_projection)?;
-    for object in &mut object_geometry {
-        let owner = object.owner.index();
-        let content = projection.boxes[owner].content_box;
-        let zoom = world.boxes[owner].style.effective_zoom();
-        object.quad.points = object
-            .quad
-            .points
-            .map(|point| LayoutPoint::new(content.x + point.x * zoom, content.y + point.y * zoom));
-    }
     projection.build_fragments();
     projection.assign_clip_and_paint_order();
 
     let content_size = projection.document_content_size();
-    let mut css_image_references = world.css_image_references.clone();
-    for (_, snapshot) in embedded_frames.values_mut() {
-        css_image_references.append(&mut snapshot.css_image_references);
-    }
-    let mut embedded_paint = embedded_frames
-        .iter_mut()
-        .filter_map(|(id, (_, snapshot))| snapshot.paint.take().map(|paint| (*id, paint)))
-        .collect::<HashMap<_, _>>();
+    let mut embedded_frames = HashMap::new();
+    let mut embedded_frame_elapsed = std::time::Duration::ZERO;
+    let inline_svg_images = RefCell::new(HashMap::new());
     let mut paint_projection_metrics = crate::paint::PaintProjectionMetrics::default();
-    let mut paint_snapshot = paint_capture
-        .map(|request| {
-            request
-                .resolve(viewport, projection.viewport_scroll, content_size)
-                .map(|capture| {
-                    let paint_projection = PaintProjection::from_layout_pass(&projection);
-                    crate::paint::project_paint_snapshot(
-                        &paint_projection,
-                        capture,
-                        content_size,
-                        (reason == LayoutFlushReason::Print)
-                            .then(|| crate::paint::LinkProjection::new(&paint_projection, source)),
-                        &mut embedded_paint,
-                    )
-                })
-        })
-        .transpose()?
-        .map(|output| {
-            paint_projection_metrics = output.metrics;
-            output.snapshot
+    let mut paint_snapshot = if let Some(request) = paint_capture {
+        let capture = request.resolve(viewport, projection.viewport_scroll, content_size)?;
+        let css_images = |url: &str| source.css_image_state(url);
+        let inline_svg = svg_image_lookup.map(|lookup| InlineSvgPaint {
+            root: source.root(),
+            frozen: frozen_inline_svg.as_deref(),
+            lookup,
+            images: &inline_svg_images,
         });
+        let paint_projection =
+            PaintProjection::from_layout_pass(&projection, &css_images, inline_svg);
+        let mut paint_frame = |id, cull_rect| {
+            let Some((source, child_viewport)) = embedded_viewports.remove(&id) else {
+                return Ok(None);
+            };
+            let started = Instant::now();
+            let child = frames.render_embedded_frame(
+                source,
+                child_viewport,
+                Some(crate::EmbeddedFramePaintRequest {
+                    include_backgrounds: capture.include_backgrounds,
+                    cull_rect,
+                }),
+            )?;
+            embedded_frame_elapsed += started.elapsed();
+            Ok(child.and_then(|mut child| {
+                let paint = child.paint.take();
+                embedded_frames.insert(id, (source, child));
+                paint
+            }))
+        };
+        let output = crate::paint::project_paint_snapshot(
+            &paint_projection,
+            capture,
+            content_size,
+            (reason == LayoutFlushReason::Print)
+                .then(|| crate::paint::LinkProjection::new(&paint_projection, source)),
+            paint_cull_rect,
+            &mut paint_frame,
+        )?;
+        paint_projection_metrics = output.metrics;
+        Some(output.snapshot)
+    } else {
+        None
+    };
+
+    // A clipped frame still publishes its geometry and resource discovery.
+    let frames_started = Instant::now();
+    for (id, (source, viewport)) in embedded_viewports {
+        if let Some(child) = frames.render_embedded_frame(source, viewport, None)? {
+            embedded_frames.insert(id, (source, child));
+        }
+    }
+    embedded_frame_elapsed += frames_started.elapsed();
+    let mut css_image_references = world.css_image_references.clone();
+    for (_, child) in embedded_frames.values_mut() {
+        css_image_references.append(&mut child.css_image_references);
+    }
     let mut diagnostics = paint_snapshot
         .as_ref()
         .map(|snapshot| snapshot.diagnostics.clone())
@@ -158,14 +197,26 @@ where
         numeric_followup_passes_elapsed: phase_metrics.numeric_followup_passes_elapsed,
         overflow_detection_elapsed: phase_metrics.overflow_detection_elapsed,
         scrollbar_feedback_elapsed: phase_metrics.scrollbar_feedback_elapsed,
-        embedded_frame_elapsed: phase_metrics.embedded_frame_elapsed,
-        projection_elapsed: projection_started.elapsed(),
+        embedded_frame_elapsed,
+        projection_elapsed: projection_started
+            .elapsed()
+            .saturating_sub(embedded_frame_elapsed),
         numeric_layout_pass_count: phase_metrics.numeric_layout_pass_count,
         numeric_feedback_invalidated_node_count: phase_metrics
             .numeric_feedback_invalidated_node_count,
         numeric_feedback_overflow_recomputed_node_count: phase_metrics
             .numeric_feedback_overflow_recomputed_node_count,
         box_count: projection.boxes.len(),
+        retained_box_count: phase_metrics.retained_box_count,
+        pruned_source_count: phase_metrics.pruned_source_count,
+        retained_embedded_box_count: embedded_frames
+            .values()
+            .map(|(_, snapshot)| snapshot.retained_box_count)
+            .sum(),
+        retained_numeric_layout_hits: phase_metrics.retained_numeric_layout_hits,
+        retained_numeric_tree: phase_metrics.retained_numeric_tree,
+        reused_inline_contexts: phase_metrics.reused_inline_contexts,
+        reused_overflow_projection: phase_metrics.reused_overflow_projection,
         fragment_count: projection.fragments.len(),
         paint_event_count: paint_projection_metrics.event_count,
         paint_culled_event_count: paint_projection_metrics.culled_event_count,
@@ -183,8 +234,8 @@ where
     let embedded_frames = embedded_frames
         .into_iter()
         .map(|(id, (source, snapshot))| {
-            if let Some(paint) = snapshot.screen_paint {
-                screen_frames.insert(source, (id, paint));
+            if let Some(retained) = snapshot.retained_layout {
+                screen_frames.insert(source, (id, retained));
             }
             crate::FrozenEmbeddedFrame {
                 source,
@@ -192,29 +243,54 @@ where
             }
         })
         .collect();
-    let screen_paint_inputs = retain_screen_paint.then(|| {
-        (
-            std::mem::take(&mut projection.paint_metadata),
-            projection.diagnostics.clone(),
-        )
+    let paint = retain_screen_paint.then(|| {
+        Box::new(RetainedPaintData {
+            paint_metadata: std::mem::take(&mut projection.paint_metadata),
+            diagnostics: projection.diagnostics.clone(),
+            inline_svg_images,
+        })
     });
-    let tree = projection.into_frozen_tree(
+    let mut tree = projection.into_frozen_tree(
         source.root(),
         content_size,
-        object_geometry,
         embedded_frames,
         scroll_projection,
     );
-    let screen_paint = screen_paint_inputs.map(|(paint_metadata, diagnostics)| {
-        world.box_caches = Vec::new();
+    tree.frozen_inline_svg = frozen_inline_svg;
+    let reusable_layout = retain_layout_world && crate::builder::can_retain_root(&world);
+    let retained_layout = (reusable_layout || paint.is_some()).then(|| {
         world.native_grid_details = HashMap::new();
         world.resolved_grid_tracks = HashMap::new();
-        world.table_structures = HashMap::new();
-        Box::new(ScreenPaintLayout {
+        if !reusable_layout || world.numeric_tree.is_none() {
+            world.table_structures = HashMap::new();
+        }
+        if !reusable_layout {
+            world.release_numeric_cache_storage();
+        } else if let Some(tree) = &mut world.numeric_tree {
+            tree.overflow = Some(Box::new(overflow));
+        }
+        if paint.is_none() {
+            world.release_paint_storage();
+        } else {
+            // Replaced images with live inputs are sampled during paint.
+            // Inline SVG scenes belong to the paint resource cache.
+            for layout_box in world.boxes.values_mut() {
+                if layout_box.source.is_some()
+                    && layout_box
+                        .element_semantics()
+                        .and_then(|element| element.replaced)
+                        .is_some_and(crate::LayoutReplacedKind::is_live_paint_image)
+                {
+                    layout_box.replaced_image = None;
+                }
+            }
+        }
+        Box::new(RetainedLayoutWorld {
             world,
+            viewport,
+            reusable_layout,
             frames: screen_frames,
-            diagnostics,
-            paint_metadata,
+            paint,
         })
     });
     Ok(LayoutPassResult::new(
@@ -223,78 +299,343 @@ where
         metrics,
         paint_snapshot,
         css_image_references,
-        screen_paint,
+        retained_layout,
     ))
 }
 
-/// Owned styles, glyphs and resources for painting one published screen layout.
-/// Paint always takes placement and scroll offsets from that layout's tree.
-pub struct ScreenPaintLayout<N>
-where
-    N: Copy + Debug + Eq + Hash,
-{
-    world: LayoutWorld<N>,
-    frames: HashMap<N, (LayoutBoxId, Box<Self>)>,
+/// Additional inputs for painting one published screen layout.
+pub(crate) struct RetainedPaintData {
     diagnostics: Vec<PaintDiagnostic>,
     paint_metadata: PaintMetadata,
+    inline_svg_images: RefCell<HashMap<LayoutBoxId, Option<crate::LayoutImageResource>>>,
 }
 
-impl<N: Copy + Debug + Eq + Hash> ScreenPaintLayout<N> {
+impl<N: Copy + Debug + Eq + Hash> RetainedLayoutWorld<N> {
+    pub fn clear_inline_svg_images(&mut self) {
+        if let Some(paint) = &mut self.paint {
+            paint.inline_svg_images.get_mut().clear();
+        }
+        for (_, frame) in self.frames.values_mut() {
+            frame.clear_inline_svg_images();
+        }
+    }
+
+    /// Apply canonical REPAINT damage while retaining the published geometry.
+    /// Prepare all replacements before changing the world, so an unsupported
+    /// box or brush can fall back to the regular pass.
+    pub fn update_repaint_styles(
+        &mut self,
+        styles: Vec<(N, style::servo_arc::Arc<style::properties::ComputedValues>)>,
+    ) -> bool {
+        self.update_published_styles(styles, |_| Some(())).is_some()
+    }
+
+    /// Refresh coordinates, overflow, clips, and paint order over the same
+    /// numeric layout. Fall back if an automatic gutter or layout role would
+    /// change the known numeric geometry.
+    pub fn project_screen_styles(
+        &mut self,
+        old: &FrozenLayoutTree<N>,
+        styles: Vec<(N, style::servo_arc::Arc<style::properties::ComputedValues>)>,
+        scroll_offset: impl Fn(N) -> LayoutPoint,
+    ) -> Option<FrozenLayoutTree<N>> {
+        if old.embedded_frames().next().is_some()
+            || self
+                .world
+                .boxes
+                .values()
+                .any(|layout_box| layout_box.style.display().is_grid_container())
+        {
+            return None;
+        }
+        let include_paint = self.paint.is_some();
+        let viewport = self.viewport;
+        let (tree, diagnostics, metadata) = self.update_published_styles(styles, |world| {
+            let overflow = OverflowProjection::new(world, viewport);
+            if !projection_preserves_scrollbar_layout(world, &overflow) {
+                return None;
+            }
+            let mut projection = OutputProjection::new(world, viewport);
+            projection.build_local_box_geometry(&overflow);
+            projection.build_scroll_extents(&overflow);
+            let scroll = projection.build_coordinate_spaces(false, true).ok()?;
+            projection.build_fragments();
+            projection.assign_clip_and_paint_order();
+            let size = projection.document_content_size();
+            let metadata = include_paint.then(|| std::mem::take(&mut projection.paint_metadata));
+            let diagnostics = include_paint.then(|| projection.diagnostics.clone());
+            let mut tree = projection.into_frozen_tree(old.source_root(), size, Vec::new(), scroll);
+            tree.svg_viewports.clone_from(&old.svg_viewports);
+            tree.clear_inline_svg_geometry();
+            tree.refresh_scroll_projection(scroll_offset).ok()?;
+            Some((tree, diagnostics, metadata))
+        })?;
+        if let Some(paint) = &mut self.paint {
+            paint.diagnostics = diagnostics.expect("existing paint diagnostics");
+            paint.paint_metadata = metadata.expect("existing paint metadata");
+        }
+        Some(tree)
+    }
+
+    fn update_published_styles<T>(
+        &mut self,
+        styles: Vec<(N, style::servo_arc::Arc<style::properties::ComputedValues>)>,
+        project: impl FnOnce(&LayoutWorld<N>) -> Option<T>,
+    ) -> Option<T> {
+        let world = &mut self.world;
+        let mut replacements = HashMap::new();
+        for (source, computed) in styles {
+            let &id = world.source_mapping.get(&source)?;
+            let old = &world.boxes[id];
+            let next = crate::ResolvedLayoutStyle::from_stylo(computed);
+            if old.element_semantics.as_ref().is_none_or(|element| {
+                element.namespace != crate::LayoutNamespace::Html
+                    || element.category != crate::LayoutElementCategory::Generic
+            }) || crate::table::is_table_root(old.kind)
+                || old.kind.is_internal_table_box()
+                || old.kind == crate::LayoutBoxKind::TableCaption
+                || !old.style.can_repaint_with(&next)
+            {
+                return None;
+            }
+            let containing_role = |style: &crate::ResolvedLayoutStyle| {
+                let root = world.is_document_element(id);
+                let css_box = old.is_css_box();
+                let eligible = old.is_eligible_for_paint_or_layout_containment();
+                (
+                    style.establishes_positioned_containing_block(root, css_box, eligible),
+                    style.establishes_fixed_containing_block(root, css_box, eligible),
+                )
+            };
+            if containing_role(&old.style) != containing_role(&next) {
+                return None;
+            }
+            replacements.insert(id, next);
+        }
+
+        let mut brush_updates = Vec::new();
+        let mut text_styles = Vec::new();
+        for (index, layout_box) in world.boxes.ordered().enumerate() {
+            if layout_box.kind == crate::LayoutBoxKind::Text
+                && let Some(parent) = layout_box.structural_parent
+                && let Some(style) = replacements.get(&parent)
+            {
+                text_styles.push((index, crate::ResolvedLayoutStyle::text_leaf_from(style)));
+            }
+            if layout_box.source.is_none()
+                && layout_box.kind != crate::LayoutBoxKind::Text
+                && layout_box
+                    .owner
+                    .and_then(|node| world.source_mapping.get(&node))
+                    .is_some_and(|owner| replacements.contains_key(owner))
+            {
+                return None;
+            }
+            let Some(inline) = &layout_box.inline_layout else {
+                continue;
+            };
+            let Some(shaped) = inline
+                .laid_out
+                .as_ref()
+                .or(inline.measurement_layout.as_ref())
+            else {
+                continue;
+            };
+            let mut brushes = inline
+                .repaint_brushes
+                .as_deref()
+                .unwrap_or_default()
+                .to_vec();
+            let mut changed = false;
+            for (slot, (shaped, parent)) in shaped
+                .styles()
+                .iter()
+                .zip(&inline.style_parents)
+                .enumerate()
+            {
+                let Some(style) = replacements.get(parent) else {
+                    continue;
+                };
+                let original = inline.paint_brush(slot, &shaped.brush);
+                let mut current = style.parley_text_style().brush;
+                current.paint = original.paint;
+                if &current == original {
+                    continue;
+                }
+                let mut colors_only = original.clone();
+                colors_only.color = current.color;
+                colors_only.decoration.color = current.decoration.color;
+                if colors_only != current || inline.selection.is_some() {
+                    return None;
+                }
+                match brushes.binary_search_by_key(&slot, |(index, _)| *index) {
+                    Ok(index) => brushes[index].1 = current,
+                    Err(index) => brushes.insert(index, (slot, current)),
+                }
+                changed = true;
+            }
+            if changed {
+                brush_updates.push((index, brushes.into_boxed_slice()));
+            }
+        }
+
+        for (&id, replacement) in &mut replacements {
+            std::mem::swap(&mut world.boxes[id].style, replacement);
+        }
+        let Some(result) = project(world) else {
+            for (id, original) in replacements {
+                world.boxes[id].style = original;
+            }
+            return None;
+        };
+        for (id, _previous) in replacements {
+            world.clear_layout_caches(id);
+            if let Some(numeric) = &mut world.inline_numeric_reuse {
+                numeric.discard_owner(id);
+            }
+        }
+        for (index, replacement) in text_styles {
+            world.boxes[index].style = replacement;
+        }
+        for (index, brushes) in brush_updates {
+            world.boxes[index]
+                .inline_layout
+                .as_mut()
+                .expect("validated inline context")
+                .repaint_brushes = Some(brushes);
+        }
+        Some(result)
+    }
+
     /// Projects the viewport of the paired tree, using its latest scroll offsets.
     pub fn paint(
         &self,
         tree: &FrozenLayoutTree<N>,
         request: PaintCaptureRequest,
+        cull_rect: Option<LayoutRect>,
+        css_images: &dyn Fn(N, &str) -> crate::LayoutCssImageState,
+        live_replaced_images: &crate::source::LiveReplacedImageLookup<'_, N>,
+        svg_image_lookup: &crate::InlineSvgImageLookup<'_, N>,
     ) -> Result<PaintSnapshot, LayoutError> {
+        let paint = self
+            .paint
+            .as_deref()
+            .ok_or(LayoutError::PaintProjectionNotRequested)?;
         let scroll = tree.scroll_projection.as_deref().ok_or_else(|| {
             LayoutError::source_contract("screen paint", "missing published box placements")
         })?;
         let world = &self.world;
-        if tree.boxes.len() != world.boxes.len() {
+        if tree.viewport != self.viewport || tree.boxes.len() != world.boxes.len() {
             return Err(LayoutError::source_contract(
                 "screen paint",
                 "paint inputs and published box placements differ",
             ));
         }
         let coordinates = resolve_coordinate_spaces(
-            world.root,
+            world.output_id(world.root),
             tree.viewport_scroll,
             tree.boxes.len(),
-            true,
+            Some(PaintPixelGrid::new(tree.viewport.device_pixel_ratio)),
             |index| Ok(scroll.placement(index)),
             |id| {
                 let extent = &tree.boxes[id.index()].scroll_extent;
                 extent.is_scroll_container.then_some(extent.applied_offset)
             },
         )?;
-        let projection = PaintProjection::from_publication(self, tree, scroll, &coordinates.spaces);
+        let document_images = |url: &str| css_images(tree.source_root(), url);
+        let projection = PaintProjection::from_publication(
+            world,
+            paint,
+            tree,
+            scroll,
+            &coordinates.spaces,
+            &document_images,
+            live_replaced_images,
+            InlineSvgPaint {
+                root: tree.source_root(),
+                frozen: tree.frozen_inline_svg.as_deref(),
+                lookup: svg_image_lookup,
+                images: &paint.inline_svg_images,
+            },
+        );
 
-        let mut embedded_paint = HashMap::new();
+        let mut frames = HashMap::new();
         for frame in tree.embedded_frames() {
             if frame.tree.viewport.css_width == 0 || frame.tree.viewport.css_height == 0 {
                 continue;
             }
-            let (id, paint) = self.frames.get(&frame.source).ok_or_else(|| {
+            let (id, retained) = self.frames.get(&frame.source).ok_or_else(|| {
                 LayoutError::source_contract("screen paint", "missing embedded paint inputs")
             })?;
-            let child_request = PaintCaptureRequest {
-                include_backgrounds: request.include_backgrounds,
-                base_background_color: crate::PaintColor::TRANSPARENT,
-                ..PaintCaptureRequest::viewport()
-            };
-            embedded_paint.insert(*id, paint.paint(&frame.tree, child_request)?);
+            frames.insert(*id, (&frame.tree, retained));
         }
+        let child_request = PaintCaptureRequest {
+            include_backgrounds: request.include_backgrounds,
+            base_background_color: crate::PaintColor::TRANSPARENT,
+            ..PaintCaptureRequest::viewport()
+        };
+        let mut paint_frame = |id, child_cull_rect| {
+            frames
+                .remove(&id)
+                .map(|(tree, world)| {
+                    world.paint(
+                        tree,
+                        child_request,
+                        child_cull_rect,
+                        css_images,
+                        live_replaced_images,
+                        svg_image_lookup,
+                    )
+                })
+                .transpose()
+        };
 
         let capture = request.resolve(tree.viewport, tree.viewport_scroll, tree.content_size)?;
-        Ok(crate::paint::project_paint_snapshot(
+        crate::paint::project_paint_snapshot(
             &projection,
             capture,
             tree.content_size,
             None,
-            &mut embedded_paint,
+            cull_rect,
+            &mut paint_frame,
         )
-        .snapshot)
+        .map(|output| output.snapshot)
     }
+}
+
+fn projection_preserves_scrollbar_layout<N: Copy + Debug + Eq + Hash>(
+    world: &LayoutWorld<N>,
+    overflow: &OverflowProjection,
+) -> bool {
+    if world.environment.scrollbars_hidden {
+        return true;
+    }
+    let policy = world.viewport_scroll_policy;
+    for (index, layout_box) in world.boxes.ordered().enumerate() {
+        let id = world.boxes.id_at(index);
+        if world.is_viewport_defining_body(id) {
+            continue;
+        }
+        let (horizontal, vertical) = overflow.overflowing_axes(world, id);
+        for (axis, overflowing) in [
+            (crate::LayoutScrollbarAxis::Horizontal, horizontal),
+            (crate::LayoutScrollbarAxis::Vertical, vertical),
+        ] {
+            use crate::style::LayoutOverflowMode::Auto;
+            let auto_gutter = if id == world.root {
+                policy.overflow_mode(axis) == Auto && policy.has_scrollbar(axis, overflowing)
+            } else {
+                layout_box.style.overflow_mode(axis) == Auto
+                    && layout_box.style.has_scrollbar(axis, false, overflowing)
+            };
+            if auto_gutter {
+                // A cold numeric pass starts with no auto gutter. A
+                // previously admitted or newly required gutter needs that pass.
+                return false;
+            }
+        }
+    }
+    true
 }
 
 /// One coordinate space while output and paint projection are both live.
@@ -350,15 +691,18 @@ where
         let count = world.boxes.len();
         let mut principal_sources = vec![None; count];
         for (source, box_id) in &world.source_mapping {
-            principal_sources[box_id.index()] = Some(*source);
+            principal_sources[world.boxes.index_of(box_id)] = Some(*source);
         }
         let scroll_proxy_links = world
             .display_contents_mapping
             .iter()
             .flat_map(|(source, boxes)| {
-                boxes
-                    .iter()
-                    .map(|box_id| (*source, LayoutOutputBoxId::from_index(box_id.index())))
+                boxes.iter().map(|box_id| {
+                    (
+                        *source,
+                        LayoutOutputBoxId::from_index(world.boxes.index_of(box_id)),
+                    )
+                })
             })
             .collect();
         Self {
@@ -397,16 +741,14 @@ where
         } else if self.world.is_viewport_defining_body(id) {
             0.0
         } else {
-            self.world.boxes[id.index()]
-                .style
-                .scrollbar_control_thickness()
+            self.world.boxes[id].style.scrollbar_control_thickness()
         }
     }
 
     fn places_vertical_scrollbar_on_left(&self, id: LayoutBoxId) -> bool {
         id != self.world.root
             && !self.world.is_viewport_defining_body(id)
-            && self.world.boxes[id.index()]
+            && self.world.boxes[id]
                 .style
                 .places_vertical_scrollbar_on_left(false)
     }
@@ -419,9 +761,7 @@ where
         } else if self.world.is_viewport_defining_body(id) {
             false
         } else {
-            self.world.boxes[id.index()]
-                .style
-                .establishes_scroll_container()
+            self.world.boxes[id].style.establishes_scroll_container()
         }
     }
 
@@ -433,11 +773,9 @@ where
         } else {
             match axis {
                 LayoutScrollbarAxis::Horizontal => {
-                    self.world.boxes[id.index()].style.allows_user_scroll_x()
+                    self.world.boxes[id].style.allows_user_scroll_x()
                 }
-                LayoutScrollbarAxis::Vertical => {
-                    self.world.boxes[id.index()].style.allows_user_scroll_y()
-                }
+                LayoutScrollbarAxis::Vertical => self.world.boxes[id].style.allows_user_scroll_y(),
             }
         }
     }
@@ -448,7 +786,7 @@ where
         } else if self.world.is_viewport_defining_body(id) {
             false
         } else {
-            self.world.boxes[id.index()].style.clips_overflow()
+            self.world.boxes[id].style.clips_overflow()
         }
     }
 
@@ -463,7 +801,7 @@ where
         } else if self.world.is_viewport_defining_body(id) {
             false
         } else {
-            self.world.boxes[id.index()]
+            self.world.boxes[id]
                 .style
                 .has_scrollbar(axis, false, overflowing)
         }
@@ -475,14 +813,14 @@ where
         } else if self.world.is_viewport_defining_body(id) {
             None
         } else {
-            self.world.boxes[id.index()].style.scrollbar_colors()
+            self.world.boxes[id].style.scrollbar_colors()
         }
     }
 
     fn build_local_box_geometry(&mut self, overflow: &OverflowProjection) {
         assert_eq!(overflow.len(), self.world.boxes.len());
         let layout_origins = self.world.global_layout_origins();
-        for (index, layout_box) in self.world.boxes.iter().enumerate() {
+        for (index, layout_box) in self.world.boxes.ordered().enumerate() {
             for diagnostic in layout_box.capability_diagnostics() {
                 self.diagnostics.push(PaintDiagnostic::new(
                     diagnostic.code(),
@@ -494,9 +832,9 @@ where
                     PaintDiagnosticSeverity::Warning,
                 ));
             }
-            let box_id = LayoutBoxId::from_index(index);
+            let box_id = self.world.boxes.id_at(index);
             let id = LayoutOutputBoxId::from_index(index);
-            let geometry = overflow.geometry(box_id);
+            let (geometry, scrollable_overflow) = overflow.geometry_and_overflow(box_id);
             let resolved = geometry.resolved_transform;
             self.resolved_transforms[index] = resolved;
             if resolved.has_unsupported_3d {
@@ -509,7 +847,7 @@ where
                     PaintDiagnosticSeverity::Warning,
                 ));
             }
-            self.scrollable_overflow[index] = overflow.scrollable_overflow(box_id);
+            self.scrollable_overflow[index] = scrollable_overflow;
             let source = layout_box.source.or_else(|| {
                 (layout_box.anonymous_reason
                     == Some(LayoutAnonymousReason::InlineSplitContinuation))
@@ -530,13 +868,13 @@ where
                 effective_zoom: layout_box.style.effective_zoom(),
                 structural_parent: layout_box
                     .structural_parent
-                    .map(|parent| LayoutOutputBoxId::from_index(parent.index())),
+                    .map(|parent| LayoutOutputBoxId::from_index(self.world.boxes.index_of(parent))),
                 parent: layout_box
                     .parent
-                    .map(|parent| LayoutOutputBoxId::from_index(parent.index())),
+                    .map(|parent| LayoutOutputBoxId::from_index(self.world.boxes.index_of(parent))),
                 layout_parent: layout_box
                     .layout_parent
-                    .map(|parent| LayoutOutputBoxId::from_index(parent.index())),
+                    .map(|parent| LayoutOutputBoxId::from_index(self.world.boxes.index_of(parent))),
                 position: layout_box.style.position(),
                 coordinate_space: LayoutCoordinateSpaceId::from_index(index + 1),
                 clip_chain: None,
@@ -554,10 +892,10 @@ where
                 }),
                 establishes_positioned_containing_block: self
                     .world
-                    .establishes_positioned_containing_block(LayoutBoxId::from_index(index)),
+                    .establishes_positioned_containing_block(self.world.boxes.id_at(index)),
                 establishes_fixed_containing_block: self
                     .world
-                    .establishes_fixed_containing_block(LayoutBoxId::from_index(index)),
+                    .establishes_fixed_containing_block(self.world.boxes.id_at(index)),
                 visible: layout_box.style.is_visible(),
                 pointer_events: layout_box.style.accepts_pointer_events(),
             });
@@ -566,9 +904,8 @@ where
 
     fn build_scroll_extents(&mut self, overflow_projection: &OverflowProjection) {
         for index in 0..self.world.boxes.len() {
-            let id = LayoutBoxId::from_index(index);
-            let geometry = overflow_projection.geometry(id);
-            let overflow = overflow_projection.scrollable_overflow(id);
+            let id = self.world.boxes.id_at(index);
+            let (geometry, overflow) = overflow_projection.geometry_and_overflow(id);
             let is_root = id == self.world.root;
             let scrollbar_thickness = self.scrollbar_control_thickness(id);
             let vertical_scrollbar_on_left = self.places_vertical_scrollbar_on_left(id);
@@ -698,7 +1035,8 @@ where
                 scrollbar_colors: self.scrollbar_colors(id),
             });
         }
-        self.viewport_scroll = self.scroll_extents[self.world.root.index()].applied_offset;
+        self.viewport_scroll =
+            self.scroll_extents[self.world.boxes.index_of(self.world.root)].applied_offset;
     }
 
     fn build_coordinate_spaces(
@@ -713,7 +1051,7 @@ where
             let location = node.final_layout.location;
             Ok((
                 BoxPlacement {
-                    parent: node.layout_parent,
+                    parent: node.layout_parent.map(|id| world.output_id(id)),
                     location: LayoutPoint::new(location.x, location.y),
                     transform: self.resolved_transforms[index],
                     fixed: node.style.is_fixed_positioned(),
@@ -725,10 +1063,10 @@ where
             .then(|| ScrollProjection::new(world, &self.boxes, scroll_extents, placements))
             .transpose()?;
         let resolved = resolve_coordinate_spaces(
-            world.root,
+            world.output_id(world.root),
             self.viewport_scroll,
             world.boxes.len(),
-            paint,
+            paint.then(|| PaintPixelGrid::new(self.viewport.device_pixel_ratio)),
             |index| match &retained {
                 Some(retained) => Ok(retained.placement(index)),
                 None => placements(index),
@@ -752,7 +1090,7 @@ where
         let fragment_count = self
             .world
             .boxes
-            .iter()
+            .values()
             .map(|layout_box| {
                 usize::from(!layout_box.inline_flattened)
                     + layout_box.inline_layout.as_ref().map_or(0, |context| {
@@ -790,7 +1128,7 @@ where
                 continue;
             };
             let layout = layout_box.final_layout;
-            let box_id = LayoutBoxId::from_index(index);
+            let box_id = self.world.boxes.id_at(index);
             let vertical_leading_gutter =
                 if box_id == self.world.root || self.world.is_viewport_defining_body(box_id) {
                     0.0
@@ -828,7 +1166,7 @@ where
             }
             let inline_start = self.fragments.len();
             for inline in &context.fragments.boxes {
-                let target = inline.box_id.index();
+                let target = self.world.boxes.index_of(inline.box_id);
                 let box_model = inline_fragment_box_model(self.world, index, inline);
                 let fragment = self.push_fragment(LayoutFragment {
                     id: LayoutFragmentId::from_index(0),
@@ -847,7 +1185,7 @@ where
                 self.register_box_fragment(target, fragment);
             }
             for text in &context.fragments.text {
-                let target = text.box_id.index();
+                let target = self.world.boxes.index_of(text.box_id);
                 let fragment = self.push_fragment(LayoutFragment {
                     id: LayoutFragmentId::from_index(0),
                     kind: LayoutFragmentKind::Text {
@@ -885,7 +1223,7 @@ where
             None,
             LayoutClipKind::Viewport,
             viewport_space,
-            self.scroll_extents[self.world.root.index()].scrollport,
+            self.scroll_extents[self.world.boxes.index_of(self.world.root)].scrollport,
         );
         self.assign_box_clip_metadata(
             self.world.root,
@@ -899,7 +1237,7 @@ where
             let event = self.paint_metadata.events[event_index];
             match event {
                 PaintOrderEvent::BoxBackground(id) => {
-                    let index = id.index();
+                    let index = self.world.boxes.index_of(id);
                     if let Some(fragment) = self.paint_metadata.boxes[index].direct_fragment {
                         self.assign_fragment_paint_metadata(fragment, self.boxes[index].clip_chain);
                     }
@@ -909,7 +1247,7 @@ where
                 }
                 PaintOrderEvent::BoxText(id) => self.assign_owner_paint_metadata(id, true),
                 PaintOrderEvent::InlineBox { owner, fragment } => {
-                    let metadata = &self.paint_metadata.boxes[owner.index()];
+                    let metadata = &self.paint_metadata.boxes[self.world.boxes.index_of(owner)];
                     let fragment = self.fragments[metadata.inline_fragments.clone()][fragment].id;
                     self.assign_fragment_paint_metadata(fragment, metadata.content_clip);
                 }
@@ -917,10 +1255,7 @@ where
                     // Index the shaped line and its hit fragments once. Repeated
                     // runs must not scan the paragraph or all its text nodes.
                     let lines = text_owners.entry(owner).or_insert_with(|| {
-                        let context = self.world.boxes[owner.index()]
-                            .inline_layout
-                            .as_ref()
-                            .unwrap();
+                        let context = self.world.boxes[owner].inline_layout.as_ref().unwrap();
                         let layout = context.laid_out.as_ref().unwrap();
                         let mut lines = layout
                             .lines()
@@ -937,7 +1272,7 @@ where
                                 (ranges, Vec::new())
                             })
                             .collect::<Vec<_>>();
-                        let range = self.paint_metadata.boxes[owner.index()]
+                        let range = self.paint_metadata.boxes[self.world.boxes.index_of(owner)]
                             .inline_fragments
                             .clone();
                         let text_fragments =
@@ -962,12 +1297,13 @@ where
                     {
                         self.assign_fragment_paint_metadata(
                             *fragment,
-                            self.paint_metadata.boxes[owner.index()].content_clip,
+                            self.paint_metadata.boxes[self.world.boxes.index_of(owner)]
+                                .content_clip,
                         );
                     }
                 }
                 PaintOrderEvent::BoxOutline(id) => {
-                    let index = id.index();
+                    let index = self.world.boxes.index_of(id);
                     let extent = &self.scroll_extents[index];
                     if extent.horizontal_scrollbar.is_some()
                         || extent.vertical_scrollbar.is_some()
@@ -988,19 +1324,28 @@ where
     }
 
     fn assign_owner_paint_metadata(&mut self, id: LayoutBoxId, text: bool) {
-        let index = id.index();
+        let index = self.world.boxes.index_of(id);
+        let Some(context) = self.world.boxes[index].inline_layout.as_ref() else {
+            return;
+        };
+        let visible_lines = context.visible_lines(context.fragments.lines.len());
         let metadata = &self.paint_metadata.boxes[index];
         let clip = metadata.content_clip;
         for fragment_index in metadata.inline_fragments.clone() {
-            let is_text = matches!(
-                self.fragments[fragment_index].kind,
-                LayoutFragmentKind::Text { .. }
-            );
-            if is_text == text {
+            let line_index = match self.fragments[fragment_index].kind {
+                LayoutFragmentKind::Text { line_index, .. } if text => line_index,
+                LayoutFragmentKind::InlineBox { line_index, .. } if !text => line_index,
+                _ => continue,
+            };
+            if line_index < visible_lines {
                 self.assign_fragment_paint_metadata(
                     LayoutFragmentId::from_index(fragment_index),
                     clip,
                 );
+            } else {
+                // Keep the geometry and clip chain for CSSOM. Hit testing only
+                // considers fragments that participate in paint order.
+                self.fragments[fragment_index].clip_chain = clip;
             }
         }
     }
@@ -1012,7 +1357,9 @@ where
         viewport_clip: LayoutClipChainId,
         legacy_clips: &mut Vec<LayoutClipChainId>,
     ) {
-        let index = id.index();
+        let world = self.world;
+        let layout_box = &world.boxes[id];
+        let index = world.boxes.index_of(id);
         // CSS overflow clips follow the containing-block chain, not the box
         // parent chain. In particular, an absolute/fixed descendant skips any
         // overflow clips between itself and its containing block. A
@@ -1021,14 +1368,15 @@ where
         // accumulated by that fixed containing block. Blink maintains the
         // same separate in-flow, absolute-position and fixed-position clip
         // contexts in its paint property tree builder.
-        let mut box_clip = if self.world.boxes[index].style.is_absolute_positioned()
-            || self.world.boxes[index].style.is_fixed_positioned()
+        let mut box_clip = if layout_box.style.is_absolute_positioned()
+            || layout_box.style.is_fixed_positioned()
         {
-            let mut positioned_clip = self.world.boxes[index]
-                .positioned_containing_block
-                .map_or(Some(viewport_clip), |containing_block| {
-                    self.paint_metadata.boxes[containing_block.index()].content_clip
-                });
+            let mut positioned_clip = layout_box.positioned_containing_block.map_or(
+                Some(viewport_clip),
+                |containing_block| {
+                    self.paint_metadata.boxes[world.boxes.index_of(containing_block)].content_clip
+                },
+            );
             // CSS clip applies to the entire subtree, including descendants
             // that skip an intermediate overflow clip.
             if positioned_clip != ancestor_clip && !legacy_clips.is_empty() {
@@ -1059,7 +1407,7 @@ where
         } else {
             ancestor_clip
         };
-        let legacy_rect = self.world.boxes[index]
+        let legacy_rect = layout_box
             .style
             .legacy_clip_rect(self.boxes[index].border_box);
         let owner = LayoutOutputBoxId::from_index(index);
@@ -1075,9 +1423,9 @@ where
         }
         self.boxes[index].clip_chain = box_clip;
 
-        let child_clip = if id != self.world.root
-            && !self.world.is_viewport_defining_body(id)
-            && self.world.boxes[index].clips_descendant_paint()
+        let child_clip = if id != world.root
+            && !world.is_viewport_defining_body(id)
+            && layout_box.clips_descendant_paint()
         {
             Some(self.push_clip(
                 box_clip,
@@ -1089,7 +1437,7 @@ where
             box_clip
         };
         self.paint_metadata.boxes[index].content_clip = child_clip;
-        for child in self.world.boxes[index].children.clone() {
+        for &child in &layout_box.children {
             self.assign_box_clip_metadata(child, child_clip, viewport_clip, legacy_clips);
         }
         if legacy_rect.is_some() {
@@ -1139,7 +1487,7 @@ where
     }
 
     pub(crate) fn document_content_size(&self) -> LayoutSize {
-        let root = self.world.root.index();
+        let root = self.world.boxes.index_of(self.world.root);
         let root_layout = self.world.boxes[root].final_layout.location;
         let layout_translation = LayoutTransform2D::translation(root_layout.x, root_layout.y);
         let overflow = layout_translation
@@ -1161,11 +1509,10 @@ where
         self,
         source_root: N,
         content_size: LayoutSize,
-        object_geometry: Vec<crate::LayoutObjectGeometry<N>>,
         embedded_frames: Vec<crate::FrozenEmbeddedFrame<N>>,
         scroll_projection: Option<Box<ScrollProjection<N>>>,
     ) -> FrozenLayoutTree<N> {
-        let root_box = LayoutOutputBoxId::from_index(self.world.root.index());
+        let root_box = LayoutOutputBoxId::from_index(self.world.boxes.index_of(self.world.root));
         let mut coordinate_spaces = self
             .coordinate_spaces
             .into_iter()
@@ -1213,9 +1560,11 @@ where
                     });
                     let resolved_grid_tracks = world
                         .resolved_grid_tracks
-                        .get(&LayoutBoxId::from_index(geometry.id.index()))
+                        .get(&self.world.boxes.id_at(geometry.id.index()))
                         .cloned();
                     FrozenLayoutBox {
+                        display,
+                        list_marker_position: layout_box.style.list_marker_position(),
                         geometry,
                         scroll_extent,
                         coordinate_space,
@@ -1240,7 +1589,6 @@ where
             boxes,
             self.fragments,
             self.scroll_proxy_links,
-            object_geometry,
             viewport_coordinate_space,
             self.clip_chain,
             embedded_frames,
@@ -1259,7 +1607,7 @@ where
     N: Copy + Debug + Eq + Hash,
 {
     let owner = &world.boxes[owner_index];
-    let owner_id = LayoutBoxId::from_index(owner_index);
+    let owner_id = world.boxes.id_at(owner_index);
     let owner_layout = owner.final_layout;
     let vertical_leading_gutter =
         if owner_id == world.root || world.is_viewport_defining_body(owner_id) {
@@ -1294,7 +1642,7 @@ where
                 .scrollbar_gutter_thickness(LayoutScrollbarAxis::Vertical)
         };
     let containing_width = containing_width.max(0.0);
-    let inline_box = &world.boxes[fragment.box_id.index()];
+    let inline_box = &world.boxes[fragment.box_id];
     let style = &inline_box.style;
     let padding = style.taffy.padding.resolve_or_zero(
         Some(containing_width),
@@ -1394,7 +1742,7 @@ mod dependency_tests {
         }
         let mut world = LayoutWorld::new(box_for(0), false);
         world.boxes.extend([box_for(1), box_for(2)]);
-        for layout_box in &mut world.boxes {
+        for layout_box in world.boxes.values_mut() {
             layout_box.final_layout.size = taffy::Size {
                 width: 1000.0,
                 height: 1000.0,

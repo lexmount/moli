@@ -600,11 +600,9 @@ impl<'loader, 'state> ParserDriver<'loader, 'state> {
                 cause: ParserSuspensionCause::ParserCreatedStylesheet { .. },
                 ..
             } => {
-                if !page_vm
-                    .vm()
-                    .document_runtime
-                    .has_all_blocking_stylesheets_resolved()
-                {
+                let vm = page_vm.vm_mut();
+                vm.publish_ready_stylesheet_results();
+                if !vm.document_runtime.has_all_blocking_stylesheets_resolved() {
                     return Ok(suspend_parser_for_stylesheet_page_task(
                         owner,
                         pending_parsing_blocking_wait,
@@ -995,7 +993,6 @@ impl<'loader, 'state> ParserDriver<'loader, 'state> {
                     .claim_pending_script_preload_for_parser(&script);
                 let source_decision = prepare_main_parser_blocking_source_load(
                     page_vm,
-                    self.loader,
                     self.buffered_document_preloads,
                     &mut script,
                 );
@@ -1023,16 +1020,9 @@ impl<'loader, 'state> ParserDriver<'loader, 'state> {
                     .document_runtime
                     .dom_host_mut()
                     .set_script_already_started(handle, true);
-                let still_blocked_on_stylesheet = {
-                    let vm = page_vm.vm_mut();
-                    let still_blocked = vm
-                        .document_runtime
-                        .has_pending_parser_script_blocking_stylesheet_signatures(
-                            blocking_signatures_before.iter(),
-                        );
-                    vm.record_ready_stylesheet_network_results();
-                    still_blocked
-                };
+                let still_blocked_on_stylesheet = page_vm
+                    .vm_mut()
+                    .prepare_parser_stylesheet_gate(&blocking_signatures_before);
                 if still_blocked_on_stylesheet {
                     let resume_permit = self.parser_session.suspend(
                         ParserSuspensionCause::ParserClassicStylesheets { script: handle },

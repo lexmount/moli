@@ -73,6 +73,9 @@ pub(in crate::runtime) struct LivePageEntry {
     // ScriptVm-bound task before releasing the PageVm itself.
     pub(super) pending_document_lifecycle_turn: Option<PendingDocumentLifecycleTurn>,
     pub(super) post_response_document_lifecycle: Option<RendererDocumentLifecycleIdentity>,
+    #[cfg(feature = "devtools")]
+    pub(super) wheel_input:
+        std::rc::Rc<std::cell::RefCell<crate::wheel_input::WheelInputController>>,
     pub(in crate::runtime) vm: Option<PageVm>,
     pub(super) pending_phase_one_navigation: Option<PageVmPendingPhaseOneNavigation>,
     pub(super) last_published_replacement_document: Option<PublishedReplacementDocument>,
@@ -154,7 +157,7 @@ impl CommittedNavigationEntry {
         };
         #[cfg(feature = "molio")]
         {
-            self.viewport_frames = page_vm.viewport_frames.take();
+            self.viewport_frames = page_vm.take_viewport_frames();
             if let Some(frames) = self.viewport_frames.as_mut() {
                 frames.discard_document();
             }
@@ -313,7 +316,11 @@ impl std::fmt::Debug for LivePageEntry {
 impl LivePageEntry {
     pub(super) fn new(slot: RendererPageSlotHandle, mut vm: PageVm) -> Result<Self> {
         vm.bind_script_execution_control(slot.script_execution_control());
+        #[cfg(feature = "devtools")]
+        let wheel_input = std::rc::Rc::clone(&vm.vm().wheel_input);
         Ok(Self {
+            #[cfg(feature = "devtools")]
+            wheel_input,
             slot,
             top_level_navigation_dispatch:
                 RendererTopLevelNavigationDispatch::FollowInStandaloneAdapter,
@@ -333,7 +340,11 @@ impl LivePageEntry {
         pending
             .page_vm_mut()
             .bind_script_execution_control(slot.script_execution_control());
+        #[cfg(feature = "devtools")]
+        let wheel_input = std::rc::Rc::clone(&pending.page_vm_mut().vm().wheel_input);
         let mut entry = Self {
+            #[cfg(feature = "devtools")]
+            wheel_input,
             slot,
             top_level_navigation_dispatch:
                 RendererTopLevelNavigationDispatch::FollowInStandaloneAdapter,
@@ -718,6 +729,10 @@ impl LivePageEntry {
         pending
             .page_vm_mut()
             .bind_script_execution_control(self.slot.script_execution_control());
+        #[cfg(feature = "devtools")]
+        pending
+            .page_vm_mut()
+            .bind_wheel_input_controller(std::rc::Rc::clone(&self.wheel_input));
         let validation = if self.pending_phase_one_navigation.is_some() {
             Err(anyhow!(
                 "renderer page already owns a pending phase-one navigation"
@@ -781,6 +796,8 @@ impl LivePageEntry {
         );
         self.retire_document_lifecycle_turn();
         page_vm.bind_script_execution_control(self.slot.script_execution_control());
+        #[cfg(feature = "devtools")]
+        page_vm.bind_wheel_input_controller(std::rc::Rc::clone(&self.wheel_input));
         self.vm = Some(page_vm);
     }
 

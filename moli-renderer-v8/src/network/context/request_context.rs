@@ -18,6 +18,7 @@ pub(crate) struct DocumentFetchContext {
     document_url: Url,
     base_url: Url,
     origin: Box<str>,
+    sandboxed_origin: bool,
 }
 
 impl DocumentFetchContext {
@@ -32,7 +33,17 @@ impl DocumentFetchContext {
             document_url,
             base_url,
             origin: origin.into(),
+            sandboxed_origin: false,
         }
+    }
+
+    pub(crate) fn with_sandboxed_origin(mut self, sandboxed: bool) -> Self {
+        self.sandboxed_origin = sandboxed;
+        self
+    }
+
+    pub(super) fn has_sandboxed_origin(&self) -> bool {
+        self.sandboxed_origin
     }
 
     pub(crate) fn owner(&self) -> WindowDocumentOwner {

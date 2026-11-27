@@ -4,6 +4,9 @@ name = "moli-webapi"
 version = "0.1.0"
 edition = "2024"
 
+[features]
+media-ext = []
+
 [dependencies]
 brotlic = "0.8.2"
 flate2 = { version = "1.1.9", default-features = false, features = ["zlib"] }

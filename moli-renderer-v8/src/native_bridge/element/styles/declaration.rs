@@ -10,6 +10,13 @@ pub(crate) use identity::StyleMode;
 pub(super) use identity::style_runtime_and_handle_from_object;
 pub(super) use observation::StyleComputationContext;
 pub(crate) use observation::{ComputedStyleRead, StyleObservation};
+pub(super) use parse::{
+    InlineStylePropertyWrite, expand_unresolved_box_shorthand_entries_for_mutation,
+    parse_style_property_entries_for_cssom_fallback_write,
+    parse_style_property_entries_for_cssom_write, set_inline_style_css_text_with_pdb_storage,
+    set_inline_style_property_with_pdb_storage, set_style_entries_if_changed_with_inline_base_url,
+    set_style_entries_with_inline_base_url, style_entries, style_entries_for_style_object,
+};
 pub(crate) use parse::{
     cssom_style_entry_requires_structured_parser,
     cssom_style_property_uses_preferred_pdb_supplemental_entries,
@@ -26,13 +33,6 @@ pub(crate) use parse::{
     style_property_affected_names_with_pdb as cssom_style_property_affected_names_with_pdb,
     style_property_mutation_affected_names_with_pdb as cssom_style_property_mutation_affected_names_with_pdb,
     style_property_mutation_cleanup_names_with_pdb as cssom_style_property_mutation_cleanup_names_with_pdb,
-};
-pub(super) use parse::{
-    expand_unresolved_box_shorthand_entries_for_mutation,
-    parse_style_property_entries_for_cssom_fallback_write,
-    parse_style_property_entries_for_cssom_write, set_inline_style_css_text_with_pdb_storage,
-    set_inline_style_property_with_pdb_storage, set_style_entries_if_changed_with_inline_base_url,
-    set_style_entries_with_inline_base_url, style_entries, style_entries_for_style_object,
 };
 pub(super) use properties::{
     all_shorthand_applies_to, animation_shorthand_longhands, css_wide_keyword,

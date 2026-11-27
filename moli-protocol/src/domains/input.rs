@@ -51,7 +51,9 @@ pub(crate) mod file_chooser;
 mod key;
 mod mouse;
 mod output_projection;
+mod scroll;
 pub(crate) use output_projection::PreparedInputOutputProjection;
+pub(crate) use scroll::SyntheticWheel;
 #[cfg(test)]
 mod tests;
 
@@ -85,6 +87,7 @@ pub(crate) struct CompletedInputCommandDispatch {
 
 pub(crate) enum InputCommandDispatchStep {
     Pending(PendingInputCommandDispatch),
+    Workflow(crate::conn::PreparedCommandWorkflow),
     Complete(CommandOutputPlan),
 }
 
@@ -326,6 +329,7 @@ pub(crate) fn try_start_input_command_dispatch(
         ));
     };
     match action {
+        InputAction::SynthesizeScrollGesture => scroll::start(conn, cmd),
         InputAction::CancelDragging => {
             start_input_command_dispatch_after_noop_checks(conn, cmd, action)
         }
@@ -564,6 +568,7 @@ fn validate_coordinate_input_params(
         | InputAction::DispatchKeyEvent
         | InputAction::InsertText
         | InputAction::SetIgnoreInputEvents
+        | InputAction::SynthesizeScrollGesture
         | InputAction::SetInterceptDrags => Ok(()),
     }
 }
@@ -576,6 +581,9 @@ fn coordinate_input_unsupported_message(action: InputAction) -> &'static str {
             EMULATE_TOUCH_FROM_MOUSE_EVENT_UNSUPPORTED_MESSAGE
         }
         InputAction::SynthesizeTapGesture => SYNTHESIZE_TAP_GESTURE_UNSUPPORTED_MESSAGE,
+        InputAction::SynthesizeScrollGesture => {
+            "Input.synthesizeScrollGesture requires layout hit testing."
+        }
         InputAction::DispatchDragEvent => DISPATCH_DRAG_EVENT_UNSUPPORTED_MESSAGE,
         InputAction::CancelDragging
         | InputAction::DispatchKeyEvent
@@ -702,7 +710,9 @@ fn start_pending_input_command(
                 |page| page.start_cancel_dragging(),
             )
         }
-        InputAction::SetIgnoreInputEvents | InputAction::SetInterceptDrags => Ok(None),
+        InputAction::SetIgnoreInputEvents
+        | InputAction::SetInterceptDrags
+        | InputAction::SynthesizeScrollGesture => Ok(None),
     }
 }
 
@@ -956,6 +966,7 @@ fn build_cdp_coordinate_input_command(
         | InputAction::DispatchKeyEvent
         | InputAction::InsertText
         | InputAction::SetIgnoreInputEvents
+        | InputAction::SynthesizeScrollGesture
         | InputAction::SetInterceptDrags => Err(PendingInputCommandStartError::invalid_params()),
     }
 }
@@ -987,7 +998,8 @@ pub(crate) async fn run_automation_input_command(
     let Some(pending) = pending? else {
         return Ok(AutomationResult::Empty);
     };
-    let completed = complete_input_workflow(driver, pending.wait().await, context).await;
+    let completed =
+        complete_input_workflow(driver, pending.wait().await, context.context_mut()).await;
     context
         .context_mut()
         .protocol_events_mut()
@@ -1274,6 +1286,11 @@ fn start_devtools_dispatch_drag_event_command(
     owner: &CommandOwnerScope,
     command: DevToolsDispatchDragEventCommand,
 ) -> Result<Option<PendingInputCommandDispatch>, PendingInputCommandStartError> {
+    if !command.data.files.is_empty() {
+        conn.local_file_policy()
+            .check_host_file_access()
+            .map_err(PendingInputCommandStartError::renderer_error)?;
+    }
     let event_name = drag_event_name(command.event_type);
     let data = renderer_drag_data(command.data)?;
     start_page_input_command(
@@ -1389,12 +1406,12 @@ fn start_devtools_input_command_for_owner(
 async fn complete_input_workflow(
     driver: &mut ProtocolWorkflowDriver,
     completed: CompletedInputCommandDispatch,
-    command_context: &mut CommandWorkflowContext,
+    command_context: &mut CommandDispatchContext,
 ) -> CompletedInputCommandResult {
     let mut side_effects = InputCommandSideEffects::default();
     let result =
         complete_input_operation(driver, completed, command_context, &mut side_effects).await;
-    let mut protocol_events = command_context.context_mut().take_deferred_command_events();
+    let mut protocol_events = command_context.take_deferred_command_events();
     protocol_events.extend(side_effects.into_events());
     CompletedInputCommandResult {
         result,
@@ -1405,7 +1422,7 @@ async fn complete_input_workflow(
 async fn complete_input_operation(
     driver: &mut ProtocolWorkflowDriver,
     completed: CompletedInputCommandDispatch,
-    command_context: &mut CommandWorkflowContext,
+    command_context: &mut CommandDispatchContext,
     side_effects: &mut InputCommandSideEffects,
 ) -> Result<AutomationResult, DevToolsError> {
     let command = match completed.completed {
@@ -1422,15 +1439,12 @@ async fn complete_input_operation(
     let settle_owner = owner.clone();
     let host = completed.host;
     let settle_host = host.clone();
-    let completion = command_context
-        .with_state(driver, move |state, context| {
-            let output =
-                state.settle_input_page_command(&settle_owner, settle_host.as_deref(), command);
-            context
-                .context_mut()
-                .consume_renderer_command_turn_output(output)
+    let completion = driver
+        .with_state(move |state| {
+            state.settle_input_page_command(&settle_owner, settle_host.as_deref(), command)
         })
         .map_err(input_workflow_error)?;
+    let completion = command_context.consume_renderer_command_turn_output(completion);
     let (outcome, result) = match completed.kind {
         PendingInputCommandKind::PrepareElementClick => {
             return decode_element_click_preparation_completion(completion)
@@ -1474,7 +1488,7 @@ async fn complete_input_operation(
         &owner,
         host.as_deref(),
         outcome,
-        command_context.context_mut(),
+        command_context,
     )
     .await
     .map_err(input_workflow_error)?;
@@ -1493,7 +1507,7 @@ fn input_command_workflow(
         let completed = complete_input_workflow(
             &mut ProtocolWorkflowDriver::new(access),
             input.await,
-            &mut context,
+            context.context_mut(),
         )
         .await;
         context.complete(input_command_output_plan(completed))

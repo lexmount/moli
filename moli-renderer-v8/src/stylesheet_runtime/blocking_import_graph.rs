@@ -8,14 +8,14 @@
 use super::*;
 
 #[derive(Debug)]
-pub(crate) struct ReadyBlockingStyleImportGraph {
+pub(super) struct ReadyBlockingStyleImportGraph {
     source: ReadyBlockingStyleImportGraphSource,
     roots: Vec<ConnectedStyleImportRoot>,
     graph: Arc<crate::stylesheet_blocking::StylesheetImportGraphFetchResult>,
 }
 
 #[derive(Debug)]
-pub(crate) enum ReadyBlockingStyleImportGraphSource {
+pub(super) enum ReadyBlockingStyleImportGraphSource {
     Inline(Arc<ConnectedLoadOperation>),
     Linked(crate::stylesheet_blocking::StylesheetFetch),
 }
@@ -45,7 +45,7 @@ impl ReadyBlockingStyleImportGraph {
         }
     }
 
-    pub(crate) fn into_parts(
+    pub(super) fn into_parts(
         self,
     ) -> (
         ReadyBlockingStyleImportGraphSource,
@@ -128,7 +128,7 @@ impl DocumentRuntime {
             .is_some()
     }
 
-    pub(crate) fn take_ready_blocking_style_import_graphs(
+    pub(super) fn take_ready_blocking_style_import_graphs(
         &mut self,
     ) -> Vec<ReadyBlockingStyleImportGraph> {
         let pending_inline_imports = self
@@ -198,7 +198,7 @@ impl DocumentRuntime {
         ready
     }
 
-    pub(crate) fn complete_ready_blocking_style_import_graph(
+    pub(super) fn complete_ready_blocking_style_import_graph(
         &mut self,
         source: ReadyBlockingStyleImportGraphSource,
         owner_install_successful: bool,

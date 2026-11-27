@@ -919,7 +919,11 @@ impl_reflection_callback_data!(UsvStringReflection);
 #[derive(Clone, Copy)]
 #[repr(u32)]
 pub(super) enum NullToEmptyDomStringReflection {
+    BodyALink,
     BodyBgColor,
+    BodyLink,
+    BodyText,
+    BodyVLink,
     FontColor,
     FrameMarginHeight,
     FrameMarginWidth,
@@ -938,8 +942,24 @@ const NULL_TO_EMPTY_DOM_STRING_REFLECTION_DESCRIPTORS: &[(
     ReflectedAttributeDescriptor,
 )] = &[
     (
+        NullToEmptyDomStringReflection::BodyALink,
+        ReflectedAttributeDescriptor::new_html_element("HTMLBodyElement", "body", "alink", "aLink"),
+    ),
+    (
         NullToEmptyDomStringReflection::BodyBgColor,
         ReflectedAttributeDescriptor::new("HTMLBodyElement", "bgcolor", "bgColor"),
+    ),
+    (
+        NullToEmptyDomStringReflection::BodyLink,
+        ReflectedAttributeDescriptor::new_html_element("HTMLBodyElement", "body", "link", "link"),
+    ),
+    (
+        NullToEmptyDomStringReflection::BodyText,
+        ReflectedAttributeDescriptor::new_html_element("HTMLBodyElement", "body", "text", "text"),
+    ),
+    (
+        NullToEmptyDomStringReflection::BodyVLink,
+        ReflectedAttributeDescriptor::new_html_element("HTMLBodyElement", "body", "vlink", "vLink"),
     ),
     (
         NullToEmptyDomStringReflection::FontColor,
@@ -1131,7 +1151,7 @@ impl CrossOriginReflection {
 
 impl_reflection_callback_data!(CrossOriginReflection);
 
-pub(super) fn set_reflected_attribute(
+pub(in crate::native_bridge) fn set_reflected_attribute(
     scope: &mut v8::PinScope<'_, '_>,
     runtime_ptr: *mut super::super::PageScriptHost,
     handle: DomHandle,
@@ -1146,31 +1166,6 @@ pub(super) fn set_reflected_attribute(
             name,
             value,
         );
-    });
-}
-
-pub(super) fn set_reflected_style_attribute_with_inline_base_url(
-    scope: &mut v8::PinScope<'_, '_>,
-    runtime_ptr: *mut super::super::PageScriptHost,
-    handle: DomHandle,
-    value: &str,
-    inline_base_url: Option<&url::Url>,
-) {
-    custom_elements::with_custom_element_reaction_scope(scope, runtime_ptr, |scope| {
-        let runtime = unsafe { &mut *runtime_ptr };
-        let _ = runtime.set_style_attribute_from_cssom_appending_to_current_reaction_queue(
-            scope,
-            runtime_ptr,
-            handle,
-            value,
-        );
-        runtime.set_element_inline_style_csp_state(
-            handle,
-            crate::style_engine::InlineStyleCspState::Cssom,
-        );
-        if let Some(inline_base_url) = inline_base_url {
-            runtime.set_element_inline_style_base_url(handle, inline_base_url.clone());
-        }
     });
 }
 

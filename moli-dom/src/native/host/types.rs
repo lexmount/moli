@@ -151,10 +151,20 @@ pub(super) struct ShadowSlotNameIndex {
     pub(super) slots_by_name: HashMap<String, Vec<DomHandle>>,
 }
 
+/// Native inputs changed since the last successful screen layout.
+#[derive(Debug, Clone)]
+pub(super) struct TrackedLayoutChanges {
+    pub(super) document: DomHandle,
+    pub(super) targets: IndexSet<DomHandle>,
+    pub(super) has_native_changes: bool,
+}
+
 #[derive(Debug, Clone)]
 pub struct DomHost {
     pub(super) dom: NativeDom,
     pub(super) dom_version: Cell<u64>,
+    pub(super) document_layout_versions: RefCell<HashMap<DomHandle, u64>>,
+    pub(super) tracked_layout_changes: RefCell<Option<Box<TrackedLayoutChanges>>>,
     pub(super) query_version: Cell<u64>,
     pub(super) shadow_root_binding_version: Cell<u64>,
     pub(super) connected_shadow_roots_version: Cell<u64>,

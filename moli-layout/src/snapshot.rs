@@ -58,56 +58,60 @@ impl Default for PaintColor {
 /// Paint-facing compatibility name for a canonical CSS-pixel rectangle.
 pub type PaintRect = crate::LayoutRect;
 
-/// Snap one paint-space extent to whole layout pixels while preserving a
-/// non-trivial nonzero size.
-///
-/// This is Blink's `SnapSizeToPixel` contract over Moli's shared 1/64 layout
-/// grid. The returned location and size must be used together: the size is
-/// sensitive to the fractional part of the location.
-pub fn pixel_snap_paint_axis(location: f32, size: f32) -> (f32, f32) {
-    pixel_snap_paint_axis_impl(location, size, false)
-}
+/// The device-pixel grid for CSS geometry before property transforms.
+#[derive(Clone, Copy)]
+pub struct PaintPixelGrid(f64);
 
-/// Snap one paint-space extent to whole layout pixels, allowing a thin extent
-/// to collapse to zero.
-///
-/// Border inner edges use this variant, matching Blink's
-/// `SnapSizeToPixelAllowingZero` behavior.
-pub fn pixel_snap_paint_axis_allowing_zero(location: f32, size: f32) -> (f32, f32) {
-    pixel_snap_paint_axis_impl(location, size, true)
-}
-
-fn pixel_snap_paint_axis_impl(location: f32, size: f32, allow_zero: bool) -> (f32, f32) {
-    let location = f64::from(location);
-    let size = f64::from(size);
-    let fraction = location % 1.0;
-    let snapped_location = round_layout_pixel(location);
-    let mut snapped_size = round_layout_pixel(fraction + size) - round_layout_pixel(fraction);
-    let layout_unit_epsilon = 1.0 / f64::from(crate::LAYOUT_SUBPIXELS_PER_CSS_PIXEL);
-    if !allow_zero && snapped_size == 0.0 && size.abs() > 4.0 * layout_unit_epsilon {
-        snapped_size = size.signum();
+impl PaintPixelGrid {
+    pub fn new(device_scale: f32) -> Self {
+        Self(if device_scale.is_finite() && device_scale > 0.0 {
+            f64::from(device_scale)
+        } else {
+            1.0
+        })
     }
-    (snapped_location as f32, snapped_size as f32)
-}
 
-pub(crate) fn round_layout_pixel(value: f64) -> f64 {
-    (value + 0.5).floor()
-}
-
-/// Pixel-snap a positive finite rectangle in pre-transform paint space.
-pub fn pixel_snap_paint_rect(rect: PaintRect) -> Option<PaintRect> {
-    if !rect.x.is_finite()
-        || !rect.y.is_finite()
-        || !rect.width.is_finite()
-        || !rect.height.is_finite()
-        || rect.width <= 0.0
-        || rect.height <= 0.0
-    {
-        return None;
+    /// The size of one device pixel in pre-transform CSS coordinates.
+    pub fn pixel_size(self) -> f64 {
+        1.0 / self.0
     }
-    let (x, width) = pixel_snap_paint_axis(rect.x, rect.width);
-    let (y, height) = pixel_snap_paint_axis(rect.y, rect.height);
-    (width > 0.0 && height > 0.0).then(|| PaintRect::new(x, y, width, height))
+
+    pub fn snap_rect(self, rect: PaintRect) -> Option<PaintRect> {
+        let (x, width) = self.snap_axis(f64::from(rect.x), f64::from(rect.width));
+        let (y, height) = self.snap_axis(f64::from(rect.y), f64::from(rect.height));
+        let rect = PaintRect::new(x as f32, y as f32, width as f32, height as f32);
+        (rect.width > 0.0
+            && rect.height > 0.0
+            && [rect.x, rect.y, rect.width, rect.height]
+                .into_iter()
+                .all(f32::is_finite))
+        .then_some(rect)
+    }
+
+    /// Snap an extent, preserving a non-trivial nonzero size. Location and
+    /// size are resolved together so neighboring boxes share an edge.
+    pub fn snap_axis(self, location: f64, size: f64) -> (f64, f64) {
+        self.snap_axis_impl(location, size, false)
+    }
+
+    /// Snap an extent that can collapse, such as the inside of a border.
+    pub fn snap_axis_allowing_zero(self, location: f64, size: f64) -> (f64, f64) {
+        self.snap_axis_impl(location, size, true)
+    }
+
+    fn snap_axis_impl(self, location: f64, size: f64, allow_zero: bool) -> (f64, f64) {
+        let round_pixel = |value: f64| (value + 0.5).floor();
+        let location = location * self.0;
+        let size = size * self.0;
+        let fraction = location % 1.0;
+        let snapped_location = round_pixel(location);
+        let mut snapped_size = round_pixel(fraction + size) - round_pixel(fraction);
+        let layout_unit_epsilon = 1.0 / f64::from(crate::LAYOUT_SUBPIXELS_PER_CSS_PIXEL);
+        if !allow_zero && snapped_size == 0.0 && size.abs() > 4.0 * layout_unit_epsilon {
+            snapped_size = size.signum();
+        }
+        (snapped_location / self.0, snapped_size / self.0)
+    }
 }
 
 /// Paint-facing compatibility name for a canonical CSS-pixel point.
@@ -583,13 +587,58 @@ pub enum PaintImageSampling {
 #[derive(Clone, Debug, PartialEq)]
 pub struct PaintImage {
     pub image: PaintImageId,
-    /// One image tile, before the property transform.
     pub destination: PaintRect,
-    /// When present, repeat the tile continuously on both axes inside these
-    /// finite bounds, in the same coordinate space as `destination`.
-    /// The tile phase and size stay fractional; only the coverage is snapped.
-    pub repeat_bounds: Option<PaintRect>,
     pub sampling: PaintImageSampling,
+    pub transform: PaintTransform2D,
+}
+
+/// One axis of a finite tile grid in local CSS pixels. The step includes the
+/// tile size and any gap. A single tile does not require a step.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PaintTileAxis {
+    pub start: f64,
+    pub size: f64,
+    pub step: f64,
+    pub count: u32,
+}
+
+impl PaintTileAxis {
+    pub const fn new(start: f64, size: f64, step: f64, count: u32) -> Self {
+        Self {
+            start,
+            size,
+            step,
+            count,
+        }
+    }
+}
+
+/// A tile grid in the same coordinate space as its projected `coverage`.
+/// Backends use the supplied coverage without rounding it again. Tile edge
+/// snapping never accumulates into the grid phase.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PaintTileGrid {
+    pub x: PaintTileAxis,
+    pub y: PaintTileAxis,
+    pub coverage: PaintRect,
+    pub snap_tiles: bool,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum PaintTileSource {
+    Image(PaintImageId, PaintImageSampling),
+    Svg(PaintSvgImageId, PaintSize),
+    Brush(PaintBrush),
+}
+
+/// Draws a rectangle of a source once or repeatedly. Raster source rectangles
+/// use image pixels and constrain filtering to the texels they intersect.
+/// SVG source rectangles use coordinates in the supplied SVG viewport.
+#[derive(Clone, Debug, PartialEq)]
+pub struct PaintTiles {
+    pub source: PaintTileSource,
+    pub source_rect: PaintRect,
+    pub grid: PaintTileGrid,
     pub transform: PaintTransform2D,
 }
 
@@ -799,6 +848,8 @@ pub enum PaintFragment {
     Image(PaintImage),
     /// One parsed vector image backed by a snapshot-local SVG resource table.
     SvgImage(PaintSvgImage),
+    /// One clipped, finite grid sharing a source rectangle across all tiles.
+    Tiles(Box<PaintTiles>),
 }
 
 impl PaintFragment {
@@ -998,6 +1049,12 @@ impl PaintSnapshot {
             svg_images: Vec::new(),
             diagnostics: Vec::new(),
         }
+    }
+
+    /// Returns the live viewport grid for geometry before property transforms.
+    /// Capture scaling is applied after paint has aligned to this grid.
+    pub fn pixel_grid(&self) -> PaintPixelGrid {
+        PaintPixelGrid::new(self.viewport.device_pixel_ratio)
     }
 
     /// Appends a paint fragment.
@@ -1238,6 +1295,15 @@ fn rebase_embedded_fragment(
             image.transform = parent.concatenate(image.transform);
             PaintFragment::SvgImage(image)
         }
+        PaintFragment::Tiles(mut tiles) => {
+            match &mut tiles.source {
+                PaintTileSource::Image(image, _) => *image = *image_ids.get(image.index())?,
+                PaintTileSource::Svg(image, _) => *image = *svg_image_ids.get(image.index())?,
+                PaintTileSource::Brush(_) => {}
+            }
+            tiles.transform = parent.concatenate(tiles.transform);
+            PaintFragment::Tiles(tiles)
+        }
     })
 }
 
@@ -1249,12 +1315,13 @@ mod tests {
 
     #[test]
     fn paint_pixel_snapping_preserves_blink_layout_unit_semantics() {
-        assert_eq!(pixel_snap_paint_axis(0.0, 3.0 / 64.0), (0.0, 0.0));
-        assert_eq!(pixel_snap_paint_axis(0.0, 5.0 / 64.0), (0.0, 1.0));
-        assert_eq!(pixel_snap_paint_axis(0.5, 1.5), (1.0, 1.0));
-        assert_eq!(pixel_snap_paint_axis_allowing_zero(0.5, 0.5), (1.0, 0.0));
+        let grid = PaintPixelGrid::new(1.0);
+        assert_eq!(grid.snap_axis(0.0, 3.0 / 64.0), (0.0, 0.0));
+        assert_eq!(grid.snap_axis(0.0, 5.0 / 64.0), (0.0, 1.0));
+        assert_eq!(grid.snap_axis(0.5, 1.5), (1.0, 1.0));
+        assert_eq!(grid.snap_axis_allowing_zero(0.5, 0.5), (1.0, 0.0));
         assert_eq!(
-            pixel_snap_paint_rect(PaintRect::new(151.09375, 24.0, 90.0, 90.0)),
+            grid.snap_rect(PaintRect::new(151.09375, 24.0, 90.0, 90.0)),
             Some(PaintRect::new(151.0, 24.0, 90.0, 90.0))
         );
     }

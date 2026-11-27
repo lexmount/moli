@@ -4,6 +4,8 @@
 //! the small set of string helpers around them.
 
 mod color;
+mod cssom_block;
+mod cssom_property;
 mod declaration;
 mod font_face;
 mod font_palette;
@@ -12,6 +14,7 @@ mod math;
 mod media;
 mod root_margin;
 mod stylesheet_imports;
+mod stylo_prefs;
 mod stylo_stylesheet;
 mod transform;
 mod util;
@@ -21,7 +24,12 @@ pub use color::{
     css_system_color_srgb, parse_absolute_css_color, parse_css_color_scheme_flags,
     parse_css_color_to_opaque_srgb_hex, parse_css_color_to_srgb_bytes,
 };
-pub use declaration::{CssDeclaration, DeclarationParseOptions, parse_declaration_list};
+pub use cssom_block::{CssDeclarationBlock, parse_declaration_block};
+pub use cssom_property::{parse_cssom_property, parse_cssom_property_without_document};
+pub use declaration::{
+    CssDeclaration, DeclarationParseOptions, parse_declaration_list,
+    parse_declaration_list_with_source_check,
+};
 pub use font_face::{
     CssFontFace, CssFontFamily, CssFontShorthand, CssFontSource, font_family_name_key,
     font_load_query_contains_css_wide_keyword, font_load_query_family, font_load_query_is_valid,
@@ -45,8 +53,7 @@ pub use media::{
 };
 pub use root_margin::{normalize_root_margin, root_margin_components};
 pub use style::moli_declaration_block::{
-    CssDeclarationBlock, CssDeclarationEntry, CssMutationProjection, CssRemoveResult, CssSetResult,
-    parse_declaration_block,
+    CssDeclarationEntry, CssMutationProjection, CssRemoveResult, CssSetResult, ParsedCssomProperty,
 };
 pub use stylesheet_imports::{
     StylesheetImportPlaceholderLoader, StylesheetImports,
@@ -54,6 +61,7 @@ pub use stylesheet_imports::{
     parse_detached_author_stylesheet_with_stylo, stylesheet_import_urls_with_stylo,
     stylesheet_imports_from_native_with_stylo,
 };
+pub use stylo_prefs::ensure_stylo_browser_compat_prefs;
 pub use stylo_stylesheet::{
     CssConditionRuleView, CssCounterStyleRuleView, CssDetachedRuleListMutation,
     CssFontFaceDescriptorEntryView, CssFontFaceRuleView, CssFontFeatureValueEntryView,
@@ -135,7 +143,7 @@ pub use util::functional_pseudo_name;
 
 pub use stylo_stylesheet::{
     CssContainerConditionView, container_conditions_from_native,
-    parse_container_conditions_with_stylo,
+    parse_container_conditions_with_stylo, parse_container_rule_condition_snapshot_with_stylo,
 };
 
 #[cfg(test)]

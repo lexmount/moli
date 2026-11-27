@@ -1,6 +1,151 @@
 use super::*;
 
 #[test]
+fn inline_css_text_preserves_css_whitespace_and_priority_tokens() {
+    let mut vm = new_storage_test_vm("https://cssom-tokens.test/");
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const {style} = document.createElement('div');
+  const cases = [
+    ['width: 10px\u00a0; height: 20px;', 'height: 20px;'],
+    ['width: 10px !important\u00a0; width: 30px;', 'width: 30px;'],
+    ['width\u00a0: 10px; height: 20px;', 'height: 20px;'],
+    ['cssFloat: left; float: right;', 'float: right;'],
+    ['width: 10px !/**/important/**/; width: 30px;', 'width: 10px !important;'],
+    ['--token: \u00a0value\u00a0;', '--token: \u00a0value\u00a0;'],
+    ['content: "hello !important', 'content: "hello !important";'],
+    ['--Token: [value !important', '--Token: [value !important];'],
+  ];
+  for (const [source, expected] of cases) {
+    style.cssText = source;
+    if (style.cssText !== expected) {
+      throw new Error(`${JSON.stringify(source)} produced ${JSON.stringify(style.cssText)}`);
+    }
+  }
+  return 'ok';
+})()
+"#,
+        )
+        .expect("cssText must preserve CSS tokens before parsing declarations");
+    assert_eq!(result, "ok");
+}
+
+#[test]
+fn cssom_preparsed_write_preserves_mutations_and_custom_element_observations() {
+    let mut vm = new_storage_test_vm("https://cssom-preparsed-write.test/");
+    assert_eq!(
+        vm.eval(include_str!("cssom_preparsed_write.js"))
+            .expect("CSSOM writes should preserve callback-visible state"),
+        "ok"
+    );
+}
+
+#[test]
+fn reentrant_custom_element_style_reactions_keep_the_latest_declarations() {
+    let mut vm = new_storage_html_test_vm("https://cssom-reentrant-style.test/");
+    assert_eq!(
+        vm.eval(
+            r#"
+(() => {
+  const destination = document.body.appendChild(document.createElement('section'));
+  class ReentrantStyle extends HTMLElement {
+    static observedAttributes = ['style'];
+    attributeChangedCallback(name, oldValue, newValue) {
+      if (!this.reenter) return;
+      const reenter = this.reenter;
+      this.reenter = null;
+      this.before = [oldValue, newValue, this.style.width, getComputedStyle(this).width];
+      reenter(this);
+    }
+  }
+  customElements.define('reentrant-style', ReentrantStyle);
+  const cases = [
+    ['property', el => el.style.height = '20px', 'width: 10px; height: 20px;', '10px', '20px'],
+    ['cssText', el => el.style.cssText = 'height: 30px', 'height: 30px;', 'auto', '30px'],
+    ['remove', el => el.removeAttribute('style'), null, 'auto', 'auto'],
+    ['move', el => { destination.append(el); el.style.height = '40px'; },
+      'width: 10px; height: 40px;', '10px', '40px'],
+  ];
+  for (const [label, reenter, expectedText, width, height] of cases) {
+    const el = document.body.appendChild(document.createElement('reentrant-style'));
+    el.reenter = reenter;
+    el.style.width = '10px';
+    const actual = [el.before, el.getAttribute('style'), el.style.cssText,
+      getComputedStyle(el).width, getComputedStyle(el).height];
+    const expected = [[null, 'width: 10px;', '10px', '10px'], expectedText, expectedText ?? '',
+      width, height];
+    if (JSON.stringify(actual) !== JSON.stringify(expected)) {
+      throw new Error(`${label} produced ${JSON.stringify(actual)}`);
+    }
+  }
+  return 'ok';
+})()
+"#,
+        )
+        .expect("CSSOM state should be published before style attribute reactions"),
+        "ok"
+    );
+}
+
+#[test]
+fn inline_style_noop_preserves_attribute_text_and_custom_element_reactions() {
+    let mut vm = new_storage_html_test_vm("https://cssom-noop.test/");
+    assert_eq!(
+        vm.eval(r#"
+(() => {
+  const reactions = [];
+  class MutationProbe extends HTMLElement {
+    static observedAttributes = ['style'];
+    attributeChangedCallback(name, oldValue, newValue) { reactions.push([oldValue, newValue]); }
+  }
+  customElements.define('mutation-probe', MutationProbe);
+  const el = document.body.appendChild(document.createElement('mutation-probe'));
+  const observer = new MutationObserver(() => {});
+  observer.observe(el, {attributes: true, attributeOldValue: true});
+  const check = (name, mutate, expectedText, records, expectedReactions) => {
+    mutate();
+    const actual = [el.getAttribute('style'), observer.takeRecords().map(r => r.oldValue), reactions.splice(0)];
+    if (JSON.stringify(actual) !== JSON.stringify([expectedText, records, expectedReactions])) {
+      throw new Error(`${name} produced ${JSON.stringify(actual)}`);
+    }
+  };
+  const raw = 'width:10px;/* original */';
+  el.setAttribute('style', raw);
+  observer.takeRecords();
+  reactions.length = 0;
+  check('same width', () => el.style.width = '10px', raw, [], [[raw, raw]]);
+  check('same setProperty', () => el.style.setProperty('width', '10px'), raw, [], [[raw, raw]]);
+  check('invalid width', () => el.style.width = 'invalid', raw, [], [[raw, raw]]);
+  check('missing height', () => el.style.removeProperty('height'), raw, [], [[raw, raw]]);
+  check('same setAttribute', () => el.setAttribute('style', raw), raw, [raw], [[raw, raw]]);
+  const canonical = 'width: 10px;';
+  check('cssText', () => el.style.cssText = canonical, canonical, [raw], [[raw, canonical]]);
+  check('same cssText', () => el.style.cssText = canonical, canonical, [canonical], [[canonical, canonical]]);
+  el.style.height = '20px';
+  el.style.width = '11px';
+  if (el.style.cssText !== 'width: 11px; height: 20px;') throw new Error(el.style.cssText);
+  el.style.marginLeft = '1px';
+  el.style.marginInlineStart = '2px';
+  el.style.marginLeft = '1px';
+  if (!el.style.cssText.endsWith('margin-inline-start: 2px; margin-left: 1px;') ||
+      getComputedStyle(el).marginLeft !== '1px') throw new Error('logical order');
+  el.style.backgroundImage = 'url(a.png)';
+  const former = el.getAttribute('style');
+  el.style.backgroundImage = 'url(./a.png)';
+  if (el.getAttribute('style') === former || !el.style.backgroundImage.includes('./a.png')) {
+    throw new Error('specified URL spelling');
+  }
+  return 'ok';
+})()
+"#)
+        .expect("CSSOM must preserve the observable effects of no-op writes"),
+        "ok"
+    );
+}
+
+#[test]
 fn detached_css_style_css_text_parses_serializes_and_tracks_order() {
     let mut vm = new_storage_test_vm("https://detached-style-css-text.test/");
 
@@ -69,7 +214,7 @@ fn detached_css_style_css_text_parses_serializes_and_tracks_order() {
 
     assert_eq!(
         result,
-        "6,color,background-image,margin-top,margin-right,red,url(\"a;b\"),0px,important,color: red; background-image: url(\"a;b\"); margin: 0px !important;|6,margin-top,margin-right,margin-bottom,blue,none,,url(\"a;b\"),margin: 0px !important; display: none; color: blue;|0|0|important,true|0|"
+        "6,color,background-image,margin-top,margin-right,red,url(\"a;b\"),0px,important,color: red; background-image: url(\"a;b\"); margin: 0px !important;|6,color,margin-top,margin-right,blue,none,,url(\"a;b\"),color: blue; margin: 0px !important; display: none;|0|0|important,true|0|"
     );
 }
 #[test]
@@ -1078,4 +1223,137 @@ fn detached_css_style_standard_idl_batch_uses_pdb_projection() {
         .expect("detached standard IDL properties should use PDB projection");
 
     assert_eq!(result, "PASS");
+}
+#[test]
+fn inline_cssom_defers_text_through_style_resolution_and_observation() {
+    let mut vm = new_parsed_test_vm(
+        "https://deferred-inline-style.test/",
+        "<!doctype html><div id='box'></div>",
+    );
+    let handle = vm.document_runtime.get_element_by_id("box").unwrap();
+
+    assert_eq!(
+        vm.eval(
+            r#"
+            const box = document.getElementById('box');
+            const simple = new MutationObserver(() => {});
+            simple.observe(box, {attributes:true});
+            box.style.width = '10px';
+            box.style.height = '20px';
+            JSON.stringify([
+                box.hasAttribute('style'), box.matches('[style]'), box.style.width,
+                getComputedStyle(box).height,
+                simple.takeRecords().map(record => record.oldValue)
+            ])
+        "#
+        )
+        .unwrap(),
+        r#"[true,true,"10px","20px",[null,null]]"#,
+    );
+    let host = vm.context_host_weak_for_test().upgrade().unwrap();
+    assert!(
+        !host
+            .borrow()
+            .element_cssom_style(handle)
+            .unwrap()
+            .is_serialized()
+    );
+    let before_update = vm.document_runtime.dom_host().dom().clone();
+
+    assert_eq!(
+        vm.eval(r#"
+            box.style.width = '12px';
+            const old = new MutationObserver(() => {});
+            old.observe(document.body, {subtree:true, attributeOldValue:true, attributeFilter:['style']});
+            box.style.width = '14px';
+            box.style.height = '22px';
+            JSON.stringify([
+                old.takeRecords().map(record => record.oldValue),
+                simple.takeRecords().length,
+                box.attributes.getNamedItem('style').value, box.style.cssText
+            ])
+        "#).unwrap(),
+        r#"[["width: 12px; height: 20px;","width: 14px; height: 20px;"],3,"width: 14px; height: 22px;","width: 14px; height: 22px;"]"#,
+    );
+    assert!(
+        host.borrow()
+            .element_cssom_style(handle)
+            .unwrap()
+            .is_serialized(),
+        "oldValue observation must keep the declaration on the node"
+    );
+    assert_eq!(
+        before_update.get_attribute(handle, "style").as_deref(),
+        Some("width: 10px; height: 20px;"),
+    );
+}
+
+#[test]
+fn inline_cssom_custom_properties_use_the_node_declaration_block() {
+    let mut vm = new_parsed_test_vm(
+        "https://custom-inline-style.test/",
+        "<!doctype html><div id='box'></div>",
+    );
+    let handle = vm.document_runtime.get_element_by_id("box").unwrap();
+    assert_eq!(
+        vm.eval(
+            r#"
+            const box = document.getElementById('box');
+            box.style.setProperty('--Tone', 'red', 'important');
+            box.style.setProperty('--alias', 'var(--Tone)');
+            box.style.width = '10px';
+            JSON.stringify([
+                box.style.getPropertyValue('--Tone'),
+                box.style.getPropertyPriority('--Tone'),
+                box.style.getPropertyValue('--tone'),
+                getComputedStyle(box).getPropertyValue('--alias').trim(),
+            ])
+        "#
+        )
+        .unwrap(),
+        r#"["red","important","","red"]"#,
+    );
+    let host = vm.context_host_weak_for_test().upgrade().unwrap();
+    assert!(
+        host.borrow()
+            .element_inline_style_declaration_state(handle)
+            .unwrap()
+            .compatibility
+            .is_none()
+    );
+    assert_eq!(
+        vm.eval("box.style.removeProperty('--Tone')").unwrap(),
+        "red",
+    );
+}
+
+#[test]
+fn inline_cssom_source_survives_document_replacement() {
+    let mut vm = new_parsed_test_vm(
+        "https://deferred-style-document-open.test/",
+        "<!doctype html><div id='box'></div>",
+    );
+    assert_eq!(
+        vm.eval(
+            r#"
+            window.oldBox = document.getElementById('box');
+            window.oldStyle = oldBox.style;
+            oldStyle.width = '21px';
+            oldStyle.height = '11px';
+            document.open();
+            document.write('<!doctype html><div id="replacement"></div>');
+            document.close();
+            oldStyle.width = '35px';
+            const imported = document.importNode(oldBox, false);
+            oldBox.style.removeProperty('height');
+            JSON.stringify([
+                document.querySelector('#box'), oldBox.isConnected, oldStyle.cssText,
+                imported.getAttributeNS(null, 'style'), imported.style.height,
+                imported.matches('[style*="35px"]')
+            ])
+        "#
+        )
+        .unwrap(),
+        r#"[null,false,"width: 35px;","width: 35px; height: 11px;","11px",true]"#,
+    );
 }

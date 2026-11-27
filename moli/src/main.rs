@@ -15,6 +15,7 @@ use std::process::ExitCode;
 #[cfg(all(
     feature = "jemalloc",
     not(target_os = "windows"),
+    not(target_env = "ohos"),
     not(any(
         all(target_os = "linux", target_env = "gnu", target_arch = "x86_64"),
         all(

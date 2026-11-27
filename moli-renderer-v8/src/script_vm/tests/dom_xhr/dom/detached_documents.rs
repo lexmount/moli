@@ -1,6 +1,193 @@
 use super::*;
 
 #[test]
+fn detached_document_write_continues_inside_adopted_open_elements() {
+    let mut vm = new_storage_html_test_vm("https://detached-document-write.test/");
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const source = document.implementation.createHTMLDocument();
+  const mount = document.body.appendChild(document.createElement('main'));
+  source.write('<!doctype html><div id="panel"><section id="slot">');
+  const panel = source.body.firstElementChild;
+  mount.appendChild(panel);
+
+  source.write('<str');
+  source.write('ong id="answer">Streamed answer</strong></section></div>');
+  source.writeln('<p id="following">Following</p>');
+  source.close();
+
+  const answer = document.getElementById('answer');
+  return JSON.stringify([
+    mount.firstElementChild === panel,
+    answer?.parentElement.id,
+    answer?.ownerDocument === document,
+    answer?.textContent,
+    source.body.firstElementChild.id,
+  ]);
+})()
+"#,
+        )
+        .expect("detached document writes should retain the open element stack");
+    assert_eq!(
+        result,
+        r#"[true,"slot",true,"Streamed answer","following"]"#
+    );
+}
+
+#[test]
+fn detached_document_write_open_resets_the_stream_and_scripts_remain_inert() {
+    let mut vm = new_storage_html_test_vm("https://detached-document-write-open.test/");
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const source = document.implementation.createHTMLDocument('Original');
+  const originalBody = source.body;
+  const initialState = source.readyState;
+  source.write('<title>Streamed</title><p id="old">Old');
+  const title = source.title;
+  const firstBody = source.body;
+  source.open();
+  const openState = source.readyState;
+  source.write('<p id="new">New</p><script>window.detachedScriptRan = true</script>');
+  source.close();
+  const script = source.body.lastElementChild;
+  document.body.appendChild(script);
+  return JSON.stringify([
+    [initialState, openState, source.readyState],
+    title,
+    firstBody !== originalBody,
+    source.body !== firstBody,
+    source.body.firstElementChild.id,
+    source.getElementById('old') === null,
+    !window.detachedScriptRan,
+  ]);
+})()
+"#,
+        )
+        .expect("a detached document can replace its write stream");
+    assert_eq!(
+        result,
+        r#"[["complete","loading","complete"],"Streamed",true,true,"new",true,true]"#
+    );
+}
+
+#[test]
+fn detached_document_write_preserves_window_event_handlers() {
+    let mut vm = new_storage_html_test_vm("https://detached-document-window-handlers.test/");
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const loadHandler = () => {};
+  const errorHandler = () => {};
+  window.onload = loadHandler;
+  window.onerror = errorHandler;
+
+  return JSON.stringify(['body', 'frameset'].map(tag => {
+    const source = document.implementation.createHTMLDocument();
+    source.write(`<!doctype html><${tag} onload="void 0" onerror="void 0">`);
+    source.close();
+    const element = source.querySelector(tag);
+    return [
+      element?.getAttribute('onload'),
+      element?.getAttribute('onerror'),
+      window.onload === loadHandler,
+      window.onerror === errorHandler,
+    ];
+  }));
+})()
+"#,
+        )
+        .expect("detached writes should keep Window handlers on the active document");
+    assert_eq!(
+        result,
+        r#"[["void 0","void 0",true,true],["void 0","void 0",true,true]]"#
+    );
+}
+
+#[test]
+fn detached_document_write_updates_only_the_adopting_iframe_window() {
+    let mut vm = new_storage_html_test_vm("https://detached-write-iframe-handlers.test/");
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const frame = document.body.appendChild(document.createElement('iframe'));
+  const child = frame.contentWindow;
+  const childDoc = frame.contentDocument;
+  const source = document.implementation.createHTMLDocument();
+  source.write('<!doctype html><html><head></head>');
+  const root = childDoc.adoptNode(source.documentElement);
+  childDoc.replaceChild(root, childDoc.documentElement);
+
+  const parentLoad = () => {};
+  const parentError = () => {};
+  const childLoad = () => {};
+  const childError = () => {};
+  window.onload = parentLoad;
+  window.onerror = parentError;
+  child.onload = childLoad;
+  child.onerror = childError;
+  const childHandlersInstalled = child.onload === childLoad && child.onerror === childError;
+
+  source.write('<body onload="void 0" onerror="void 0">');
+  return JSON.stringify({
+    inChildDocument: root.querySelector('body')?.ownerDocument === childDoc,
+    childHandlersInstalled,
+    parentHandlersPreserved: [window.onload === parentLoad, window.onerror === parentError],
+    childHandlersReplaced: [child.onload !== childLoad, child.onerror !== childError],
+  });
+})()
+"#,
+        )
+        .expect("writing into the adopted iframe root should evaluate");
+    assert_eq!(
+        result,
+        r#"{"inChildDocument":true,"childHandlersInstalled":true,"parentHandlersPreserved":[true,true],"childHandlersReplaced":[true,true]}"#
+    );
+}
+
+#[test]
+fn detached_document_write_open_resets_quirks_before_a_complete_doctype() {
+    let mut vm = new_storage_html_test_vm("https://detached-document-write-quirks.test/");
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const source = document.implementation.createHTMLDocument();
+  source.write('<p>Old');
+  source.close();
+  const beforeOpen = source.compatMode;
+
+  source.open();
+  const afterOpen = source.compatMode;
+  source.write('<!doctype html');
+  const duringDoctype = source.compatMode;
+  source.write('><p class="Example">New</p>');
+  source.close();
+  return JSON.stringify([
+    beforeOpen,
+    afterOpen,
+    duringDoctype,
+    source.compatMode,
+    source.doctype?.name,
+    source.querySelector('.example') === null,
+    source.querySelector('.Example')?.textContent,
+  ]);
+})()
+"#,
+        )
+        .expect("opening a detached document should reset quirks mode immediately");
+    assert_eq!(
+        result,
+        r#"["BackCompat","CSS1Compat","CSS1Compat","CSS1Compat","html",true,"New"]"#
+    );
+}
+
+#[test]
 fn detached_document_tag_collection_exposes_named_item() {
     let mut vm = new_storage_test_vm("https://detached-document-named-item.test/");
 

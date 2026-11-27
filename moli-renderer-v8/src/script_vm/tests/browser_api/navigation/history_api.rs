@@ -665,3 +665,19 @@ const input = {{toString() {{
         );
     }
 }
+
+#[test]
+fn window_location_assignment_uses_the_href_setter_conversion() {
+    for value in ["null", "undefined"] {
+        let mut vm = new_storage_test_vm("https://location-forwarding.test/folder/page.html");
+        vm.eval(&format!("window.location = {value}; void 0"))
+            .unwrap();
+        assert_eq!(
+            vm.take_pending_location_navigation_with_seed()
+                .unwrap()
+                .url
+                .as_str(),
+            format!("https://location-forwarding.test/folder/{value}")
+        );
+    }
+}

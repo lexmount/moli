@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 //
 // This is a narrow port of Blitz's inline-SVG replaced-element bridge. The
-// live SVG subtree remains owned by NativeDom; a layout pass serializes its
-// original XML into one bounded, immutable `usvg::Tree`. Only numeric source
-// geometry survives with the outer frozen layout; paint retains the image.
+// live SVG subtree remains owned by NativeDom; a geometry or paint consumer
+// serializes its original XML into one bounded, immutable `usvg::Tree`.
+// Geometry keeps object quads for the measured viewport; paint keeps the image.
 //
 // The isolated tree also needs document CSS: sample the computed SVG paint
 // and text inputs separately, after matching selectors on original attributes.
@@ -15,7 +15,10 @@ use std::{
     sync::Arc,
 };
 
-use moli_layout::{LayoutImageResource, PaintColor, ReplacedMetrics, ResolvedLayoutStyle};
+use moli_layout::{
+    InlineSvgInput, LayoutImageResource, LayoutQuad, LayoutSize, PaintColor, ReplacedMetrics,
+    ResolvedLayoutStyle,
+};
 use style::color::ColorSpace;
 use style::properties::{LonghandId, PropertyId};
 use style::values::computed::{SVGPaint, SVGPaintKind};
@@ -61,6 +64,8 @@ fn intrinsic_size_attribute(value: &str) -> &str {
     }
 }
 
+pub(crate) type SvgGeometry = Vec<(DomHandle, Vec<(DomHandle, LayoutQuad)>)>;
+
 #[cfg(test)]
 thread_local! { static PARSE_COUNT: std::cell::Cell<usize> = const { std::cell::Cell::new(0) }; }
 
@@ -69,14 +74,69 @@ pub(crate) fn parse_count() -> usize {
     PARSE_COUNT.with(std::cell::Cell::get)
 }
 
-pub(super) fn layout_content(
+pub(crate) fn pending_svg_geometry(
+    runtime: &PageScriptHost,
+    tree: &moli_layout::FrozenLayoutTree<DomHandle>,
+    sources: impl Iterator<Item = DomHandle>,
+) -> Vec<(DomHandle, LayoutSize)> {
+    if !tree.has_svg_viewports() {
+        return Vec::new();
+    }
+    let dom = runtime.dom_host().dom();
+    let mut seen = HashSet::new();
+    sources
+        .filter_map(|source| {
+            // Object quads belong to elements. Nested SVGs use the nearest
+            // ancestor that acquired a measured CSS viewport of its own.
+            dom.element(source)?;
+            let mut node = source;
+            while let Some(parent) = dom.parent_node(node) {
+                if dom
+                    .element(parent)
+                    .is_some_and(|element| element.is_svg_element("svg"))
+                    && let Some(size) = tree.pending_svg_viewport(parent)
+                {
+                    return Some((parent, size));
+                }
+                node = parent;
+            }
+            None
+        })
+        .filter(|(root, _)| seen.insert(*root))
+        .collect()
+}
+
+pub(crate) fn prepare_svg_geometry(
+    runtime: &PageScriptHost,
+    document: DomHandle,
+    viewport: moli_layout::LayoutViewport,
+    pending: Vec<(DomHandle, LayoutSize)>,
+) -> SvgGeometry {
+    let reads = RefCell::new(super::style_resolver::layout_style_read_scope(
+        runtime, document, viewport, None,
+    ));
+    pending
+        .into_iter()
+        .map(|(node, size)| {
+            let computed = reads.borrow_mut().read(node).computed_values();
+            let objects = computed
+                .and_then(|computed| {
+                    let style = ResolvedLayoutStyle::from_stylo(computed);
+                    collect_input(runtime, node, &style, size, &reads)
+                })
+                .map_or_else(Vec::new, |input| decode_geometry(node, &input, size));
+            (node, objects)
+        })
+        .collect()
+}
+
+pub(super) fn collect_input(
     runtime: &PageScriptHost,
     root: DomHandle,
     root_style: &ResolvedLayoutStyle,
-    viewport: moli_layout::LayoutSize,
+    viewport: LayoutSize,
     reads: &RefCell<StyleObservation<'_>>,
-    paint: bool,
-) -> Option<moli_layout::LayoutSvgContent<DomHandle>> {
+) -> Option<InlineSvgInput<DomHandle>> {
     if viewport.width <= 0.0 || viewport.height <= 0.0 {
         return None;
     }
@@ -93,10 +153,14 @@ pub(super) fn layout_content(
         .flatten()?;
     let source = prepare_source(source)?;
     let mut elements = Vec::new();
-    let mut pending = vec![(root, None)];
+    let mut pending = vec![(root, None, 0)];
     let mut referenced_ids = HashSet::new();
-    while let Some((node, parent)) = pending.pop() {
+    while let Some((node, parent, mut depth)) = pending.pop() {
         let parent = if let Some(element) = host.node(node).and_then(|node| node.as_element()) {
+            depth += 1;
+            if depth > moli_image::MAX_SVG_ELEMENT_DEPTH {
+                return None;
+            }
             if element.is_svg_element("use") {
                 let href = element.attribute("href").or_else(|| {
                     element
@@ -121,7 +185,7 @@ pub(super) fn layout_content(
         pending.extend(
             host.dom()
                 .html_serialization_child_ids_reversed(node)
-                .map(|node| (node, parent)),
+                .map(|node| (node, parent, depth)),
         );
     }
     let mut profiles = HashMap::<String, moli_image::SvgElementStyle>::new();
@@ -184,37 +248,77 @@ pub(super) fn layout_content(
             styles.push(Some(profile));
         }
     }
+    let style_bytes = profiles
+        .iter()
+        .map(|(declarations, properties)| {
+            declarations.len() + std::mem::size_of_val(properties.as_ref())
+        })
+        .sum();
+    Some(InlineSvgInput {
+        xml: source,
+        elements: elements.into_iter().map(|(node, _)| node).collect(),
+        styles,
+        style_bytes,
+    })
+}
+
+fn decode<T>(
+    root: DomHandle,
+    input: &InlineSvgInput<DomHandle>,
+    viewport: LayoutSize,
+    decode: impl FnOnce(
+        &[u8],
+        &[Option<moli_image::SvgElementStyle>],
+        (f32, f32),
+    ) -> Result<T, moli_image::SvgDecodeError>,
+) -> Option<T> {
     #[cfg(test)]
     PARSE_COUNT.with(|count| count.set(count.get() + 1));
-    let scene = match moli_image::decode_inline_svg_scene(
-        source.as_bytes(),
-        &styles,
+    match decode(
+        input.xml.as_bytes(),
+        &input.styles,
         (viewport.width, viewport.height),
     ) {
-        Ok(scene) => scene,
+        Ok(value) => Some(value),
         Err(error) => {
             tracing::debug!(
                 node = root.index(),
                 ?error,
                 "inline SVG scene decode failed"
             );
-            return None;
+            None
         }
+    }
+}
+
+pub(crate) fn decode_geometry(
+    root: DomHandle,
+    input: &InlineSvgInput<DomHandle>,
+    viewport: LayoutSize,
+) -> Vec<(DomHandle, LayoutQuad)> {
+    let Some(scene) = decode(root, input, viewport, moli_image::decode_inline_svg_scene) else {
+        return Vec::new();
     };
-    let objects = scene
-        .objects
+    object_quads(input, scene.objects)
+}
+
+fn object_quads(
+    input: &InlineSvgInput<DomHandle>,
+    objects: Vec<moli_image::SvgObjectGeometry>,
+) -> Vec<(DomHandle, LayoutQuad)> {
+    objects
         .into_iter()
         .filter_map(|geometry| {
             if geometry.element_index == 0 {
                 return None;
             }
-            let (source, _) = *elements.get(geometry.element_index)?;
+            let source = *input.elements.get(geometry.element_index)?;
             let [x, y, width, height] = geometry.bounds;
             let [a, b, c, d, e, f] = geometry.transform;
             let map = |x, y| moli_layout::LayoutPoint::new(a * x + c * y + e, b * x + d * y + f);
             Some((
                 source,
-                moli_layout::LayoutQuad {
+                LayoutQuad {
                     points: [
                         map(x, y),
                         map(x + width, y),
@@ -224,17 +328,55 @@ pub(super) fn layout_content(
                 },
             ))
         })
-        .collect();
-    let image = paint.then(|| {
-        let size = scene.image.tree().size();
+        .collect()
+}
+
+pub(super) fn decode_paint(
+    root: DomHandle,
+    input: &InlineSvgInput<DomHandle>,
+    viewport: LayoutSize,
+    collect_geometry: bool,
+) -> Option<(LayoutImageResource, Vec<(DomHandle, LayoutQuad)>)> {
+    let (image, objects) = if collect_geometry {
+        let scene = decode(root, input, viewport, moli_image::decode_inline_svg_scene)?;
+        (scene.image, object_quads(input, scene.objects))
+    } else {
+        (
+            decode(root, input, viewport, moli_image::decode_inline_svg_image)?,
+            Vec::new(),
+        )
+    };
+    let size = image.tree().size();
+    Some((
         LayoutImageResource {
             intrinsic_width: size.width(),
             intrinsic_height: size.height(),
             pixels: None,
-            svg: Some(Arc::new(scene.image)),
-        }
-    });
-    Some(moli_layout::LayoutSvgContent { image, objects })
+            svg: Some(Arc::new(image)),
+        },
+        objects,
+    ))
+}
+
+#[cfg(feature = "devtools")]
+pub(crate) fn prepare_svg_paint(
+    runtime: &PageScriptHost,
+    source_root: DomHandle,
+    document_viewport: moli_layout::LayoutViewport,
+    node: DomHandle,
+    style: &ResolvedLayoutStyle,
+    viewport: LayoutSize,
+    collect_geometry: bool,
+) -> Option<(LayoutImageResource, Vec<(DomHandle, LayoutQuad)>)> {
+    let document = runtime.layout_document_for_source(source_root)?;
+    let reads = RefCell::new(super::style_resolver::layout_style_read_scope(
+        runtime,
+        document,
+        document_viewport,
+        None,
+    ));
+    let input = collect_input(runtime, node, style, viewport, &reads)?;
+    decode_paint(node, &input, viewport, collect_geometry)
 }
 
 fn prepare_source(mut source: String) -> Option<String> {

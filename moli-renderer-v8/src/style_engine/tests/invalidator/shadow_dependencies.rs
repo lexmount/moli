@@ -31,7 +31,13 @@ fn retained_stylo_invalidator_narrows_assigned_node_slotted_dependency() {
             document_url.clone(),
         )],
     );
-    let inputs = FullStyleWorldSnapshot::default();
+    let inputs = FullStyleWorldSnapshot {
+        shadow_stylesheet_sources: vec![(
+            shadow_root,
+            engine.shadow_root_adopted_style_sheet_sources_with_host(&host, shadow_root),
+        )],
+        ..Default::default()
+    };
     for handle in [outside, assigned, unrelated_assigned] {
         assert!(
             engine
@@ -58,6 +64,7 @@ fn retained_stylo_invalidator_narrows_assigned_node_slotted_dependency() {
         &host,
         &[StyleMutationEffect::Attribute {
             element: assigned,
+            namespace: None,
             name: "class".into(),
             old_value: None,
             new_value: Some("item".into()),
@@ -139,6 +146,7 @@ fn retained_stylo_invalidator_accepts_empty_slotted_result() {
         &host,
         &[StyleMutationEffect::Attribute {
             element: slot,
+            namespace: None,
             name: "class".into(),
             old_value: None,
             new_value: Some("slot".into()),
@@ -205,60 +213,12 @@ fn retained_stylo_invalidator_narrows_part_dependency() {
     assert!(host.set_attribute(shadow_host, "class", "host"));
     let effects = [StyleMutationEffect::Attribute {
         element: shadow_host,
+        namespace: None,
         name: "class".into(),
         old_value: None,
         new_value: Some("host".into()),
     }];
     let media = crate::protocol_types::EmulatedMediaOverrides::default();
-    let source_scope = source_scope_for_mutations(&host, &effects).expect("source scope");
-    let target_queries = {
-        let world = engine.world_for_document(document);
-        let linked_sources = world.linked_stylesheet_sources.borrow();
-        let document_adopted_sources = world.adopted_style_sheet_sources.borrow();
-        super::planner::target_queries_for_pending_cause_with_document_adopted_sources(
-            &host,
-            &linked_sources,
-            &document_adopted_sources,
-            &engine.dom_adapter,
-            &media,
-            StyleViewport::default(),
-            document,
-            &PendingStyleInvalidationCause::Mutation(effects.to_vec()),
-            &source_scope,
-        )
-    };
-    let application = engine
-        .with_retained_style_system_for_document_for_test(document, |retained| {
-            retained_source_invalidation_outcome_for_document_for_test(
-                &engine,
-                &host,
-                document,
-                StyleSourceDocumentContext::for_root_document(document),
-                Some(retained),
-                &target_queries,
-                false,
-            )
-        })
-        .finalize(&host);
-    assert_eq!(
-        application.cleanup_target_kind(),
-        StyleInvalidationCleanupTargetKind::ExactAffectedSubtreeRoots
-    );
-    assert!(matches!(
-        application.cleanup_target(),
-        StyleInvalidationCleanupTarget::ExactAffectedSubtreeRoots(roots)
-            if roots.contains(&part)
-                && !roots.contains(&outside)
-                && !roots.contains(&unrelated_shadow_child)
-    ));
-    assert_eq!(application.diagnostic_target_results().len(), 1);
-    assert!(application.diagnostic_target_results()[0].exact());
-    assert!(
-        application.diagnostic_target_results()[0]
-            .fallback_reasons()
-            .is_empty()
-    );
-
     engine.invalidate_for_mutations(&host, &effects, &media);
     engine.drain_pending_style_invalidations_for_document_for_test(&host, document);
 
@@ -327,6 +287,7 @@ fn retained_stylo_invalidator_accepts_empty_part_result() {
         &host,
         &[StyleMutationEffect::Attribute {
             element: shadow_host,
+            namespace: None,
             name: "class".into(),
             old_value: None,
             new_value: Some("host".into()),

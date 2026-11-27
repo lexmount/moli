@@ -147,6 +147,9 @@ struct HtmlCanvasElementTemplateMethodsDeclaration {
     #[webapi(method = "toDataURL", length = 0, callback = element::canvas_to_data_url_callback)]
     to_data_url: (),
 
+    #[webapi(method = "toBlob", length = 1, callback = element::canvas_to_blob_callback)]
+    to_blob: (),
+
     #[webapi(
         method = "transferControlToOffscreen",
         length = 0,
@@ -405,6 +408,16 @@ pub(super) fn install_constructor_template_bindings<'s>(
     }
     install_media_cue_template_bindings(scope, template, spec.interface.name());
     install_media_source_template_bindings(scope, template, spec.interface.name());
+    #[cfg(all(
+        feature = "media-ext",
+        any(target_os = "linux", target_os = "macos"),
+        target_pointer_width = "64"
+    ))]
+    crate::context_bootstrap::media_source_playback::install(
+        scope,
+        template,
+        spec.interface.name(),
+    );
     super::super::picture_in_picture::install(scope, template, spec.interface.name());
     super::super::video_codecs::install_video_codec_template_bindings(
         scope,

@@ -15,6 +15,7 @@ mod brush;
 mod effects;
 mod image;
 mod text;
+pub(crate) mod tiles;
 
 use crate::geometry::{device_transform, finite_or_zero, to_backend_shape};
 use anyrender::PaintScene;
@@ -24,6 +25,7 @@ pub(crate) use effects::backend_filter;
 use effects::paint_box_shadow;
 use image::{paint_image, paint_svg_image};
 use moli_layout::{PaintBlendMode, PaintColor, PaintCompositeMode, PaintFragment, PaintSnapshot};
+use peniko::kurbo::Rect;
 use peniko::{BlendMode, Color, Compose, Mix};
 use std::sync::Arc;
 use text::{paint_glyph_run, paint_text_decoration, paint_text_shadow};
@@ -33,6 +35,7 @@ pub(crate) fn paint_fragment(
     snapshot: &PaintSnapshot,
     fragment: &PaintFragment,
     scale: f64,
+    output: Rect,
 ) {
     match fragment {
         PaintFragment::PushLayer {
@@ -93,7 +96,7 @@ pub(crate) fn paint_fragment(
             *styles,
             *radii,
             device_transform(*transform, scale),
-            scale,
+            snapshot.pixel_grid(),
         ),
         PaintFragment::BoxShadow(shadow) => paint_box_shadow(scene, shadow, scale),
         PaintFragment::TextDecoration(decoration) => {
@@ -103,6 +106,7 @@ pub(crate) fn paint_fragment(
         PaintFragment::GlyphRun(run) => paint_glyph_run(scene, snapshot, run, run.color, scale),
         PaintFragment::Image(image) => paint_image(scene, snapshot, image, scale),
         PaintFragment::SvgImage(image) => paint_svg_image(scene, snapshot, image, scale),
+        PaintFragment::Tiles(tiles) => tiles::paint_tiles(scene, snapshot, tiles, scale, output),
     }
 }
 

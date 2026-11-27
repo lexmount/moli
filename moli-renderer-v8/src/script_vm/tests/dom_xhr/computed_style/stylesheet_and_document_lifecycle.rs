@@ -1194,6 +1194,146 @@ fn computed_style_child_document_viewport_units_use_css_iframe_size() {
 }
 
 #[test]
+fn root_relative_font_sizes_follow_the_document_root_font_size() {
+    let mut vm = new_parsed_test_vm(
+        "https://root-font-size.test/",
+        r#"<!doctype html>
+        <style>
+          html { font-size: 10px; }
+          html::before { content: "Root"; display: block; font-size: 2.4rem; width: 6rem; }
+          .title { font-size: 2.4rem; line-height: 3.2rem; width: 4rem; }
+        </style>
+        <div class="title">Title</div>"#,
+    );
+    let measure = r#"(() => {
+        const title = document.querySelector('.title');
+        const style = getComputedStyle(title);
+        const before = getComputedStyle(document.documentElement, '::before');
+        return [style.fontSize, style.lineHeight, style.width, before.fontSize, before.width].join('|');
+    })()"#;
+
+    assert_eq!(vm.eval(measure).unwrap(), "24px|32px|40px|24px|60px");
+
+    vm.eval("document.documentElement.style.fontSize = '20px'")
+        .unwrap();
+    assert_eq!(vm.eval(measure).unwrap(), "48px|64px|80px|48px|120px");
+
+    vm.set_viewport_surface(Some(crate::protocol_types::ViewportSurface {
+        inner_width: 800,
+        inner_height: 600,
+        ..Default::default()
+    }))
+    .unwrap();
+    vm.eval("document.body.innerHTML = '<div class=title>New title</div>'")
+        .unwrap();
+    publish_layout_for_test(&mut vm);
+    assert_eq!(vm.eval(measure).unwrap(), "48px|64px|80px|48px|120px");
+    assert_eq!(
+        vm.eval("document.querySelector('.title').getBoundingClientRect().width")
+            .unwrap(),
+        "80"
+    );
+}
+
+#[test]
+fn discarded_root_pseudo_cannot_cache_lengths_using_the_old_root_font_size() {
+    let url = "https://discarded-root-pseudo.test/";
+    let markup = r#"<!doctype html>
+    <style>
+      html { font-size: 10px; }
+      html::before, span { content: none; display: inline-block; width: 6rem; }
+    </style>
+    <span id="probe">Probe</span>"#;
+
+    let mut vm = new_parsed_test_vm(url, markup);
+    assert_eq!(
+        vm.eval("getComputedStyle(document.getElementById('probe')).width")
+            .expect("first style read should resolve the span width"),
+        "60px"
+    );
+    drop(vm);
+
+    let mut vm = new_rendered_test_vm(url, markup);
+    assert_eq!(
+        vm.eval("document.getElementById('probe').getBoundingClientRect().width")
+            .expect("first layout should use the same span width"),
+        "60"
+    );
+}
+
+#[test]
+fn root_relative_units_follow_the_document_root_line_height_and_font() {
+    let url = "https://root-relative-units.test/";
+    let markup = r#"<!doctype html>
+    <style>
+      html { font: 20px/1.5 Ahem; }
+      html::before { content: ""; }
+      html::before, .probe {
+        display: block;
+        font: 7px/9px monospace;
+        width: 2rch;
+        height: 2rlh;
+      }
+    </style>
+    <div class="probe"></div>"#;
+    let measure = r#"(() => {
+        const before = getComputedStyle(document.documentElement, '::before');
+        const probe = getComputedStyle(document.querySelector('.probe'));
+        return [before.width, before.height, probe.width, probe.height].join('|');
+    })()"#;
+
+    let mut vm = new_parsed_test_vm(url, markup);
+    assert_eq!(vm.eval(measure).unwrap(), "40px|60px|40px|60px");
+
+    vm.eval("document.documentElement.style.lineHeight = '40px'")
+        .unwrap();
+    assert_eq!(vm.eval(measure).unwrap(), "40px|80px|40px|80px");
+
+    vm.eval("document.documentElement.style.fontFamily = 'monospace'")
+        .unwrap();
+    assert_eq!(vm.eval(measure).unwrap(), "20px|80px|20px|80px");
+    vm.eval("document.documentElement.style.lineHeight = 'normal'")
+        .unwrap();
+    assert_eq!(
+        vm.eval("parseFloat(getComputedStyle(document.querySelector('.probe')).height) > 0")
+            .unwrap(),
+        "true"
+    );
+    drop(vm);
+
+    let mut vm = new_rendered_test_vm(url, markup);
+    assert_eq!(vm.eval(measure).unwrap(), "40px|60px|40px|60px");
+    assert_eq!(
+        vm.eval(
+            r#"(() => {
+                const {width, height} = document.querySelector('.probe').getBoundingClientRect();
+                return [width, height].join('|');
+            })()"#
+        )
+        .unwrap(),
+        "40|60"
+    );
+
+    vm.set_viewport_surface(Some(crate::protocol_types::ViewportSurface {
+        inner_width: 800,
+        inner_height: 600,
+        ..Default::default()
+    }))
+    .unwrap();
+    assert_eq!(
+        vm.eval(
+            r#"(() => {
+                document.body.insertAdjacentHTML('beforeend', '<div id="new-probe" class="probe"></div>');
+                const style = getComputedStyle(document.getElementById('new-probe'));
+                return [style.width, style.height].join('|');
+            })()"#
+        )
+        .unwrap(),
+        "40px|60px"
+    );
+}
+
+#[test]
 fn held_main_document_computed_styles_follow_repeated_viewport_surface_changes() {
     let mut vm = new_storage_test_vm("https://held-main-viewport-units.test/");
     let surface = |inner_width, inner_height| crate::protocol_types::ViewportSurface {
@@ -1402,12 +1542,229 @@ yield; // Publish this scene before reading its geometry.
 "#,
     )
     .expect("the same cached child element should observe the resized iframe viewport");
-    assert_eq!(after, "100|100|80|10px|8px|13px|50px|10px|8px");
+    // The iframe's border box includes the 2px UA border on each side.
+    assert_eq!(after, "104|100|80|10px|8px|13px|50px|10px|8px");
     assert_eq!(
         vm.retained_style_system_update_count_for_document_for_test(child_document),
         updates + 1,
         "one iframe viewport change should update its retained style world exactly once",
     );
+}
+
+#[test]
+fn lazy_iframe_attribute_changes_observe_the_used_content_box() {
+    let mut vm = new_parsed_test_vm(
+        "https://iframe-content-box.test/",
+        r#"<!doctype html>
+           <style>
+             body { margin:0 }
+             iframe { display:block; box-sizing:border-box; width:200px; height:160px;
+                      padding:20px; border:10px solid }
+             iframe[data-offset] { margin-left:10px }
+             iframe[data-wide] { width:280px }
+           </style>
+           <iframe id="frame"></iframe>"#,
+    );
+    vm.set_layout_policy(moli_page_types::LayoutPolicy::Lazy);
+    vm.eval(
+        r#"
+const frame = document.getElementById('frame');
+const child = frame.contentWindow;
+child.document.open();
+child.document.write(`
+  <style>
+    body { margin:0 }
+    #target { width:10vw; height:10vh; color:blue }
+    @media (min-width:200px) { #target { color:red } }
+    iframe { display:block; width:50%; height:20px; border:0 }
+  </style>
+  <div id="target"></div><iframe id="nested"></iframe>`);
+child.document.close();
+const targetStyle = child.getComputedStyle(child.document.getElementById('target'));
+const nested = child.document.getElementById('nested').contentWindow;
+const readViewport = () => JSON.stringify([
+  child.innerWidth, child.innerHeight, nested.innerWidth,
+  targetStyle.width, targetStyle.height, targetStyle.color
+]);
+"#,
+    )
+    .unwrap();
+    publish_layout_for_test(&mut vm);
+    let original = r#"[140,100,70,"14px","10px","rgb(0, 0, 255)"]"#;
+    assert_eq!(vm.eval("readViewport()").unwrap(), original);
+    let builds = vm.layout_pass_observability_for_test().1;
+
+    assert_eq!(
+        vm.eval("frame.setAttribute('data-offset', ''); readViewport()")
+            .unwrap(),
+        original
+    );
+    assert_eq!(vm.eval("frame.getBoundingClientRect().left").unwrap(), "10");
+    assert_eq!(vm.layout_pass_observability_for_test().1, builds + 1);
+
+    assert_eq!(
+        vm.eval("frame.style.backgroundColor = 'red'; readViewport()")
+            .unwrap(),
+        original
+    );
+    assert_eq!(
+        vm.eval("getComputedStyle(frame).backgroundColor").unwrap(),
+        "rgb(255, 0, 0)"
+    );
+    assert_eq!(
+        vm.eval("frame.setAttribute('style', 'background-color:lime'); readViewport()")
+            .unwrap(),
+        original
+    );
+    assert_eq!(
+        vm.eval("frame.setAttribute('name', 'same-size'); readViewport()")
+            .unwrap(),
+        original
+    );
+    assert_eq!(vm.layout_pass_observability_for_test().1, builds + 1);
+
+    assert_eq!(
+        vm.eval("frame.setAttribute('data-wide', ''); readViewport()")
+            .unwrap(),
+        r#"[220,100,110,"22px","10px","rgb(255, 0, 0)"]"#
+    );
+    assert_eq!(vm.layout_pass_observability_for_test().1, builds + 2);
+}
+
+#[test]
+fn lazy_iframe_refresh_compares_against_the_published_owner_style() {
+    for screenshot in [false, true] {
+        for read_style in [false, true] {
+            let mut vm = new_parsed_test_vm(
+                "https://iframe-published-style.test/",
+                r#"<!doctype html>
+                   <style>
+                     iframe { box-sizing:border-box; width:200px; height:160px;
+                              padding:20px; border:10px solid }
+                     section[data-wide] iframe { width:280px }
+                   </style>
+                   <section id="owner"><iframe id="frame"></iframe></section>"#,
+            );
+            vm.set_layout_policy(moli_page_types::LayoutPolicy::Lazy);
+            vm.eval("globalThis.child = frame.contentWindow").unwrap();
+            if screenshot {
+                publish_layout_for_test(&mut vm);
+            } else {
+                vm.eval("frame.getBoundingClientRect().width").unwrap();
+            }
+            let builds = vm.layout_pass_observability_for_test().1;
+            assert_eq!(vm.eval("child.innerWidth").unwrap(), "140");
+
+            vm.eval("owner.setAttribute('data-wide', '')").unwrap();
+            if read_style {
+                vm.eval("getComputedStyle(frame).width").unwrap();
+            }
+            assert_eq!(vm.eval("child.innerWidth").unwrap(), "140");
+            assert_eq!(vm.layout_pass_observability_for_test().1, builds);
+
+            assert_eq!(
+                vm.eval("frame.style.backgroundColor = 'red'; child.innerWidth")
+                    .unwrap(),
+                "220",
+                "screenshot={screenshot}, read_style={read_style}",
+            );
+            assert_eq!(vm.layout_pass_observability_for_test().1, builds + 1);
+
+            assert_eq!(
+                vm.eval("frame.style.backgroundColor = 'blue'; child.innerWidth")
+                    .unwrap(),
+                "220",
+            );
+            assert_eq!(vm.layout_pass_observability_for_test().1, builds + 1);
+        }
+    }
+}
+
+#[test]
+fn lazy_iframe_refresh_follows_relative_selector_layout_damage() {
+    for read_style in [false, true] {
+        let mut vm = new_parsed_test_vm(
+            "https://iframe-relative-selector-layout.test/",
+            r#"<!doctype html>
+               <style>
+                 body { margin:0; width:200px }
+                 body:has(> iframe[style]) { width:400px; background-color:blue }
+                 iframe { display:block; width:50%; height:100px; border:0 }
+               </style>
+               <iframe id="frame"></iframe>"#,
+        );
+        vm.set_layout_policy(moli_page_types::LayoutPolicy::Lazy);
+        let read_widths = "JSON.stringify([frame.offsetWidth, frame.contentWindow.innerWidth])";
+        assert_eq!(vm.eval(read_widths).unwrap(), "[100,100]");
+        let builds = vm.layout_pass_observability_for_test().1;
+
+        vm.eval("frame.style.backgroundColor = 'red'").unwrap();
+        if read_style {
+            assert_eq!(
+                vm.eval("getComputedStyle(document.body).backgroundColor")
+                    .unwrap(),
+                "rgb(0, 0, 255)"
+            );
+        }
+        assert_eq!(vm.layout_pass_observability_for_test().1, builds);
+        assert_eq!(
+            vm.eval(read_widths).unwrap(),
+            "[200,200]",
+            "read_style={read_style}"
+        );
+        assert_eq!(vm.layout_pass_observability_for_test().1, builds + 1);
+
+        vm.eval("frame.style.backgroundColor = 'blue'").unwrap();
+        assert_eq!(vm.eval(read_widths).unwrap(), "[200,200]");
+        assert_eq!(vm.layout_pass_observability_for_test().1, builds + 1);
+    }
+}
+
+#[test]
+fn lazy_iframe_refresh_updates_sibling_hit_testing() {
+    for (property, excluded) in [("pointer-events", "none"), ("visibility", "hidden")] {
+        for read_style in [false, true] {
+            let mut vm = new_parsed_test_vm(
+                "https://iframe-sibling-hit-testing.test/",
+                &format!(
+                    r#"<!doctype html>
+                       <style>
+                         body {{ margin:0 }}
+                         iframe {{ display:block; width:100px; height:100px; border:0 }}
+                         #target {{ position:absolute; left:300px; top:0; width:40px; height:40px;
+                                    background:red }}
+                         iframe[style] ~ #target {{ {property}:{excluded} }}
+                       </style>
+                       <iframe id="frame"></iframe><div id="target"></div>"#,
+                ),
+            );
+            vm.set_layout_policy(moli_page_types::LayoutPolicy::Lazy);
+            let hit = "document.elementFromPoint(310, 10) === target";
+            assert_eq!(vm.eval(hit).unwrap(), "true");
+            let builds = vm.layout_pass_observability_for_test().1;
+
+            vm.eval("frame.style.backgroundColor = 'blue'").unwrap();
+            if read_style {
+                let read = format!("getComputedStyle(target).getPropertyValue('{property}')");
+                assert_eq!(vm.eval(&read).unwrap(), excluded);
+            }
+            assert_eq!(vm.layout_pass_observability_for_test().1, builds);
+            assert_eq!(
+                vm.eval(hit).unwrap(),
+                "false",
+                "{property}, read_style={read_style}"
+            );
+            assert_eq!(vm.layout_pass_observability_for_test().1, builds + 1);
+
+            vm.eval("frame.style.backgroundColor = 'lime'").unwrap();
+            assert_eq!(vm.eval(hit).unwrap(), "false");
+            assert_eq!(vm.layout_pass_observability_for_test().1, builds + 1);
+
+            vm.eval("frame.removeAttribute('style')").unwrap();
+            assert_eq!(vm.eval(hit).unwrap(), "true");
+            assert_eq!(vm.layout_pass_observability_for_test().1, builds + 2);
+        }
+    }
 }
 
 #[test]

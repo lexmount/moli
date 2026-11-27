@@ -66,6 +66,9 @@ pub(in crate::native_bridge::context_host::child_frame_runtime) fn initialize_ch
     set_object_slot(scope, global, "document", document.into());
     validate_child_window_realm_snapshot(host, &snapshot)?;
     bind_document(host, scope, &snapshot, document)?;
+    if init.world.is_default() {
+        host.publish_pending_child_stylesheet_resource_timing(scope, init.handle);
+    }
 
     Ok(ChildWindowRealmProjection { top, document })
 }

@@ -43,7 +43,7 @@ fn automatic_font_requests_follow_the_document_resource_policy() {
                 globalThis.cssFace=[...targetDocument.fonts].find(face=>face.family==='CssPolicyFace');
                 globalThis.ready=[];
             "#)).unwrap();
-            vm.prime_document_lifecycle_processing_and_record_stylesheet_network_results();
+            vm.prime_document_lifecycle_and_publish_stylesheets();
             vm.eval("targetDocument.fonts.ready.then(()=>ready.push(true));void targetDocument.fonts.status")
                 .unwrap();
             run_font_tasks(&mut vm);
@@ -94,7 +94,7 @@ fn document_resources_load_fonts_even_when_layout_is_disabled() {
     )
     .unwrap();
     let publishes = vm.layout_snapshot_cache_observability_for_test().2;
-    vm.prime_document_lifecycle_processing_and_record_stylesheet_network_results();
+    vm.prime_document_lifecycle_and_publish_stylesheets();
     run_font_tasks(&mut vm);
     assert_eq!(
         vm.eval("JSON.stringify(result)").unwrap(),
@@ -116,18 +116,18 @@ fn font_discovery_reuses_clean_inputs_and_rechecks_cssom_changes() {
         globalThis.result=[];face.loaded.then(()=>result.push('loaded'));
         globalThis.style=document.createElement('style');document.head.append(style);
     "#)).unwrap();
-    vm.prime_document_lifecycle_processing_and_record_stylesheet_network_results();
+    vm.prime_document_lifecycle_and_publish_stylesheets();
     let passes = vm.layout_pass_observability_for_test().1;
     let discoveries = discovery_count(&mut vm);
     for _ in 0..3 {
-        vm.prime_document_lifecycle_processing_and_record_stylesheet_network_results();
+        vm.prime_document_lifecycle_and_publish_stylesheets();
     }
     assert_eq!(vm.layout_pass_observability_for_test().1, passes);
     assert_eq!(discovery_count(&mut vm), discoveries);
     assert_eq!(vm.eval("JSON.stringify(result)").unwrap(), "[]");
     vm.eval("style.sheet.insertRule('#probe {font-family:LaterFace !important}',0)")
         .unwrap();
-    vm.prime_document_lifecycle_processing_and_record_stylesheet_network_results();
+    vm.prime_document_lifecycle_and_publish_stylesheets();
     run_font_tasks(&mut vm);
     assert_eq!(vm.eval("JSON.stringify(result)").unwrap(), r#"["loaded"]"#);
     refresh_layout_for_test(&mut vm);
@@ -424,7 +424,7 @@ async fn implicit_font_network_load_waits_for_completion_and_font_set_ready() {
         "<!doctype html><span id=probe style='display:inline-block;font:40px NetworkFace'>AAAA</span>",
         &loader,
     );
-    vm.set_layout_policy(moli_page_types::LayoutPolicy::OnDemand);
+    vm.set_layout_policy(moli_page_types::LayoutPolicy::Lazy);
     vm.eval(&format!(r#"
         globalThis.result=[];globalThis.events=[];
         globalThis.face=new FontFace('NetworkFace','url("{url}")');document.fonts.add(face);
@@ -433,7 +433,7 @@ async fn implicit_font_network_load_waits_for_completion_and_font_set_ready() {
         globalThis.disabledReady=false;
         document.fonts.ready.then(()=>disabledReady=true);
     "#)).unwrap();
-    vm.prime_document_lifecycle_processing_and_record_stylesheet_network_results();
+    vm.prime_document_lifecycle_and_publish_stylesheets();
     run_font_tasks(&mut vm);
     assert_eq!(
         vm.eval("JSON.stringify([face.status,document.fonts.status,disabledReady,result])")
@@ -682,7 +682,7 @@ fn automatic_fonts_retired_creation_window_does_not_block_live_fallback() {
         // Advance only the automatic lifecycle. FontFaceSet getters can
         // synchronously start a stranded queued face and mask this failure.
         for _ in 0..3 {
-            vm.prime_document_lifecycle_processing_and_record_stylesheet_network_results();
+            vm.prime_document_lifecycle_and_publish_stylesheets();
             run_font_tasks(&mut vm);
         }
         assert_eq!(

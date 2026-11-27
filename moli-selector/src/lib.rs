@@ -7,7 +7,6 @@ mod cssom_selector;
 mod detached_stylo;
 mod error;
 mod stylo;
-mod validation;
 
 pub use cssom_selector::{
     CssDirection, GetComputedStylePseudoElement, first_strong_text_direction,
@@ -19,63 +18,14 @@ pub use detached_stylo::{
 };
 pub use error::{SelectorError, SelectorErrorKind};
 pub use moli_dom as dom;
+pub use stylo::StyloStylePath;
 pub use stylo::html_auto_directionality_root;
 pub use stylo::{
-    MoliInvalidationResult, MoliInvalidationResultBuilder, MoliInvalidationSourceResultsSink,
-    MoliStyleMutationElementSnapshot, MoliStyleMutationSnapshot, QueryContainerSizes,
-    StyloDependencyInvalidationFallbackContext, StyloDocument, StyloDomHostBinding,
-    StyloDomStyleAdapter, StyloElement, StyloElementDependencySnapshot, StyloNode,
-    StyloPlannedFallbackRootInvalidationTarget,
-    StyloPlannedFallbackRootInvalidationTargetPartsSink, StyloPlannedSourceDependencyInvalidation,
-    StyloPlannedSourceDependencyInvalidationPartsSink,
-    StyloPlannedSourceDependencyInvalidationTarget,
-    StyloPlannedSourceDependencyInvalidationTargetPartsSink, StyloRetainedSourceStyleInvalidation,
-    StyloRetainedSourceStyleInvalidationKind, StyloRetainedSourceStyleInvalidationSink,
-    StyloRetainedStyleChildListInvalidationQueries,
-    StyloRetainedStyleChildListInvalidationQueriesSink,
-    StyloRetainedStyleChildListInvalidationQuery, StyloRetainedStyleInvalidationQuery,
-    StyloRetainedStyleSiblingTraversal, StyloRuntimeFallbackRootInput, StyloShadowRoot,
-    StyloSourceAffectedRootsCleanup, StyloSourceAffectedRootsCleanupSink,
-    StyloSourceDependencyBoundaryRoots, StyloSourceDependencyInvalidationBatchPlan,
-    StyloSourceDependencyInvalidationBatchPlanSink, StyloSourceDependencyInvalidationBatchSource,
-    StyloSourceDependencyInvalidationRequest, StyloSourceDependencyRequestRequirement,
-    StyloSourceDependencySummary, StyloSourceFallbackRootAvailability,
-    StyloSourceFallbackRootAvailabilitySummary, StyloSourceFallbackRootAvailabilitySummarySink,
-    StyloSourceInvalidationFallbackReason, StyloSourceInvalidationFallbackReasonPlan,
-    StyloSourceStyleInvalidationSourceResult, StyloSourceStyleInvalidationSourceResultKind,
-    StyloSourceStyleInvalidationSourceResultKindSummary,
-    StyloSourceStyleInvalidationSourceResultKindSummarySink,
-    StyloSourceStyleInvalidationSourceResultParts,
-    StyloSourceStyleInvalidationSourceResultPartsSink,
-    StyloSourceStyleInvalidationSourceResultSink,
-    StyloSourceStyleInvalidationTargetResultCleanupFacts,
-    StyloSourceStyleInvalidationTargetResultCleanupFactsPartsSink,
-    StyloSourceStyleInvalidationTargetResultCleanupFactsSink,
-    StyloSourceStyleInvalidationTargetResultDiagnosticFacts,
-    StyloSourceStyleInvalidationTargetResultDiagnosticFactsPartsSink,
-    StyloSourceStyleInvalidationTargetResultDiagnosticFactsSink,
-    StyloSourceStyleInvalidationTargetResultRecord, StyloStateInvalidationRoot,
-    StyloStyleInvalidationQuery, StyloStyleInvalidationSnapshot,
-    StyloStyleInvalidationSnapshotAttribute, StyloStyleSourceScope,
-    StyloStylesheetSourceScopeFallbackInput, is_svg_presentation_attribute_name,
-    stylo_attribute_change_can_skip_fallback_without_dependency,
-    stylo_attribute_change_can_use_retained_invalidator, stylo_element_dependency_snapshot,
-    stylo_fallback_roots_plan, stylo_focus_change_invalidation_roots,
+    InlineStyleSnapshot, QueryContainerSizes, StyleMutationSnapshots, StyloDocument,
+    StyloDomHostBinding, StyloDomStyleAdapter, StyloElement, StyloNode, StyloShadowRoot,
+    attribute_affects_presentational_hints, stylo_focus_change_handles,
     stylo_focus_state_matches_handle, stylo_focus_within_state_matches_handle,
-    stylo_merge_retained_source_invalidation_fallback_kind,
-    stylo_merge_retained_source_invalidation_kind,
-    stylo_merge_source_dependency_request_requirement, stylo_removed_element_dependency_snapshots,
-    stylo_retained_next_element_sibling, stylo_retained_previous_element_sibling,
-    stylo_retained_queries_for_current_element, stylo_retained_queries_for_element_snapshot,
-    stylo_retained_source_invalidation_kind_can_use_fallback_payload,
-    stylo_retained_source_style_invalidation_from_parts,
-    stylo_runtime_fallback_roots_for_mutation_inputs, stylo_runtime_or_source_scope_fallback_plan,
     stylo_shadow_root_host_participates_in_style_scope,
-    stylo_source_dependency_invalidation_batch_plan,
-    stylo_source_fallback_reason_for_unretained_state_change,
-    stylo_source_invalidation_fallback_reason_plan, stylo_source_scope_fallback_plan,
-    stylo_state_change_can_use_retained_invalidator, stylo_stylesheet_owner_is_in_source_scope,
-    stylo_stylesheet_source_scope_fallback_roots,
 };
 
 use moli_dom::native::DomHost;
@@ -86,10 +36,6 @@ use std::sync::OnceLock;
 // `moli` keeps its historical `crate::selector::*` references.
 mod selector {
     pub(crate) use crate::SelectorError;
-
-    pub(crate) mod validation {
-        pub(crate) use crate::validation::*;
-    }
 }
 
 #[derive(Debug, Clone, Default)]
@@ -1247,7 +1193,7 @@ mod tests {
     }
 
     #[test]
-    fn dom_api_selectors_recover_trailing_unclosed_attribute_selector() {
+    fn dom_api_selectors_recover_at_end_of_input() {
         let url = url::Url::parse("https://example.test/").unwrap();
         let mut host = DomHost::from_dom(NativeDom::new_html(url));
         host.reset_html_document_shell();
@@ -1257,17 +1203,30 @@ mod tests {
         assert!(host.append_child(body, target));
 
         let engine = QueryEngine;
-        assert_eq!(
-            engine
-                .query_selector_host(&host, r#"[align="center""#)
-                .unwrap(),
-            Some(target)
-        );
-        assert!(
-            engine
-                .matches_host(&host, target, r#"[align="center""#)
-                .unwrap()
-        );
+        for selector in [
+            r#"[align="center""#,
+            r#"[align="center"#,
+            "[align",
+            "div:not([class]",
+            "div:not([class",
+            "/* ] ) */ [align",
+        ] {
+            assert_eq!(
+                engine.query_selector_host(&host, selector).unwrap(),
+                Some(target),
+                "{selector}"
+            );
+            assert!(
+                engine.matches_host(&host, target, selector).unwrap(),
+                "{selector}"
+            );
+        }
+        for selector in ["[align=", "div]", "div)", "div:not(["] {
+            assert!(
+                engine.query_selector_host(&host, selector).is_err(),
+                "{selector}"
+            );
+        }
     }
 
     #[test]

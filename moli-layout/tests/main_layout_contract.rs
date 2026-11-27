@@ -201,6 +201,66 @@ fn solid_rect(snapshot: &PaintSnapshot, color: PaintColor) -> PaintRect {
         .unwrap_or_else(|| panic!("missing {color:?} rect in {:?}", snapshot.fragments))
 }
 
+#[test]
+fn deep_mixed_layout_resolves_auto_sizes_from_intrinsic_content() {
+    std::thread::Builder::new()
+        .stack_size(16 * 1024 * 1024)
+        .spawn(|| {
+            let leaf = 511;
+            let mut nodes = (0..leaf)
+                .map(|id| FixtureNode::div("nested", vec![id + 1]))
+                .collect::<Vec<_>>();
+            nodes.push(FixtureNode::svg("intrinsic", 37.0, 19.0));
+            let source = FixtureSource { nodes };
+            let mut styles = FixtureStyles::default();
+            for id in 0..=leaf {
+                let (layout_display, display) = match id {
+                    0 => (LayoutDisplay::Grid, Display::Grid),
+                    256 => (LayoutDisplay::Flex, Display::Flex),
+                    _ => (LayoutDisplay::Block, Display::Block),
+                };
+                styles.0.insert(
+                    id,
+                    resolved(
+                        layout_display,
+                        Style {
+                            display,
+                            ..Style::default()
+                        },
+                        if id == leaf {
+                            GREEN
+                        } else {
+                            PaintColor::TRANSPARENT
+                        },
+                    ),
+                );
+            }
+            let pass = build_layout_pass(
+                &source,
+                &mut styles,
+                &mut DocumentLayoutServices::new(),
+                LayoutPassRequest::with_paint(
+                    PaintViewport::new(320, 240, 1.0),
+                    LayoutFlushReason::Test,
+                ),
+            )
+            .unwrap();
+            assert_eq!(pass.metrics.box_count, leaf + 1);
+            for id in [0, 256, leaf] {
+                let box_id = pass.source_output(id).unwrap().principal_box.unwrap();
+                assert_eq!(pass.box_geometry(box_id).unwrap().border_box.height, 19.0);
+            }
+            let snapshot = pass.into_paint_snapshot().unwrap();
+            assert_rect(
+                solid_rect(&snapshot, GREEN),
+                PaintRect::new(0.0, 0.0, 37.0, 19.0),
+            );
+        })
+        .unwrap()
+        .join()
+        .unwrap();
+}
+
 fn assert_rect(actual: PaintRect, expected: PaintRect) {
     for (name, actual, expected) in [
         ("x", actual.x, expected.x),
@@ -870,7 +930,7 @@ fn grid_container_justify_items_center_shrink_wraps_an_auto_sized_item() {
 
 #[test]
 fn centered_grid_item_with_percent_height_and_auto_block_margin_keeps_intrinsic_inline_size() {
-    let source = FixtureSource {
+    let mut source = FixtureSource {
         nodes: vec![
             FixtureNode::div("grid", vec![1]),
             FixtureNode::div("item", vec![2]),
@@ -946,15 +1006,23 @@ fn centered_grid_item_with_percent_height_and_auto_block_margin_keeps_intrinsic_
         ),
     );
 
-    let snapshot = render(&source, &mut styles, PaintViewport::new(1280, 720, 1.0));
-    assert_rect(
-        solid_rect(&snapshot, GREEN),
-        PaintRect::new(504.0, 68.0, 272.0, 92.0),
+    let check_centered_logo = |source: &FixtureSource, styles: &mut FixtureStyles| {
+        let snapshot = render(source, styles, PaintViewport::new(1280, 720, 1.0));
+        let expected = PaintRect::new(504.0, 68.0, 272.0, 92.0);
+        assert_rect(solid_rect(&snapshot, GREEN), expected);
+        assert_rect(solid_rect(&snapshot, RED), expected);
+    };
+    check_centered_logo(&source, &mut styles);
+
+    // A preceding block wraps the image in an anonymous inline formatting
+    // context during the grid item's intrinsic width measurement.
+    source.nodes.push(FixtureNode::div("spacer", Vec::new()));
+    source.nodes[1].children.insert(0, 3);
+    styles.0.insert(
+        3,
+        fixed_box(LayoutDisplay::Block, 0.0, 0.0, PaintColor::TRANSPARENT),
     );
-    assert_rect(
-        solid_rect(&snapshot, RED),
-        PaintRect::new(504.0, 68.0, 272.0, 92.0),
-    );
+    check_centered_logo(&source, &mut styles);
 }
 
 #[test]

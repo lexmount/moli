@@ -275,8 +275,15 @@ impl Browser {
     // opaque initiator; renderer subresources must already carry their environment.
     // The embedder chose this URL, so it may open a file when the browser grants it.
     fn initial_navigation_request(&self, request: Request) -> Request {
-        let request = request
-            .with_local_file_navigation_access(self.config.fetch().local_file_navigation_access());
+        let request = if request.url.scheme() == "file"
+            && !self.config.fetch().local_file_policy().blocks_file_urls()
+        {
+            request.with_local_file_navigation_access(
+                moli_fetch::LocalFileNavigationAccess::BrowserGranted,
+            )
+        } else {
+            request
+        };
         if request.request_origin().is_none() {
             request
                 .with_request_origin(moli_url::WebOrigin::Opaque)
@@ -1423,10 +1430,7 @@ impl Browser {
             ));
         }
         let page_loader =
-            ResourceRequestClient::from_browser_resource_runtime_with_page_network_policy(
-                document_fetch_context_seed.browser_resource_runtime(),
-                document_fetch_context_seed.page_network_policy(),
-            );
+            ResourceRequestClient::for_committed_navigation(&document_fetch_context_seed);
         let response_status = response.status;
         let response_headers = response.headers.clone();
         let redirected = response.redirected;

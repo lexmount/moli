@@ -24,7 +24,11 @@ use style::{
 };
 use style_traits::{ParsingMode, ToCss};
 
-use crate::dom::native::Element;
+use crate::dom::{
+    NodeId,
+    forms::parse_html_integer_prefix,
+    native::{DomHost, Element, Node},
+};
 
 use super::{presentational_hints::synthesize_hidden_presentational_hint, query::QueryElement};
 
@@ -101,27 +105,65 @@ const SVG_STYLE_PRESENTATION_ATTRIBUTES: &[&str] = &[
     "writing-mode",
 ];
 
-const SVG_SPECIAL_PRESENTATION_ATTRIBUTES: &[&str] = &[
-    "cx",
-    "cy",
-    "d",
-    "gradientTransform",
-    "height",
-    "patternTransform",
-    "r",
-    "rx",
-    "ry",
-    "transform",
-    "width",
-    "x",
-    "y",
-];
+/// Whether changing the attribute can change an element's presentation hints.
+/// The local name is the exact name stored by the DOM.
+pub fn attribute_affects_presentational_hints(
+    host: &DomHost,
+    handle: NodeId,
+    namespace: Option<&str>,
+    name: &str,
+) -> bool {
+    if namespace.is_some() {
+        return false;
+    }
+    let Some(element) = host.node(handle).and_then(Node::as_element) else {
+        return false;
+    };
+    match element.namespace() {
+        HTML_NAMESPACE => html_presentation_attribute_applies(element.local_name(), name),
+        SVG_NAMESPACE => {
+            svg_presentation_property_name(element, name).is_some()
+                || (matches!(name, "width" | "height") && is_outermost_svg(host, handle, element))
+        }
+        _ => false,
+    }
+}
 
-/// Whether changing an attribute can change an SVG element's computed style
-/// without any selector dependency on that attribute.
-pub fn is_svg_presentation_attribute_name(name: &str) -> bool {
-    SVG_STYLE_PRESENTATION_ATTRIBUTES.contains(&name)
-        || SVG_SPECIAL_PRESENTATION_ATTRIBUTES.contains(&name)
+fn html_presentation_attribute_applies(local_name: &str, name: &str) -> bool {
+    match name {
+        "hidden" => true,
+        "align" => html_block_alignment(local_name).is_some() || is_html_table_row_part(local_name),
+        "frameborder" => local_name == "iframe",
+        "cellpadding" | "cellspacing" => local_name == "table",
+        "bgcolor" | "valign" => local_name == "table" || is_html_table_row_part(local_name),
+        "width" => {
+            has_html_embedded_dimensions(local_name)
+                || matches!(local_name, "table" | "td" | "th" | "col" | "colgroup")
+        }
+        "height" => {
+            has_html_embedded_dimensions(local_name)
+                || matches!(local_name, "table" | "col" | "colgroup")
+                || is_html_table_row_part(local_name)
+        }
+        _ => false,
+    }
+}
+
+fn is_html_table_row_part(local_name: &str) -> bool {
+    matches!(local_name, "thead" | "tbody" | "tfoot" | "tr" | "td" | "th")
+}
+
+fn has_html_embedded_dimensions(local_name: &str) -> bool {
+    matches!(local_name, "object" | "iframe")
+}
+
+fn is_outermost_svg(host: &DomHost, handle: NodeId, element: &Element) -> bool {
+    element.local_name() == "svg"
+        && host
+            .parent_node(handle)
+            .and_then(|parent| host.node(parent))
+            .and_then(Node::as_element)
+            .is_none_or(|parent| parent.namespace() != SVG_NAMESPACE)
 }
 
 impl QueryElement<'_> {
@@ -140,11 +182,7 @@ impl QueryElement<'_> {
         let element = self.element();
         let mut block = PropertyDeclarationBlock::new();
         if element.namespace() == SVG_NAMESPACE {
-            let is_outermost_svg = element.local_name() == "svg"
-                && self
-                    .parent_element()
-                    .is_none_or(|parent| parent.element().namespace() != SVG_NAMESPACE);
-            if is_outermost_svg {
+            if is_outermost_svg(self.host(), self.handle(), element) {
                 append_root_svg_size_declarations(element, &mut block);
             }
 
@@ -163,10 +201,17 @@ impl QueryElement<'_> {
         } else if element.namespace() == HTML_NAMESPACE {
             append_html_direction_declaration(*self, &mut block);
             append_html_text_alignment_declaration(*self, &mut block);
-            if element.local_name() == "object" {
-                append_html_object_dimension_declarations(element, &mut block);
+            if has_html_embedded_dimensions(element.local_name()) {
+                append_html_embedded_dimension_declarations(element, &mut block);
+            } else {
+                append_html_table_presentation_declarations(*self, &mut block);
             }
-            append_html_table_presentation_declarations(*self, &mut block);
+            if html_presentation_attribute_applies(element.local_name(), "frameborder")
+                && let Some(value) = element.attribute_ns("", "frameborder")
+                && parse_html_integer_prefix(value).unwrap_or(0) == 0
+            {
+                append_parsed_presentation_declaration(*self, "border-width", "0", &mut block);
+            }
         }
 
         if !block.is_empty() {
@@ -213,10 +258,8 @@ fn append_html_text_alignment_declaration(
     block: &mut PropertyDeclarationBlock,
 ) {
     let native = element.element();
-    let legacy_block_alignment = match native.local_name() {
-        "div" | "p" => true,
-        "h1" | "h2" | "h3" | "h4" | "h5" | "h6" => false,
-        _ => return,
+    let Some(legacy_block_alignment) = html_block_alignment(native.local_name()) else {
+        return;
     };
     let Some(value) = native.attribute_ns("", "align") else {
         return;
@@ -233,6 +276,14 @@ fn append_html_text_alignment_declaration(
     append_parsed_presentation_declaration(element, "text-align", alignment, block);
 }
 
+fn html_block_alignment(local_name: &str) -> Option<bool> {
+    match local_name {
+        "div" | "p" => Some(true),
+        "h1" | "h2" | "h3" | "h4" | "h5" | "h6" => Some(false),
+        _ => None,
+    }
+}
+
 fn append_html_table_presentation_declarations(
     element: QueryElement<'_>,
     block: &mut PropertyDeclarationBlock,
@@ -245,7 +296,7 @@ fn append_html_table_presentation_declarations(
     // Keep them in the cascade so author CSS can override them and the table
     // algorithm receives the same constraints as an authored CSS length.
     // Table/cell widths ignore zero; column widths preserve it.
-    if (local_name == "table" || is_cell || is_column)
+    if html_presentation_attribute_applies(local_name, "width")
         && let Some(width) = native
             .attribute_ns("", "width")
             .and_then(|value| parse_html_dimension(value, true, is_column))
@@ -259,7 +310,7 @@ fn append_html_table_presentation_declarations(
 
     // Only cell heights ignore zero. Blink also maps height on col/colgroup
     // through HTMLTablePartElement, observable when their display is changed.
-    if (matches!(local_name, "table" | "thead" | "tbody" | "tfoot" | "tr") || is_cell || is_column)
+    if html_presentation_attribute_applies(local_name, "height")
         && let Some(height) = native
             .attribute_ns("", "height")
             .and_then(|value| parse_html_dimension(value, true, !is_cell))
@@ -273,7 +324,7 @@ fn append_html_table_presentation_declarations(
 
     if local_name == "table" {
         if let Some(spacing) = native
-            .attribute("cellspacing")
+            .attribute_ns("", "cellspacing")
             .filter(|value| !value.is_empty())
             .and_then(|value| parse_html_dimension(value, false, true))
         {
@@ -285,7 +336,10 @@ fn append_html_table_presentation_declarations(
             );
         }
 
-        if let Some(vertical_align) = native.attribute("valign").filter(|value| !value.is_empty()) {
+        if let Some(vertical_align) = native
+            .attribute_ns("", "valign")
+            .filter(|value| !value.is_empty())
+        {
             append_parsed_presentation_declaration(
                 element,
                 "vertical-align",
@@ -295,17 +349,15 @@ fn append_html_table_presentation_declarations(
         }
     }
 
-    if matches!(
-        local_name,
-        "table" | "thead" | "tbody" | "tfoot" | "tr" | "td" | "th"
-    ) && let Some(color) = native
-        .attribute("bgcolor")
-        .and_then(parse_html_legacy_color)
+    if html_presentation_attribute_applies(local_name, "bgcolor")
+        && let Some(color) = native
+            .attribute_ns("", "bgcolor")
+            .and_then(parse_html_legacy_color)
     {
         append_parsed_presentation_declaration(element, "background-color", &color, block);
     }
 
-    if matches!(local_name, "thead" | "tbody" | "tfoot" | "tr" | "td" | "th") {
+    if is_html_table_row_part(local_name) {
         append_html_table_part_alignment_declarations(element, block);
     }
 
@@ -319,7 +371,7 @@ fn append_html_table_part_alignment_declarations(
     block: &mut PropertyDeclarationBlock,
 ) {
     let native = element.element();
-    if let Some(vertical_align) = native.attribute("valign") {
+    if let Some(vertical_align) = native.attribute_ns("", "valign") {
         let vertical_align = match vertical_align.to_ascii_lowercase().as_str() {
             "top" => "top",
             "middle" => "middle",
@@ -330,7 +382,7 @@ fn append_html_table_part_alignment_declarations(
         append_parsed_presentation_declaration(element, "vertical-align", vertical_align, block);
     }
 
-    if let Some(text_align) = native.attribute("align") {
+    if let Some(text_align) = native.attribute_ns("", "align") {
         let text_align = match text_align.to_ascii_lowercase().as_str() {
             "middle" | "center" => "-moz-center",
             "absmiddle" => "center",
@@ -543,7 +595,7 @@ fn hex_byte(high: u8, low: u8) -> u8 {
 
 fn append_root_svg_size_declarations(element: &Element, block: &mut PropertyDeclarationBlock) {
     for (attribute, is_width) in [("width", true), ("height", false)] {
-        let Some(value) = element.attribute(attribute) else {
+        let Some(value) = element.attribute_ns("", attribute) else {
             continue;
         };
         let Some(size) = parse_svg_size_attribute(value) else {
@@ -684,7 +736,7 @@ fn append_html_table_cell_padding_declarations(
         };
         let native = current.element();
         if native.namespace() == HTML_NAMESPACE && native.local_name() == "table" {
-            break parse_html_table_cell_padding(native.attribute("cellpadding"));
+            break parse_html_table_cell_padding(native.attribute_ns("", "cellpadding"));
         }
         ancestor = current.parent_element();
     };
@@ -709,12 +761,12 @@ fn append_html_table_cell_padding_declarations(
     }
 }
 
-fn append_html_object_dimension_declarations(
+fn append_html_embedded_dimension_declarations(
     element: &Element,
     block: &mut PropertyDeclarationBlock,
 ) {
     for (attribute, is_width) in [("width", true), ("height", false)] {
-        let Some(value) = element.attribute(attribute) else {
+        let Some(value) = element.attribute_ns("", attribute) else {
             continue;
         };
         let Some(dimension) = parse_html_dimension_attribute(value) else {
@@ -855,40 +907,6 @@ mod tests {
     }
 
     #[test]
-    fn svg_attributes_are_classified_as_presentational() {
-        for name in [
-            "fill",
-            "fill-opacity",
-            "stroke",
-            "stroke-width",
-            "paint-order",
-            "shape-rendering",
-            "font-size-adjust",
-            "text-overflow",
-            "white-space",
-            "width",
-            "height",
-            "x",
-            "y",
-            "cx",
-            "cy",
-            "r",
-            "rx",
-            "ry",
-            "d",
-            "transform",
-            "patternTransform",
-            "gradientTransform",
-        ] {
-            assert!(
-                is_svg_presentation_attribute_name(name),
-                "{name} must invalidate presentation hints when mutated"
-            );
-        }
-        assert!(!is_svg_presentation_attribute_name("viewBox"));
-    }
-
-    #[test]
     fn svg_special_presentation_attributes_follow_element_scopes() {
         let element = |local_name: &str| {
             Element::new(
@@ -925,12 +943,16 @@ mod tests {
             Some("transform")
         );
         assert_eq!(
+            svg_presentation_property_name(&element("linearGradient"), "gradienttransform"),
+            None
+        );
+        assert_eq!(
             svg_presentation_property_name(&element("radialGradient"), "gradientTransform"),
             Some("transform")
         );
 
         let group = element("g");
-        for attribute in ["x", "y", "width", "height"] {
+        for attribute in ["r", "x", "y", "width", "height", "viewBox"] {
             assert_eq!(svg_presentation_property_name(&group, attribute), None);
         }
         for local_name in ["pattern", "linearGradient", "radialGradient"] {

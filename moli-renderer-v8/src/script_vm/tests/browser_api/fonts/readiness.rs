@@ -82,7 +82,7 @@ async fn assert_mixed_ready(js_starts_first: bool, js_finishes_first: bool) {
         "<!doctype html><html><head></head><body>AAAA</body></html>",
         &loader,
     );
-    vm.set_layout_policy(moli_page_types::LayoutPolicy::OnDemand);
+    vm.set_layout_policy(moli_page_types::LayoutPolicy::Lazy);
     vm.eval("globalThis.fonts=document.fonts;globalThis.readyResults=[];globalThis.doneEvents=[];fonts.addEventListener('loadingdone',event=>doneEvents.push(event.fontfaces.map(face=>face.family).sort().join(',')))").unwrap();
     let start_css = format!(
         r#"const style=document.createElement('style');
@@ -184,7 +184,7 @@ async fn font_set_ready_settles_css_started_by_explicit_font_face_load() {
         "<!doctype html><html><head></head><body>AAAA</body></html>",
         &loader,
     );
-    vm.set_layout_policy(moli_page_types::LayoutPolicy::OnDemand);
+    vm.set_layout_policy(moli_page_types::LayoutPolicy::Lazy);
     vm.eval(&format!(
         r#"
         const style=document.createElement('style');
@@ -285,7 +285,7 @@ async fn assert_loaded_promise_lifetime(mode: &str) {
         "<!doctype html><html><head></head><body>AAAA</body></html>",
         &loader,
     );
-    vm.set_layout_policy(moli_page_types::LayoutPolicy::OnDemand);
+    vm.set_layout_policy(moli_page_types::LayoutPolicy::Lazy);
     if mode == "js-only" {
         vm.eval(&format!(
             r#"globalThis.promiseResults=[];

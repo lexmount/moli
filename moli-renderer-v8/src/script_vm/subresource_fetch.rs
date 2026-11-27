@@ -196,7 +196,40 @@ fn apply_media_subresource_terminal(
     sequence: crate::native_bridge::MediaLoadSequenceId,
     internal_id: u64,
     successful: bool,
+    _response: Option<&mut crate::protocol_types::NavigationResponse>,
 ) {
+    #[cfg(all(
+        feature = "media-ext",
+        any(target_os = "linux", target_os = "macos"),
+        target_pointer_width = "64"
+    ))]
+    let successful = {
+        let mut host = context_host.borrow_mut();
+        if successful
+            && host.pending_media_load_sequence_is_current(media_handle, sequence)
+            && host.manages_video(media_handle)
+            && let Some(response) = _response
+        {
+            if crate::network_host::is_mp4_video_response(response) {
+                if host.start_buffered_video(
+                    scope,
+                    media_handle,
+                    sequence,
+                    Some(internal_id),
+                    response.body_bytes().len(),
+                    || bytes::Bytes::from(response.take_body_bytes()),
+                ) {
+                    return;
+                }
+                false
+            } else {
+                host.reset_video_playback(scope, media_handle);
+                true
+            }
+        } else {
+            successful
+        }
+    };
     let followup = context_host
         .borrow_mut()
         .complete_pending_media_load_network_request_if_matches(
@@ -219,6 +252,7 @@ enum ImageSubresourceTerminal<'a> {
     Response {
         response: &'a crate::protocol_types::NavigationResponse,
         encoded: &'a moli_parkable_image::ParkableImage,
+        readable: bool,
     },
     Failure,
 }
@@ -230,7 +264,9 @@ impl ImageSubresourceTerminal<'_> {
         initiator_type: &'static str,
     ) -> crate::context_bootstrap::ResourcePerformanceEntry {
         match self {
-            Self::Response { response, encoded } => {
+            Self::Response {
+                response, encoded, ..
+            } => {
                 crate::context_bootstrap::ResourcePerformanceEntry::from_network_response_with_body_size(
                     request_url.as_str(),
                     initiator_type,
@@ -265,9 +301,16 @@ fn apply_image_subresource_terminal(
         .filter(|pending| pending.id() == sequence)
         .map(|pending| pending.resource_timing_initiator_type());
     let (accepted, followup) = match &terminal {
-        ImageSubresourceTerminal::Response { response, encoded } => {
+        ImageSubresourceTerminal::Response {
+            response,
+            encoded,
+            readable,
+        } => {
             let descriptor =
-                crate::network_host::image_response_descriptor_from_parkable(response, encoded);
+                crate::network_host::image_response_descriptor_from_parkable(response, encoded)
+                    .map(|descriptor| {
+                        descriptor.with_canvas_readback(request_url, response, *readable)
+                    });
             let completion = context_host
                 .borrow_mut()
                 .complete_pending_image_load_network_response_if_matches(

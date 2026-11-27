@@ -1,26 +1,27 @@
 use std::{
     cell::{Cell, RefCell},
-    collections::HashMap,
+    collections::HashSet,
 };
 
-use moli_selector::StyloSourceInvalidationFallbackReason;
+use indexmap::{IndexMap, IndexSet};
+use moli_selector::StyloDomStyleAdapter;
 use selectors::context::SelectorCaches;
 use style::{
+    servo::restyle_damage::ServoRestyleDamage,
     servo_arc::Arc as ServoArc,
     stylist::{CascadeData, Stylist},
 };
 
-use crate::document_runtime::DomHandle;
+use crate::{document_runtime::DomHandle, dom::native::DomHost};
 
 use super::{
     CssCustomPropertyRegistrationRecord, StyleTreeScopeVersions, StyleViewport,
     StyloStyleEnvironment,
     active_stylesheets::ActiveStylesheetCollection,
-    lazy_invalidation::LazyStyleInvalidationRoots,
     shadow_scopes::ShadowScopeStyles,
     source_dirty::{StyleSourceDirtyReason, StyleSourceDirtyScopeSnapshot, StyleSourceDirtyScopes},
     source_id::{StyleScopeId, StyleSourceId},
-    source_key::StyleSourceSetKey,
+    style_paths::{StyleInvalidationScope, StylePathCache},
     stylesheet_resources::{
         StylesheetResourceGeneration, StylesheetResourceManifest, StylesheetResourceSnapshot,
     },
@@ -37,8 +38,6 @@ pub(super) struct RetainedStyleSystem {
     pub(super) stylesheet_resource_revision: u64,
     pub(super) user_agent_cascade_data: ServoArc<CascadeData>,
     pub(super) shadow_cascade_data: Vec<(DomHandle, ServoArc<CascadeData>)>,
-    pub(super) source_cascade_data: HashMap<StyleSourceId, ServoArc<CascadeData>>,
-    pub(super) source_cascade_keys: HashMap<StyleSourceId, StyleSourceSetKey>,
     pub(super) script_custom_property_registrations: Vec<CssCustomPropertyRegistrationRecord>,
 }
 
@@ -79,6 +78,33 @@ pub(super) struct StyleDocumentGenerationSnapshot {
     pub(super) target_context_epoch: u64,
 }
 
+const MAX_PENDING_SCREEN_RESTYLES: usize = 1_024;
+
+#[derive(Default)]
+pub(super) enum ScreenStyleInvalidation {
+    #[default]
+    Clean,
+    Pending {
+        after: u64,
+        targets: IndexMap<DomHandle, StyleInvalidationScope>,
+    },
+    Full,
+}
+
+#[derive(Default)]
+pub(crate) struct ScreenRestyleTargets {
+    pub(crate) after: u64,
+    pub(crate) targets: Vec<(DomHandle, StyleInvalidationScope)>,
+}
+
+/// Evidence that canonical styles were used by the completed layout. Lazy
+/// pseudo styles that the layout read have no canonical ElementData slot.
+#[derive(Default)]
+pub(crate) struct ScreenStyleCoverage {
+    context_generation: Option<u64>,
+    pub(crate) lazy_pseudo_owners: HashSet<DomHandle>,
+}
+
 pub(super) struct StyleDocumentState {
     pub(super) retained_style_system: RefCell<Option<RetainedStyleSystem>>,
     selector_caches: RefCell<SelectorCaches>,
@@ -90,7 +116,13 @@ pub(super) struct StyleDocumentState {
     /// Source-side invalidation only. The target context also advances when
     /// derived styles are cleared, including temporary capture environments.
     visual_input_generation: Cell<u64>,
-    pub(super) lazy_invalidation_roots: LazyStyleInvalidationRoots,
+    screen_style_context_generation: Cell<u64>,
+    screen_style_coverage: RefCell<Option<ScreenStyleCoverage>>,
+    pub(super) screen_style_invalidation: RefCell<ScreenStyleInvalidation>,
+    // The damage itself belongs to Stylo ElementData. Keep the touched nodes
+    // through a full-layout fallback so a successful publication can clear them.
+    pub(super) screen_damage_nodes: RefCell<IndexSet<DomHandle>>,
+    pub(super) style_paths: StylePathCache,
     #[cfg(debug_assertions)]
     completed_style_observation: RefCell<Option<CompletedStyleObservation>>,
     #[cfg(all(test, debug_assertions))]
@@ -116,7 +148,11 @@ impl StyleDocumentState {
             retained_style_system_generation: Cell::new(0),
             target_context_epoch: Cell::new(0),
             visual_input_generation: Cell::new(0),
-            lazy_invalidation_roots: LazyStyleInvalidationRoots::default(),
+            screen_style_context_generation: Cell::new(0),
+            screen_style_coverage: RefCell::default(),
+            screen_style_invalidation: RefCell::default(),
+            screen_damage_nodes: RefCell::default(),
+            style_paths: StylePathCache::default(),
             #[cfg(debug_assertions)]
             completed_style_observation: RefCell::new(None),
             #[cfg(all(test, debug_assertions))]
@@ -146,8 +182,241 @@ impl StyleDocumentState {
     }
 
     pub(super) fn bump_computed_cache_generation(&self) {
+        self.invalidate_screen_style_comparisons();
         self.computed_cache_generation
             .set(self.computed_cache_generation().saturating_add(1));
+    }
+
+    pub(super) fn note_screen_style_attribute_changes(
+        &self,
+        targets: impl IntoIterator<Item = DomHandle>,
+    ) {
+        let coverage = self.screen_style_coverage.borrow();
+        let Some(coverage) = coverage.as_ref() else {
+            return;
+        };
+        let mut change = self.screen_style_invalidation.borrow_mut();
+        for handle in targets {
+            // A primary-style read may already have evicted the lazy
+            // pseudo's attr() dependencies. Screen layout still uses it.
+            if coverage.lazy_pseudo_owners.contains(&handle) {
+                *change = ScreenStyleInvalidation::Full;
+                return;
+            }
+            if matches!(*change, ScreenStyleInvalidation::Clean) {
+                *change = Self::pending_screen_style_invalidation(self.style_paths.generation());
+            }
+        }
+    }
+
+    pub(super) fn note_screen_hover_change(&self) {
+        let mut change = self.screen_style_invalidation.borrow_mut();
+        if matches!(*change, ScreenStyleInvalidation::Clean)
+            && self.screen_style_coverage.borrow().is_some()
+        {
+            // Track the change before draining snapshots. A temporary
+            // layout can replace the styles used by the screen comparison.
+            *change = if self.screen_style_dependencies_are_current() {
+                Self::pending_screen_style_invalidation(self.style_paths.generation())
+            } else {
+                ScreenStyleInvalidation::Full
+            };
+        }
+    }
+
+    pub(super) fn note_full_screen_style_invalidation(&self) {
+        let mut change = self.screen_style_invalidation.borrow_mut();
+        if !matches!(*change, ScreenStyleInvalidation::Clean) {
+            *change = ScreenStyleInvalidation::Full;
+        }
+    }
+
+    fn pending_screen_style_invalidation(after: u64) -> ScreenStyleInvalidation {
+        ScreenStyleInvalidation::Pending {
+            after,
+            targets: IndexMap::new(),
+        }
+    }
+
+    pub(super) fn record_style_targets(
+        &self,
+        host: &DomHost,
+        dom_adapter: &StyloDomStyleAdapter,
+        document: DomHandle,
+        targets: impl IntoIterator<Item = (DomHandle, StyleInvalidationScope)>,
+    ) {
+        let mut targets = targets
+            .into_iter()
+            .filter(|(handle, _)| {
+                host.node(*handle).is_some()
+                    && (*handle == document
+                        || host.owner_document_handle(*handle) == Some(document))
+            })
+            .peekable();
+        if targets.peek().is_none() {
+            return;
+        }
+        let mut screen = self.screen_style_invalidation.borrow_mut();
+        let after = self.style_paths.generation();
+        if self.style_paths.invalidate_paths() {
+            dom_adapter.clear_style_paths(document);
+        }
+
+        for (handle, scope) in targets {
+            if scope == StyleInvalidationScope::Subtree {
+                self.style_paths.invalidate_subtree(handle);
+            }
+            // The canonical layout also needs restyles discovered while
+            // draining native mutations or serving CSSOM reads.
+            if host.is_connected(handle)
+                && matches!(*screen, ScreenStyleInvalidation::Clean)
+                && self.screen_style_dependencies_are_current()
+            {
+                *screen = Self::pending_screen_style_invalidation(after);
+            }
+            if let ScreenStyleInvalidation::Pending { targets, .. } = &mut *screen
+                && host.is_connected(handle)
+            {
+                let target = targets.entry(handle).or_insert(scope);
+                *target = (*target).max(scope);
+                if targets.len() > MAX_PENDING_SCREEN_RESTYLES {
+                    *screen = ScreenStyleInvalidation::Full;
+                }
+            }
+        }
+    }
+
+    pub(super) fn record_screen_style_damage(
+        &self,
+        handle: DomHandle,
+        has_previous_style: bool,
+        compare: impl FnOnce() -> Option<ServoRestyleDamage>,
+    ) -> ServoRestyleDamage {
+        let mut change = self.screen_style_invalidation.borrow_mut();
+        if (!has_previous_style && matches!(*change, ScreenStyleInvalidation::Clean))
+            || !self.screen_style_dependencies_are_current()
+        {
+            return ServoRestyleDamage::empty();
+        }
+
+        let Some(observed) = compare() else {
+            *change = ScreenStyleInvalidation::Full;
+            return ServoRestyleDamage::empty();
+        };
+        if observed.is_empty() {
+            return observed;
+        }
+        if matches!(*change, ScreenStyleInvalidation::Clean) {
+            *change = Self::pending_screen_style_invalidation(self.style_paths.generation());
+        }
+        let mut nodes = self.screen_damage_nodes.borrow_mut();
+        if nodes.len() == MAX_PENDING_SCREEN_RESTYLES && !nodes.contains(&handle) {
+            *change = ScreenStyleInvalidation::Full;
+            return ServoRestyleDamage::empty();
+        }
+        nodes.insert(handle);
+        observed
+    }
+
+    pub(super) fn finish_screen_style_invalidation(&self) {
+        let mut change = self.screen_style_invalidation.borrow_mut();
+        let ScreenStyleInvalidation::Pending { after, targets } = &*change else {
+            return;
+        };
+        if !self.screen_style_dependencies_are_current()
+            || !self.style_paths.can_compare_after(*after)
+        {
+            *change = ScreenStyleInvalidation::Full;
+        } else if self.screen_damage_nodes.borrow().is_empty() && targets.is_empty() {
+            *change = ScreenStyleInvalidation::Clean;
+        }
+    }
+
+    pub(super) fn screen_restyle_targets(
+        &self,
+        host: &DomHost,
+        document: DomHandle,
+    ) -> Option<ScreenRestyleTargets> {
+        match &*self.screen_style_invalidation.borrow() {
+            ScreenStyleInvalidation::Clean => Some(ScreenRestyleTargets::default()),
+            ScreenStyleInvalidation::Pending { after, targets } => Some(ScreenRestyleTargets {
+                after: *after,
+                targets: targets
+                    .iter()
+                    .filter_map(|(&handle, &scope)| {
+                        (host.is_connected(handle)
+                            && host.owner_document_handle(handle) == Some(document))
+                        .then_some((handle, scope))
+                    })
+                    .collect(),
+            }),
+            ScreenStyleInvalidation::Full => None,
+        }
+    }
+
+    pub(super) fn screen_restyle_is_full(&self) -> bool {
+        matches!(
+            *self.screen_style_invalidation.borrow(),
+            ScreenStyleInvalidation::Full
+        )
+    }
+
+    pub(super) fn screen_needs_layout(&self) -> bool {
+        !self.screen_damage_nodes.borrow().is_empty() || self.screen_restyle_is_full()
+    }
+
+    pub(super) fn screen_style_dependencies_are_current(&self) -> bool {
+        let current = self.screen_style_context_generation.get();
+        current != u64::MAX
+            && self
+                .screen_style_coverage
+                .borrow()
+                .as_ref()
+                .is_some_and(|coverage| coverage.context_generation == Some(current))
+    }
+
+    pub(super) fn screen_style_coverage(&self) -> ScreenStyleCoverage {
+        ScreenStyleCoverage {
+            context_generation: Some(self.screen_style_context_generation.get()),
+            ..Default::default()
+        }
+    }
+
+    pub(super) fn invalidate_screen_style_comparisons(&self) {
+        // A temporary observation can replace canonical styles while the
+        // frozen geometry remains valid. Expire comparison evidence, and
+        // require a rebuild when there is work waiting to use it.
+        let generation = self.screen_style_context_generation.get();
+        self.screen_style_context_generation
+            .set(generation.saturating_add(1));
+        self.note_full_screen_style_invalidation();
+    }
+
+    pub(super) fn begin_screen_layout(&self) {
+        if self.screen_style_coverage.borrow().is_some() {
+            *self.screen_style_invalidation.borrow_mut() = ScreenStyleInvalidation::Full;
+        }
+    }
+
+    pub(super) fn publish_screen_styles(&self, coverage: ScreenStyleCoverage) {
+        *self.screen_style_coverage.borrow_mut() = Some(coverage);
+    }
+
+    pub(super) fn retire_screen_style_publication(&self) {
+        self.screen_style_coverage.take();
+        self.consume_screen_style_work();
+    }
+
+    pub(super) fn consume_screen_style_work(&self) -> IndexSet<DomHandle> {
+        *self.screen_style_invalidation.borrow_mut() = ScreenStyleInvalidation::Clean;
+        self.screen_damage_nodes.take()
+    }
+
+    pub(super) fn screen_uses_lazy_pseudo(&self, handle: DomHandle) -> bool {
+        self.screen_style_coverage
+            .borrow()
+            .as_ref()
+            .is_some_and(|coverage| coverage.lazy_pseudo_owners.contains(&handle))
     }
 
     #[cfg(test)]
@@ -233,10 +502,10 @@ impl StyleDocumentState {
     }
 
     pub(super) fn clear_retained_style_system(&self) {
+        self.invalidate_screen_style_comparisons();
         self.retained_style_system.borrow_mut().take();
-        self.lazy_invalidation_roots.clear();
+        self.style_paths.clear();
         self.clear_source_dirty_scopes();
-        self.clear_invalidation_clear_all_fallback_reasons();
         self.clear_selector_caches();
     }
 
@@ -269,27 +538,6 @@ impl StyleDocumentState {
 
     pub(super) fn clear_source_dirty_scopes(&self) {
         self.source_dirty_scopes.clear();
-    }
-
-    pub(super) fn record_invalidation_clear_all_fallback_reasons(
-        &self,
-        reasons: impl IntoIterator<Item = StyloSourceInvalidationFallbackReason>,
-    ) {
-        self.source_dirty_scopes
-            .record_invalidation_clear_all_fallback_reasons(reasons);
-    }
-
-    pub(super) fn clear_invalidation_clear_all_fallback_reasons(&self) {
-        self.source_dirty_scopes
-            .clear_invalidation_clear_all_fallback_reasons();
-    }
-
-    #[cfg(test)]
-    pub(super) fn invalidation_clear_all_fallback_reasons_for_test(
-        &self,
-    ) -> Vec<StyloSourceInvalidationFallbackReason> {
-        self.source_dirty_scope_snapshot()
-            .invalidation_clear_all_fallback_reasons_vec()
     }
 
     #[cfg(test)]
@@ -327,6 +575,7 @@ impl StyleDocumentState {
     }
 
     pub(super) fn set_retained_style_system(&self, mut retained: RetainedStyleSystem) {
+        self.invalidate_screen_style_comparisons();
         let mut retained_slot = self.retained_style_system.borrow_mut();
         retained.stylesheet_resource_revision = retained_slot.as_ref().map_or(1, |previous| {
             if previous.stylesheet_resources == retained.stylesheet_resources {
@@ -357,6 +606,7 @@ impl StyleDocumentState {
                 .expect("retained style system should exist before an incremental update");
             update(retained)
         };
+        self.invalidate_screen_style_comparisons();
         self.retained_style_system_generation.set(
             self.retained_style_system_generation
                 .get()

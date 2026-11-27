@@ -689,6 +689,7 @@ mod tests {
             layout_configuration: moli_page_types::LayoutConfiguration {
                 policy: moli_page_types::LayoutPolicy::default(),
                 scrollbars_hidden: false,
+                ..Default::default()
             },
             wpt_extensions_enabled: false,
             navigation_bootstrap_entry: None,
@@ -1121,9 +1122,9 @@ mod tests {
     ) -> bool {
         live_runtime
             .note_discovered_document_owned_stylesheet_inputs(discovered_stylesheet_inputs.iter());
-        live_runtime.has_pending_parser_script_blocking_stylesheet_signatures(
-            blocking_signatures_before.iter(),
-        )
+        live_runtime.drain_blocking_stylesheet_completions();
+        live_runtime
+            .has_pending_parser_script_blocking_stylesheet_signatures(blocking_signatures_before)
     }
 
     mod extracted;

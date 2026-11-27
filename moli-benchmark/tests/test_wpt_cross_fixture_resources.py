@@ -1,9 +1,47 @@
 from __future__ import annotations
 
+from urllib.error import HTTPError
+
 from wpt_cross_test_support import *
 
 
 class WptCrossFixtureResourcesTests(WptCrossTestCase):
+    def test_clear_site_data_storage_fixtures_are_selectable_and_served(self) -> None:
+        with tempfile.TemporaryDirectory() as root:
+            root_path = Path(root)
+            harness_dir = root_path / "resources"
+            harness_dir.mkdir()
+            (harness_dir / "testharness.js").write_text("// testharness", encoding="utf-8")
+            case_dir = root_path / "clear-site-data"
+            support_dir = case_dir / "support"
+            support_dir.mkdir(parents=True)
+            (support_dir / "test_utils.sub.js").write_text(
+                'const echo = "support/echo-clear-site-data.py?";', encoding="utf-8",
+            )
+            harness = '<script src="/resources/testharness.js"></script>'
+            (case_dir / "storage.https.html").write_text(
+                harness + '<script src="support/test_utils.sub.js"></script>'
+                '<script>frame.contentWindow.fetch("controlled-endpoint.py");</script>',
+                encoding="utf-8",
+            )
+            (case_dir / "cookies.https.html").write_text(
+                harness + '<script>fetch("support/clear-site-data-cookie.py");</script>',
+                encoding="utf-8",
+            )
+            self.assertEqual(enumerate_cases(root_path), [WptCase("clear-site-data/storage.https.html")])
+
+            with WptFixtureServer(root_path) as server:
+                support_url = f"{server.base_url}/clear-site-data/support"
+                with urlopen(f"{support_url}/controlled-endpoint.py", timeout=2) as response:
+                    self.assertEqual(response.read(), b"FROM_NETWORK")
+                echo_url = f"{support_url}/echo-clear-site-data.py"
+                with urlopen(f"{echo_url}?storage&cookies&storage=duplicate", timeout=2) as response:
+                    self.assertEqual(response.headers["Clear-Site-Data"], '"storage","cookies"')
+                    self.assertIn(b'test_utils.sub.js', response.read())
+                with self.assertRaises(HTTPError) as invalid:
+                    urlopen(f"{echo_url}?storage%0d%0a", timeout=2)
+                self.assertEqual(invalid.exception.code, 400)
+
     def test_fixture_server_models_reporting_resource_stash(self) -> None:
         with tempfile.TemporaryDirectory() as root:
             root_path = Path(root)

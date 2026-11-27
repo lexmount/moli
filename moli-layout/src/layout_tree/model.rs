@@ -227,6 +227,13 @@ impl LayoutTransform2D {
         Self::new([1.0, 0.0, 0.0, 1.0, f64::from(x), f64::from(y)])
     }
 
+    #[inline]
+    pub(crate) fn translated_in_viewport(mut self, [x, y]: [f64; 2]) -> Self {
+        self.coefficients[4] += x;
+        self.coefficients[5] += y;
+        self
+    }
+
     pub fn scale(x: f64, y: f64) -> Self {
         Self::new([x, 0.0, 0.0, y, 0.0, 0.0])
     }
@@ -338,7 +345,7 @@ pub(crate) struct LayoutCoordinateSpace {
 }
 
 /// Query-facing coordinate data retained for one frozen box-tree node.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct FrozenCoordinateSpace {
     pub owner: Option<LayoutOutputBoxId>,
     pub local_to_viewport: LayoutTransform2D,

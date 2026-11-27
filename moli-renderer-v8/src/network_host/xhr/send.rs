@@ -94,8 +94,6 @@ pub(super) fn xhr_send_callback<'s>(
             return;
         }
     };
-    let url_policy = moli_url_policy::route_xml_http_request_url(&prepared.resolved_url);
-
     mark_xhr_timeout_start(scope, xhr);
     let open_generation =
         xhr_state_number_property(scope, xhr, XHR_OPEN_GENERATION_SLOT).unwrap_or(0.0);
@@ -127,7 +125,12 @@ pub(super) fn xhr_send_callback<'s>(
         return;
     }
 
-    if let Err(error) = url_policy {
+    if !prepared
+        .resource_loader
+        .request_client()
+        .permits_file_script_read(&prepared.resolved_url)
+        && let Err(error) = moli_url_policy::route_xml_http_request_url(&prepared.resolved_url)
+    {
         record_xhr_failure(scope, host, xhr, prepared, async_request, error.to_string());
         return;
     }
@@ -236,6 +239,15 @@ pub(super) fn xhr_open_generation_changed(
         .is_some_and(|current| current != expected)
 }
 
+pub(crate) fn capture_xhr_upload_listener_flag(
+    scope: &mut v8::PinScope<'_, '_>,
+    xhr: v8::Local<'_, v8::Object>,
+) -> bool {
+    let has_upload_listeners = super::instance_state::xhr_has_upload_listeners(scope, xhr);
+    set_xhr_state_bool(scope, xhr, XHR_UPLOAD_LISTENER_SLOT, has_upload_listeners);
+    has_upload_listeners
+}
+
 pub(crate) fn dispatch_xhr_loadstart(
     scope: &mut v8::PinScope<'_, '_>,
     xhr: v8::Local<'_, v8::Object>,
@@ -244,10 +256,6 @@ pub(crate) fn dispatch_xhr_loadstart(
     let open_generation =
         xhr_state_number_property(scope, xhr, XHR_OPEN_GENERATION_SLOT).unwrap_or(0.0);
     // The XHR loadstart listener can abort before upload.loadstart runs.
-    let has_upload_listeners = xhr_upload_object(scope, xhr).is_some_and(|upload| {
-        crate::context_bootstrap::simple_object_has_event_listeners(scope, upload)
-    });
-    set_xhr_state_bool(scope, xhr, XHR_UPLOAD_LISTENER_SLOT, has_upload_listeners);
     set_xhr_state_bool(scope, xhr, XHR_UPLOAD_IN_PROGRESS_SLOT, send_body.is_some());
     xhr_dispatch_progress_event(scope, xhr, "loadstart", 0.0, 0.0);
     if xhr_is_aborted(scope, xhr) || xhr_open_generation_changed(scope, xhr, open_generation) {

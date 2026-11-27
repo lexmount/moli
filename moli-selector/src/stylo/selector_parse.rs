@@ -1,7 +1,6 @@
 use crate::cssom_selector::{
     dom_api_selector_list_contains_known_pseudo_element,
     dom_api_selector_list_has_only_known_pseudo_elements,
-    dom_api_selector_text_with_trailing_attribute_recovery,
     selector_list_has_invalid_terminal_pseudo_element_chain,
 };
 use cssparser::ToCss;
@@ -38,27 +37,18 @@ pub(crate) fn parse_dom_api_selector_list_for_url(
     selector: &str,
     url: Url,
 ) -> Result<ParsedDomApiSelectorList, SelectorError> {
-    let selector = dom_api_selector_text_with_trailing_attribute_recovery(selector);
-    if let Err(error) = crate::selector::validation::pre_validate_selector(&selector) {
-        if error.message() == "unclosed '(' in selector"
-            && dom_api_selector_list_has_only_known_pseudo_elements(&selector)
-        {
-            return Ok(ParsedDomApiSelectorList::EmptyKnownPseudoElement);
-        }
-        return Err(error);
-    }
-    if selector_list_has_invalid_terminal_pseudo_element_chain(&selector) {
+    if selector_list_has_invalid_terminal_pseudo_element_chain(selector) {
         return Err(SelectorError::syntax(
             "terminal pseudo-elements cannot be chained",
         ));
     }
-    if dom_api_selector_list_has_only_known_pseudo_elements(&selector)
-        || (dom_api_selector_list_contains_known_pseudo_element(&selector)
-            && validate_style_rule_selector_list(&selector).is_ok())
+    if dom_api_selector_list_has_only_known_pseudo_elements(selector)
+        || (dom_api_selector_list_contains_known_pseudo_element(selector)
+            && validate_style_rule_selector_list(selector).is_ok())
     {
         return Ok(ParsedDomApiSelectorList::EmptyKnownPseudoElement);
     }
-    parse_dom_api_selector_list_text_for_url(&selector, url).map(ParsedDomApiSelectorList::Parsed)
+    parse_dom_api_selector_list_text_for_url(selector, url).map(ParsedDomApiSelectorList::Parsed)
 }
 
 fn parse_dom_api_selector_list_text_for_url(

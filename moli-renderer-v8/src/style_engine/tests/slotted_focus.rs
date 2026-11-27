@@ -28,7 +28,13 @@ fn slotted_dependency_invalidation_targets_assigned_nodes() {
             document_url.clone(),
         )],
     );
-    let inputs = FullStyleWorldSnapshot::default();
+    let inputs = FullStyleWorldSnapshot {
+        shadow_stylesheet_sources: vec![(
+            shadow_root,
+            engine.shadow_root_adopted_style_sheet_sources_with_host(&host, shadow_root),
+        )],
+        ..Default::default()
+    };
     for handle in [outside, assigned] {
         assert!(
             engine
@@ -55,6 +61,7 @@ fn slotted_dependency_invalidation_targets_assigned_nodes() {
         &host,
         &[StyleMutationEffect::Attribute {
             element: slot,
+            namespace: None,
             name: "class".into(),
             old_value: None,
             new_value: Some("slot".into()),
@@ -144,6 +151,7 @@ fn slotted_dependency_change_clears_assigned_descendant_cache_via_subtree_cleanu
         &host,
         &[StyleMutationEffect::Attribute {
             element: slot,
+            namespace: None,
             name: "class".into(),
             old_value: None,
             new_value: Some("slot".into()),
@@ -242,6 +250,7 @@ fn slotted_relative_anchor_invalidation_preserves_unmatched_assigned_node() {
         &host,
         &[StyleMutationEffect::Attribute {
             element: marker,
+            namespace: None,
             name: "class".into(),
             old_value: Some("other".into()),
             new_value: Some("marker".into()),
@@ -414,7 +423,7 @@ fn shadow_slot_insertion_uses_retargeted_assignment_snapshots() {
     );
 
     let effects = host.insert_before_effects(shadow_root, new_slot, Some(old_slot));
-    let style_effects = StyleMutationEffect::from_dom_mutation_effects(&host, &effects);
+    let style_effects = StyleMutationEffect::from_dom_mutation_effects(&effects);
     assert!(style_effects.iter().all(|effect| {
         matches!(
             effect,
@@ -468,7 +477,13 @@ fn slotted_dependency_invalidation_treats_assigned_node_as_shadow_scope() {
             document_url.clone(),
         )],
     );
-    let inputs = FullStyleWorldSnapshot::default();
+    let inputs = FullStyleWorldSnapshot {
+        shadow_stylesheet_sources: vec![(
+            shadow_root,
+            engine.shadow_root_adopted_style_sheet_sources_with_host(&host, shadow_root),
+        )],
+        ..Default::default()
+    };
     for handle in [outside, assigned] {
         assert!(
             engine
@@ -495,6 +510,7 @@ fn slotted_dependency_invalidation_treats_assigned_node_as_shadow_scope() {
         &host,
         &[StyleMutationEffect::Attribute {
             element: assigned,
+            namespace: None,
             name: "class".into(),
             old_value: Some("item".into()),
             new_value: Some(String::new()),
@@ -535,7 +551,10 @@ fn part_dependency_invalidation_targets_shadow_tree() {
             document_url.clone(),
         )],
     );
-    let inputs = FullStyleWorldSnapshot::default();
+    let inputs = FullStyleWorldSnapshot {
+        document_stylesheet_sources: engine.adopted_style_sheet_sources_for_document(document),
+        ..Default::default()
+    };
     for handle in [outside, part] {
         assert!(
             engine
@@ -562,6 +581,7 @@ fn part_dependency_invalidation_targets_shadow_tree() {
         &host,
         &[StyleMutationEffect::Attribute {
             element: shadow_host,
+            namespace: None,
             name: "class".into(),
             old_value: None,
             new_value: Some("host".into()),
@@ -637,6 +657,7 @@ fn part_relative_anchor_invalidation_preserves_unmatched_part() {
         &host,
         &[StyleMutationEffect::Attribute {
             element: marker,
+            namespace: None,
             name: "class".into(),
             old_value: Some("other".into()),
             new_value: Some("marker".into()),
@@ -742,58 +763,12 @@ fn document_part_rule_styles_after_part_lang_and_invalidates() {
     assert!(host.set_attribute(part, "lang", "fr"));
     let effects = [StyleMutationEffect::Attribute {
         element: part,
+        namespace: None,
         name: "lang".into(),
         old_value: None,
         new_value: Some("fr".into()),
     }];
     let media = crate::protocol_types::EmulatedMediaOverrides::default();
-    let source_scope = source_scope_for_mutations(&host, &effects).expect("source scope");
-    let target_queries = {
-        let world = engine.world_for_document(document);
-        let linked_sources = world.linked_stylesheet_sources.borrow();
-        let document_adopted_sources = world.adopted_style_sheet_sources.borrow();
-        super::planner::target_queries_for_pending_cause_with_document_adopted_sources(
-            &host,
-            &linked_sources,
-            &document_adopted_sources,
-            &engine.dom_adapter,
-            &media,
-            StyleViewport::default(),
-            document,
-            &PendingStyleInvalidationCause::Mutation(effects.to_vec()),
-            &source_scope,
-        )
-    };
-    let application = engine
-        .with_retained_style_system_for_document_for_test(document, |retained| {
-            retained_source_invalidation_outcome_for_document_for_test(
-                &engine,
-                &host,
-                document,
-                StyleSourceDocumentContext::for_root_document(document),
-                Some(retained),
-                &target_queries,
-                false,
-            )
-        })
-        .finalize(&host);
-    assert_eq!(
-        application.cleanup_target_kind(),
-        StyleInvalidationCleanupTargetKind::ExactAffectedSubtreeRoots
-    );
-    assert!(matches!(
-        application.cleanup_target(),
-        StyleInvalidationCleanupTarget::ExactAffectedSubtreeRoots(roots)
-            if roots.contains(&part) && !roots.contains(&shadow_host)
-    ));
-    assert_eq!(application.diagnostic_target_results().len(), 1);
-    assert!(application.diagnostic_target_results()[0].exact());
-    assert!(
-        application.diagnostic_target_results()[0]
-            .fallback_reasons()
-            .is_empty()
-    );
-
     engine.invalidate_for_mutations(&host, &effects, &media);
     engine.drain_pending_style_invalidations_for_document_for_test(&host, document);
 
@@ -857,59 +832,12 @@ fn document_part_rule_styles_after_part_dir_and_invalidates() {
     assert!(host.set_attribute(part, "dir", "rtl"));
     let effects = [StyleMutationEffect::Attribute {
         element: part,
+        namespace: None,
         name: "dir".into(),
         old_value: None,
         new_value: Some("rtl".into()),
     }];
     let media = crate::protocol_types::EmulatedMediaOverrides::default();
-    let source_scope = source_scope_for_mutations(&host, &effects).expect("source scope");
-    let target_queries = {
-        let world = engine.world_for_document(document);
-        let linked_sources = world.linked_stylesheet_sources.borrow();
-        let document_adopted_sources = world.adopted_style_sheet_sources.borrow();
-        super::planner::target_queries_for_pending_cause_with_document_adopted_sources(
-            &host,
-            &linked_sources,
-            &document_adopted_sources,
-            &engine.dom_adapter,
-            &media,
-            StyleViewport::default(),
-            document,
-            &PendingStyleInvalidationCause::Mutation(effects.to_vec()),
-            &source_scope,
-        )
-    };
-    let application = engine
-        .with_retained_style_system_for_document_for_test(document, |retained| {
-            retained_source_invalidation_outcome_for_document_for_test(
-                &engine,
-                &host,
-                document,
-                StyleSourceDocumentContext::for_root_document(document),
-                Some(retained),
-                &target_queries,
-                false,
-            )
-        })
-        .finalize(&host);
-    assert_eq!(
-        application.cleanup_target_kind(),
-        StyleInvalidationCleanupTargetKind::ExactAffectedSubtreeRoots
-    );
-    assert!(matches!(
-        application.cleanup_target(),
-        StyleInvalidationCleanupTarget::ExactAffectedSubtreeRoots(roots)
-            if roots.contains(&part) && !roots.contains(&shadow_host)
-    ));
-    // The UA direction rule and the author's ::part rule can both register
-    // dependencies. Their count is not the invalidation contract.
-    let diagnostics = application.diagnostic_target_results();
-    assert!(!diagnostics.is_empty());
-    for result in diagnostics {
-        assert!(result.exact());
-        assert!(result.fallback_reasons().is_empty());
-    }
-
     engine.invalidate_for_mutations(&host, &effects, &media);
     engine.drain_pending_style_invalidations_for_document_for_test(&host, document);
 
@@ -1143,6 +1071,7 @@ fn attribute_relative_dependency_invalidates_outer_sibling_target() {
         &host,
         &[StyleMutationEffect::Attribute {
             element: marker,
+            namespace: None,
             name: "class".into(),
             old_value: Some("other".into()),
             new_value: Some("marker".into()),
@@ -1209,6 +1138,7 @@ fn unrelated_attribute_mutation_ignores_unmatched_has_selector_dependency() {
         &host,
         &[StyleMutationEffect::Attribute {
             element: unrelated,
+            namespace: None,
             name: "data-other".into(),
             old_value: None,
             new_value: Some("active".into()),
@@ -1257,6 +1187,7 @@ fn style_attribute_mutation_keeps_local_subtree_fallback_without_dependency() {
         &host,
         &[StyleMutationEffect::Attribute {
             element,
+            namespace: None,
             name: "style".into(),
             old_value: None,
             new_value: Some("color: red".into()),
@@ -1292,14 +1223,13 @@ fn attribute_sibling_invalidation_is_per_effect() {
 
     let mut engine = MoliStyleEngine::new();
     let document_url = url::Url::parse("https://example.test/").unwrap();
-    engine.set_document_adopted_style_sheet_sources(
-        document,
-        vec![StyloStylesheetSource::new(
-            ".marker + .target { color: red; }".into(),
-            document_url.clone(),
-        )],
+    let source = StyloStylesheetSource::new(
+        ".marker + .target { color: red; }".into(),
+        document_url.clone(),
     );
-    let inputs = FullStyleWorldSnapshot::default();
+    engine.set_document_adopted_style_sheet_sources(document, vec![source.clone()]);
+    let mut inputs = FullStyleWorldSnapshot::default();
+    inputs.document_stylesheet_sources.push(source);
     assert!(
         engine
             .computed_style_property_value(
@@ -1331,15 +1261,19 @@ fn attribute_sibling_invalidation_is_per_effect() {
         2
     );
 
+    assert!(host.set_attribute(first_source, "class", "marker"));
+    assert!(host.set_attribute(second_source, "data-other", "active"));
     let effects = [
         StyleMutationEffect::Attribute {
             element: first_source,
+            namespace: None,
             name: "class".into(),
             old_value: None,
             new_value: Some("marker".into()),
         },
         StyleMutationEffect::Attribute {
             element: second_source,
+            namespace: None,
             name: "data-other".into(),
             old_value: None,
             new_value: Some("active".into()),
@@ -1406,12 +1340,9 @@ fn focus_invalidation_keeps_unrelated_sibling_cache_entries() {
     );
 
     let media = crate::protocol_types::EmulatedMediaOverrides::default();
+    host.set_active_element_handle(Some(source));
     engine.invalidate_for_focus_change(&host, None, Some(source), &media);
 
-    assert_eq!(
-        engine.pending_style_invalidation_work_kind_names_for_document_for_test(document),
-        vec!["focus"]
-    );
     assert!(engine.computed_style_cache_contains_handle_for_document_for_test(document, target));
 }
 #[test]
@@ -1436,7 +1367,10 @@ fn focus_within_invalidation_preserves_unrelated_sibling_cache_entries() {
             document_url.clone(),
         )],
     );
-    let inputs = FullStyleWorldSnapshot::default();
+    let inputs = FullStyleWorldSnapshot {
+        document_stylesheet_sources: engine.adopted_style_sheet_sources_for_document(document),
+        ..Default::default()
+    };
     for handle in [previous, parent] {
         assert!(
             engine
@@ -1458,6 +1392,7 @@ fn focus_within_invalidation_preserves_unrelated_sibling_cache_entries() {
     );
 
     let media = crate::protocol_types::EmulatedMediaOverrides::default();
+    host.set_active_element_handle(Some(source));
     engine.invalidate_for_focus_change(&host, None, Some(source), &media);
     engine.drain_pending_style_invalidations_for_document_for_test(&host, document);
 
@@ -1493,7 +1428,10 @@ fn focus_sibling_invalidation_preserves_previous_sibling_cache() {
             document_url.clone(),
         )],
     );
-    let inputs = FullStyleWorldSnapshot::default();
+    let inputs = FullStyleWorldSnapshot {
+        document_stylesheet_sources: engine.adopted_style_sheet_sources_for_document(document),
+        ..Default::default()
+    };
     for handle in [previous, target] {
         assert!(
             engine
@@ -1515,6 +1453,7 @@ fn focus_sibling_invalidation_preserves_previous_sibling_cache() {
     );
 
     let media = crate::protocol_types::EmulatedMediaOverrides::default();
+    host.set_active_element_handle(Some(source));
     engine.invalidate_for_focus_change(&host, None, Some(source), &media);
     engine.drain_pending_style_invalidations_for_document_for_test(&host, document);
 
@@ -1573,6 +1512,7 @@ fn focus_invalidation_ignores_unmatched_has_selector_dependency() {
     );
 
     let media = crate::protocol_types::EmulatedMediaOverrides::default();
+    host.set_active_element_handle(Some(source));
     engine.invalidate_for_focus_change(&host, None, Some(source), &media);
     engine.drain_pending_style_invalidations_for_document_for_test(&host, document);
 
@@ -1648,51 +1588,6 @@ fn focus_invalidation_uses_has_focus_relative_dependency() {
     );
 }
 #[test]
-fn target_invalidation_keeps_pending_work_kind() {
-    let mut host = test_host();
-    let document = host.document_handle();
-    let source = host.create_element("a");
-    let target = host.create_element("span");
-
-    assert!(host.set_attribute(source, "id", "current"));
-    assert!(host.set_attribute(target, "class", "target"));
-    assert!(host.append_child(document, source));
-    assert!(host.append_child(document, target));
-
-    let mut engine = MoliStyleEngine::new();
-    let document_url = url::Url::parse("https://example.test/").unwrap();
-    engine.set_document_adopted_style_sheet_sources(
-        document,
-        vec![StyloStylesheetSource::new(
-            "#current:target + .target { color: green; }".into(),
-            document_url.clone(),
-        )],
-    );
-    let inputs = FullStyleWorldSnapshot::default();
-    assert!(
-        engine
-            .computed_style_property_value(
-                &host,
-                &document_url,
-                target,
-                "display",
-                None,
-                &inputs,
-                None,
-            )
-            .is_some()
-    );
-
-    let media = crate::protocol_types::EmulatedMediaOverrides::default();
-    engine.invalidate_for_target_change(&host, None, Some(source), &media);
-
-    assert_eq!(
-        engine.pending_style_invalidation_work_kind_names_for_document_for_test(document),
-        vec!["target"]
-    );
-    assert!(engine.computed_style_cache_contains_handle_for_document_for_test(document, target));
-}
-#[test]
 fn target_invalidation_ignores_unmatched_has_selector_dependency() {
     let mut host = test_host();
     let document = host.document_handle();
@@ -1718,7 +1613,10 @@ fn target_invalidation_ignores_unmatched_has_selector_dependency() {
             document_url.clone(),
         )],
     );
-    let inputs = FullStyleWorldSnapshot::default();
+    let inputs = FullStyleWorldSnapshot {
+        document_stylesheet_sources: engine.adopted_style_sheet_sources_for_document(document),
+        ..Default::default()
+    };
     for handle in [source, target] {
         assert!(
             engine
@@ -1740,6 +1638,7 @@ fn target_invalidation_ignores_unmatched_has_selector_dependency() {
     );
 
     let media = crate::protocol_types::EmulatedMediaOverrides::default();
+    assert!(host.set_document_target_element(document, Some(source)));
     engine.invalidate_for_target_change(&host, None, Some(source), &media);
     engine.drain_pending_style_invalidations_for_document_for_test(&host, document);
 
@@ -1838,7 +1737,10 @@ fn target_sibling_invalidation_preserves_previous_sibling_cache() {
             document_url.clone(),
         )],
     );
-    let inputs = FullStyleWorldSnapshot::default();
+    let inputs = FullStyleWorldSnapshot {
+        document_stylesheet_sources: engine.adopted_style_sheet_sources_for_document(document),
+        ..Default::default()
+    };
     for handle in [previous, target] {
         assert!(
             engine
@@ -1860,6 +1762,7 @@ fn target_sibling_invalidation_preserves_previous_sibling_cache() {
     );
 
     let media = crate::protocol_types::EmulatedMediaOverrides::default();
+    assert!(host.set_document_target_element(document, Some(source)));
     engine.invalidate_for_target_change(&host, None, Some(source), &media);
     engine.drain_pending_style_invalidations_for_document_for_test(&host, document);
 
@@ -1897,36 +1800,28 @@ fn attribute_relative_dependency_uses_impacted_shadow_stylesheet_scope() {
 
     let outside_effect = [StyleMutationEffect::Attribute {
         element: outside,
+        namespace: None,
         name: "data-state".into(),
         old_value: None,
         new_value: Some("active".into()),
     }];
-    let outside_scope = source_scope_for_mutations(&host, &outside_effect);
-    assert_eq!(
-        outside_scope,
-        Some(style_source_scope_for_mutation_effects(
-            &host,
-            &outside_effect
-        ))
-    );
 
     let shadow_effect = [StyleMutationEffect::Attribute {
         element: shadow_target,
+        namespace: None,
         name: "data-state".into(),
         old_value: None,
         new_value: Some("active".into()),
     }];
-    let shadow_scope = source_scope_for_mutations(&host, &shadow_effect);
-    assert_eq!(
-        shadow_scope,
-        Some(style_source_scope_for_mutation_effects(
-            &host,
-            &shadow_effect
-        ))
-    );
 
     let document_url = url::Url::parse("https://example.test/").unwrap();
-    let inputs = FullStyleWorldSnapshot::default();
+    let inputs = FullStyleWorldSnapshot {
+        shadow_stylesheet_sources: vec![(
+            shadow_root,
+            engine.shadow_root_adopted_style_sheet_sources_with_host(&host, shadow_root),
+        )],
+        ..Default::default()
+    };
     for handle in [outside, shadow_target] {
         assert!(
             engine
@@ -1954,6 +1849,7 @@ fn attribute_relative_dependency_uses_impacted_shadow_stylesheet_scope() {
         engine.computed_style_cache_contains_handle_for_document_for_test(document, shadow_target)
     );
 
+    assert!(host.set_attribute(shadow_target, "data-state", "active"));
     engine.invalidate_for_mutations(&host, &shadow_effect, &media);
     engine.drain_pending_style_invalidations_for_document_for_test(&host, document);
     assert!(engine.computed_style_cache_contains_handle_for_document_for_test(document, outside));

@@ -846,6 +846,10 @@ impl ScriptVm {
                                 ImageSubresourceTerminal::Response {
                                     response: &observable_response,
                                     encoded,
+                                    readable: metadata.response_type.is_readable()
+                                        && (pending.request_origin.same_origin_url(&pending.info.url)
+                                            || (pending.info.url.scheme() == "file"
+                                                && pending.load.request_client().web_security_disabled())),
                                 },
                             )
                         }
@@ -861,6 +865,7 @@ impl ScriptVm {
                             crate::network_host::media_response_status_is_successful(
                                 response_status,
                             ),
+                            Some(&mut observable_response),
                         ),
                         PendingSubresourceContinuation::TextTrack {
                             track_handle,
@@ -894,7 +899,14 @@ impl ScriptVm {
                                             .expect("a CSS image response must be parkable");
                                         let descriptor = crate::network_host::image_response_descriptor_from_parkable(
                                             &observable_response, encoded,
-                                        );
+                                        ).map(|descriptor| {
+                                            descriptor.with_canvas_readback(
+                                                &pending.info.url,
+                                                &observable_response,
+                                                metadata.response_type.is_readable()
+                                                    && pending.request_origin.same_origin_url(&pending.info.url),
+                                            )
+                                        });
                                         let _ = context_host
                                             .borrow_mut()
                                             .complete_stylesheet_css_image_response(
@@ -1009,6 +1021,7 @@ impl ScriptVm {
                             sequence,
                             pending.info.internal_id,
                             false,
+                            None,
                         ),
                         PendingSubresourceContinuation::TextTrack {
                             track_handle,

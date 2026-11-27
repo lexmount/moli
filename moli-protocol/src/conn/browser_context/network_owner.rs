@@ -708,12 +708,9 @@ impl CdpConnection {
         command_owner: &crate::conn::CommandOwnerScope,
         user_agent: Option<String>,
     ) -> Result<Option<PendingPageCommand>> {
-        let browser_identity = user_agent.as_ref().map(|user_agent| {
-            moli_browser_profile::BrowserIdentityProfile::new(
-                user_agent.clone(),
-                self.base_browser_identity.accept_language(),
-            )
-        });
+        let browser_identity = user_agent
+            .as_deref()
+            .map(|user_agent| self.base_browser_identity.with_user_agent(user_agent));
         if let Some(result) = self.start_set_non_page_browser_identity_override(
             command_owner.session_id(),
             browser_identity,

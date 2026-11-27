@@ -223,7 +223,7 @@ async fn execute_main_document_lifecycle_body_on_owner_local_task(
             let lifecycle_started = Instant::now();
             page_vm
                 .vm_mut()
-                .prime_document_lifecycle_processing_and_record_stylesheet_network_results();
+                .prime_document_lifecycle_and_publish_stylesheets();
             let lifecycle_elapsed_ms = lifecycle_started.elapsed().as_millis();
 
             Ok(MainDocumentLifecycleTaskRun {

@@ -88,6 +88,11 @@ impl BrowserConfig {
         self
     }
 
+    /// Sets the maximum realtime timer cadence. Zero renders when work is ready.
+    pub fn set_realtime_max_fps(&mut self, max_fps: u32) {
+        self.layout_configuration.realtime_max_fps = max_fps;
+    }
+
     pub fn scrollbars_hidden(&self) -> bool {
         self.layout_configuration.scrollbars_hidden
     }
@@ -239,8 +244,8 @@ mod tests {
         let mut config = BrowserConfig::default();
         assert_eq!(config.layout_policy(), LayoutPolicy::Mock);
 
-        config.set_layout_policy(LayoutPolicy::OnDemand);
-        assert_eq!(config.layout_policy(), LayoutPolicy::OnDemand);
+        config.set_layout_policy(LayoutPolicy::Lazy);
+        assert_eq!(config.layout_policy(), LayoutPolicy::Lazy);
 
         let config = config.with_layout_policy(LayoutPolicy::Mock);
         assert_eq!(config.layout_policy(), LayoutPolicy::Mock);

@@ -27,6 +27,18 @@ pub(super) enum PendingMediaElementEventPayload {
         track: v8::Global<v8::Object>,
         event_type: String,
     },
+    #[cfg(all(
+        feature = "media-ext",
+        any(target_os = "linux", target_os = "macos"),
+        target_pointer_width = "64"
+    ))]
+    VideoUpdate(super::video_playback::PendingVideoUpdate),
+    #[cfg(all(
+        feature = "media-ext",
+        any(target_os = "linux", target_os = "macos"),
+        target_pointer_width = "64"
+    ))]
+    MediaSource(super::media_source_playback::MediaSourceEvent),
 }
 
 pub(super) type MediaElementEventState = ExactWindowDocumentTaskLedger<
@@ -41,6 +53,12 @@ impl PageScriptHost {
         scope: &mut v8::PinScope<'_, '_>,
         media_handle: DomHandle,
     ) -> bool {
+        #[cfg(all(
+            feature = "media-ext",
+            any(target_os = "linux", target_os = "macos"),
+            target_pointer_width = "64"
+        ))]
+        self.update_video_audio_gain(media_handle);
         self.queue_media_element_event_for_node(
             scope,
             media_handle,
@@ -125,30 +143,10 @@ impl PageScriptHost {
         kind: RendererPageMediaElementEventTaskKind,
         payload: PendingMediaElementEventPayload,
     ) -> bool {
-        let target = match self.owner_dispatch_scope_for_node(node) {
-            Some(owner) => self.current_window_document_task_target_for_dispatch_scope(owner),
-            None => self
-                .node_event_execution_context(scope, node)
-                .and_then(|context| {
-                    self.window_execution_context_identity_for_access_check(context)
-                })
-                .and_then(|identity| {
-                    self.current_window_document_task_target_for_dispatch_scope(
-                        identity.dispatch_scope(),
-                    )
-                }),
-        };
-        let Some(target) = target else {
-            self.retire_media_element_event_payload(payload);
+        let Some((target, task_id)) = self.prepare_media_element_event(scope, node, kind, payload)
+        else {
             return false;
         };
-        let task_id = self
-            .media_element_events
-            .allocate_task_id(RendererPageMediaElementEventTaskId::from_raw);
-        self.media_element_events
-            .push(PendingExactWindowDocumentTask::new(
-                task_id, target, kind, payload,
-            ));
         if self
             .page_media_element_event_sender()
             .send(target, task_id, kind)
@@ -170,6 +168,43 @@ impl PageScriptHost {
             "retired media-element event after stable route closure"
         );
         false
+    }
+
+    pub(super) fn prepare_media_element_event(
+        &mut self,
+        scope: &mut v8::PinScope<'_, '_>,
+        node: DomHandle,
+        kind: RendererPageMediaElementEventTaskKind,
+        payload: PendingMediaElementEventPayload,
+    ) -> Option<(
+        WindowDocumentTaskTarget,
+        RendererPageMediaElementEventTaskId,
+    )> {
+        let target = match self.owner_dispatch_scope_for_node(node) {
+            Some(owner) => self.current_window_document_task_target_for_dispatch_scope(owner),
+            None => self
+                .node_event_execution_context(scope, node)
+                .and_then(|context| {
+                    self.window_execution_context_identity_for_access_check(context)
+                })
+                .and_then(|identity| {
+                    self.current_window_document_task_target_for_dispatch_scope(
+                        identity.dispatch_scope(),
+                    )
+                }),
+        };
+        let Some(target) = target else {
+            self.retire_media_element_event_payload(payload);
+            return None;
+        };
+        let task_id = self
+            .media_element_events
+            .allocate_task_id(RendererPageMediaElementEventTaskId::from_raw);
+        self.media_element_events
+            .push(PendingExactWindowDocumentTask::new(
+                task_id, target, kind, payload,
+            ));
+        Some((target, task_id))
     }
 
     pub(crate) fn current_pending_media_element_event_task(
@@ -257,6 +292,22 @@ impl PageScriptHost {
                     &event_type,
                 )
             }
+            #[cfg(all(
+                feature = "media-ext",
+                any(target_os = "linux", target_os = "macos"),
+                target_pointer_width = "64"
+            ))]
+            PendingMediaElementEventPayload::VideoUpdate(update) => {
+                super::video_playback::apply_video_update(scope, host_ptr, update)
+            }
+            #[cfg(all(
+                feature = "media-ext",
+                any(target_os = "linux", target_os = "macos"),
+                target_pointer_width = "64"
+            ))]
+            PendingMediaElementEventPayload::MediaSource(event) => {
+                super::media_source_playback::apply_media_source_event(scope, host_ptr, event)
+            }
         };
         dispatch_scope.restore(scope, previous_scope);
         Some(dispatched)
@@ -275,6 +326,20 @@ impl PageScriptHost {
 
     fn retire_media_element_event_payload(&mut self, payload: PendingMediaElementEventPayload) {
         match payload {
+            #[cfg(all(
+                feature = "media-ext",
+                any(target_os = "linux", target_os = "macos"),
+                target_pointer_width = "64"
+            ))]
+            PendingMediaElementEventPayload::VideoUpdate(update) => {
+                self.discard_video_update(update);
+            }
+            #[cfg(all(
+                feature = "media-ext",
+                any(target_os = "linux", target_os = "macos"),
+                target_pointer_width = "64"
+            ))]
+            PendingMediaElementEventPayload::MediaSource(_) => {}
             PendingMediaElementEventPayload::SeekCompletion {
                 media_handle,
                 seek_token,

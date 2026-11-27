@@ -1,6 +1,25 @@
 use super::*;
 
 #[test]
+fn attribute_node_mutations_use_the_native_attr_brand() {
+    let mut vm = new_storage_test_vm("https://attr-arguments.test/");
+    assert_eq!(vm.eval(r#"
+        (() => {
+            const target = document.createElement('div');
+            const attr = document.createAttribute('title');
+            for (const member of ['setAttributeNode', 'setAttributeNodeNS', 'removeAttributeNode']) {
+                for (const value of [null, Object.create(Attr.prototype), new Proxy(attr, {})]) {
+                    try { target[member](value); return false; }
+                    catch (error) { if (!(error instanceof TypeError)) return false; }
+                }
+            }
+            return target.setAttributeNode(attr) === null
+                && target.removeAttributeNode(attr) === attr;
+        })()
+    "#).unwrap(), "true");
+}
+
+#[test]
 fn customized_built_in_constructors_can_extend_specialized_html_elements() {
     let mut vm = new_storage_test_vm("https://example.com/");
 
@@ -1141,4 +1160,26 @@ fn document_fragment_insert_runs_nested_scripts_in_tree_order() {
         .expect("document fragment script order should evaluate");
 
     assert_eq!(result, "before append|first|nested|last|after append");
+}
+
+#[test]
+fn insert_adjacent_text_keeps_lone_surrogates_in_the_text_node() {
+    let mut vm = new_storage_test_vm("https://insert-adjacent-text.test/");
+    let result = vm
+        .eval(
+            r#"
+        (() => {
+            const data = 'a\uD800b\uDC00';
+            return [document, document.implementation.createHTMLDocument('')].every(doc => {
+                const host = doc.createElement('div');
+                let conversions = 0;
+                host.insertAdjacentText('beforeend', {toString() { conversions++; return data; }});
+                return conversions === 1 && host.firstChild.data === data
+                    && host.firstChild.nodeValue === data && host.firstChild.length === data.length;
+            });
+        })()
+    "#,
+        )
+        .unwrap();
+    assert_eq!(result, "true");
 }

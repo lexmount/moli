@@ -3174,3 +3174,32 @@ fn lightweight_blank_popup_documents_have_no_doctype() {
         .unwrap();
     assert_eq!(result, "true");
 }
+
+#[test]
+fn window_open_retains_lightweight_popup_position_on_named_reuse() {
+    let mut vm = new_storage_test_vm("https://example.com/");
+    vm.set_viewport_surface(Some(crate::protocol_types::ViewportSurface {
+        inner_width: 800,
+        inner_height: 600,
+        outer_width: 800,
+        outer_height: 600,
+        ..Default::default()
+    }))
+    .unwrap();
+    assert_eq!(
+        vm.eval(
+            r#"(() => {
+              const popup = open("", "geometry", "screenX=51.5,top=73");
+              const position = () => [popup.screenX, popup.screenLeft, popup.screenY, popup.screenTop];
+              const before = position();
+              const same = open("", "geometry", "left=111,top=112") === popup;
+              const after = position();
+              const opener = [window.screenX, window.screenY];
+              popup.close();
+              return JSON.stringify([before, after, same, opener]);
+            })()"#,
+        )
+        .unwrap(),
+        "[[51,51,73,73],[51,51,73,73],true,[0,0]]"
+    );
+}

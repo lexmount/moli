@@ -71,11 +71,7 @@ impl CdpConnection {
     }
 
     pub async fn set_user_agent_override_async(&mut self, user_agent: impl Into<String>) {
-        let user_agent = user_agent.into();
-        let browser_identity = moli_browser_profile::BrowserIdentityProfile::new(
-            user_agent.clone(),
-            self.base_browser_identity.accept_language(),
-        );
+        let browser_identity = self.base_browser_identity.with_user_agent(user_agent);
         if let Some(browser_context) = self.browser_context.as_mut() {
             browser_context
                 .active_page_target_mut()
@@ -92,12 +88,8 @@ impl CdpConnection {
         &mut self,
         user_agent: Option<String>,
     ) {
-        self.global_browser_identity_override = user_agent.as_ref().map(|user_agent| {
-            moli_browser_profile::BrowserIdentityProfile::new(
-                user_agent.clone(),
-                self.base_browser_identity.accept_language(),
-            )
-        });
+        self.global_browser_identity_override =
+            user_agent.map(|user_agent| self.base_browser_identity.with_user_agent(user_agent));
         self.apply_active_engine_fetch_overrides();
     }
 
@@ -169,6 +161,13 @@ impl CdpConnection {
                     .or(bc.default_http_no_proxy_override.as_deref())
             })
             .or(self.base_http_no_proxy.as_deref())
+    }
+
+    /// The Browser's startup policy applies to every target and protocol session.
+    pub fn local_file_policy(&self) -> moli_fetch::LocalFilePolicy {
+        self.standalone_navigation_engine
+            .fetch_config()
+            .local_file_policy()
     }
 
     pub(crate) fn fetch_config(&self) -> &moli_fetch::FetchConfig {

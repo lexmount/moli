@@ -7,13 +7,15 @@ mod state;
 use moli_parkable_image::ParkableImage;
 
 use crate::{
-    document_runtime::DomHandle,
+    document_runtime::{DocumentRuntime, DomHandle},
     frame_owner_model::FrameDocumentTaskOwner,
     page_task_queue::{RendererPageImageLoadEventKind, RendererPageImageLoadEventTaskId},
     types::ImageRequestKey,
 };
 
-pub(crate) use css::{CssImageResourceAdmission, CssImageResourceRequestIdentity};
+pub(crate) use css::{
+    CssImagePaintSnapshot, CssImageResourceAdmission, CssImageResourceRequestIdentity,
+};
 pub(crate) use preload::{ScannedImagePreloadAdmission, SharedScannedImagePreloadLoad};
 pub(super) use state::ImageResourceStore;
 pub(crate) use state::ReadyImageForLayout;
@@ -32,6 +34,7 @@ pub(crate) struct ImageResponseDescriptor {
     pub(crate) width: u32,
     pub(crate) height: u32,
     pub(super) decode_metadata: ImageDecodeMetadata,
+    pub(super) readable_from_request_origin: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -55,6 +58,7 @@ impl ImageResponseDescriptor {
             width: metadata.width,
             height: metadata.height,
             decode_metadata: ImageDecodeMetadata::Raster(metadata),
+            readable_from_request_origin: false,
         }
     }
 
@@ -64,7 +68,33 @@ impl ImageResponseDescriptor {
             width,
             height,
             decode_metadata: ImageDecodeMetadata::Svg(metadata),
+            readable_from_request_origin: false,
         })
+    }
+
+    pub(crate) fn with_canvas_readback(
+        mut self,
+        request_url: &url::Url,
+        response: &crate::protocol_types::NavigationResponse,
+        readable: bool,
+    ) -> Self {
+        if request_url.scheme() == "file" {
+            self.readable_from_request_origin = readable
+                && response.final_url == *request_url
+                && response.redirect_chain.is_empty();
+            return self;
+        }
+        // Canvas readback for HTTP raster images requires first-party delivery. The whole response must remain in the request's origin,
+        // including delivery through redirects or a service worker.
+        let origin = request_url.origin();
+        self.readable_from_request_origin = readable
+            && matches!(request_url.scheme(), "http" | "https")
+            && response.final_url.origin() == origin
+            && response
+                .redirect_chain
+                .iter()
+                .all(|hop| hop.from_url.origin() == origin && hop.to_url.origin() == origin);
+        self
     }
 }
 
@@ -204,14 +234,10 @@ impl super::PageScriptHost {
         self.image_resources.ready_for_layout(element)
     }
 
-    pub(crate) fn ready_css_image_for_layout(
-        &self,
-        document: DomHandle,
-        resolved_url: &str,
-    ) -> Option<ReadyImageForLayout> {
+    pub(crate) fn css_image_paint_snapshot(&self) -> CssImagePaintSnapshot {
         self.image_resources
             .css
-            .ready_for_layout(document, resolved_url)
+            .paint_snapshot(DocumentRuntime::css_image_fetch_enabled(self))
     }
 
     #[cfg(test)]
@@ -342,6 +368,14 @@ impl super::PageScriptHost {
         self.image_resources.is_ready(element)
     }
 
+    pub(crate) fn canvas_image_for_draw(
+        &self,
+        element: DomHandle,
+        origin: &moli_url::WebOrigin,
+    ) -> Option<(std::sync::Arc<moli_image::RgbaImage>, f64, bool)> {
+        self.image_resources.canvas_image_for_draw(element, origin)
+    }
+
     pub(crate) fn has_ready_image_request(&self, request_key: &ImageRequestKey) -> bool {
         self.image_resources.has_ready_request(request_key)
     }
@@ -442,7 +476,7 @@ impl super::PageScriptHost {
             if let Some(identity) = self.image_resources.identity(element).cloned() {
                 let _ = self.image_resources.fail(&identity);
             }
-            let Some(pending) = self.pending_image_load_events.get_mut(&element) else {
+            let Some(pending) = self.pending_image_load_event_mut(element) else {
                 return ImageResponseCompletion::Ignored;
             };
             pending.network_state = super::PendingImageLoadNetworkState::Failed(source);
@@ -451,7 +485,7 @@ impl super::PageScriptHost {
             };
         };
         let Some(identity) = self.image_resources.identity(element).cloned() else {
-            let Some(pending) = self.pending_image_load_events.get_mut(&element) else {
+            let Some(pending) = self.pending_image_load_event_mut(element) else {
                 return ImageResponseCompletion::Ignored;
             };
             pending.network_state = super::PendingImageLoadNetworkState::Failed(source);
@@ -475,7 +509,7 @@ impl super::PageScriptHost {
                     .optional_resource_fetch_enabled(crate::types::SubresourceResourceType::Image)
             });
         if decode_enabled && self.image_resources.complete_shared_ready(&identity) {
-            let Some(pending) = self.pending_image_load_events.get_mut(&element) else {
+            let Some(pending) = self.pending_image_load_event_mut(element) else {
                 return ImageResponseCompletion::Ignored;
             };
             pending.network_state = super::PendingImageLoadNetworkState::Ready(source);
@@ -505,7 +539,7 @@ impl super::PageScriptHost {
                     )
                 });
             if submission.is_ok() {
-                let Some(pending) = self.pending_image_load_events.get_mut(&element) else {
+                let Some(pending) = self.pending_image_load_event_mut(element) else {
                     return ImageResponseCompletion::Ignored;
                 };
                 pending.network_state = super::PendingImageLoadNetworkState::DecodeQueued(source);
@@ -524,7 +558,7 @@ impl super::PageScriptHost {
                 "image decode queue rejected the resource"
             );
             let _ = self.image_resources.fail(&identity);
-            let Some(pending) = self.pending_image_load_events.get_mut(&element) else {
+            let Some(pending) = self.pending_image_load_event_mut(element) else {
                 return ImageResponseCompletion::Ignored;
             };
             pending.network_state = super::PendingImageLoadNetworkState::Failed(source);
@@ -539,7 +573,7 @@ impl super::PageScriptHost {
         {
             return ImageResponseCompletion::Ignored;
         }
-        let Some(pending) = self.pending_image_load_events.get_mut(&element) else {
+        let Some(pending) = self.pending_image_load_event_mut(element) else {
             return ImageResponseCompletion::Ignored;
         };
         pending.network_state = super::PendingImageLoadNetworkState::Ready(source);
@@ -634,7 +668,7 @@ impl super::PageScriptHost {
                 false
             }
         };
-        let Some(pending) = self.pending_image_load_events.get_mut(&task_id.element()) else {
+        let Some(pending) = self.pending_image_load_event_mut(task_id.element()) else {
             return false;
         };
         if pending.id != task_id.sequence() {

@@ -1,14 +1,15 @@
 use std::sync::Arc;
 
-use moli_action_window::{InputModifiers, Point, ScrollAction};
-use moli_layout::{LayoutFlushReason, PaintCaptureRequest, PaintSnapshot, PaintViewport};
+use moli_input::{InputModifiers, Point, ScrollAction};
+use moli_layout::{LayoutFlushReason, PaintCaptureRequest, PaintSnapshot};
 use moli_page_types::ViewportSurface;
 use tokio::sync::{Notify, watch};
 
 use super::{
     PageVm, RendererDocumentLifecycleIdentity, RendererInputDispatchOutcome,
-    RendererVisualStateToken,
+    RendererScreencastPaintSession, RendererVisualStateToken,
 };
+use crate::layout_renderer::layout_viewport_for_surface;
 use crate::native_bridge::LayoutPublicationRequest;
 
 pub use style::values::specified::ui::CursorKind as RendererViewportCursorKind;
@@ -74,6 +75,8 @@ pub enum RendererViewportEditAction {
 pub struct RendererViewportEditReply {
     pub applied: bool,
     pub editor: Option<RendererViewportEditor>,
+    /// Last frame published on this subscription before taking the editor snapshot.
+    pub last_frame_sequence: u64,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -98,6 +101,7 @@ pub struct RendererViewportSubscription {
     pub initial_pointer_position: Option<(f64, f64)>,
     pub updates: watch::Sender<Option<RendererViewportFrame>>,
     pub cursor: watch::Sender<Option<RendererViewportCursor>>,
+    pub display_tick_requests: watch::Sender<Option<u64>>,
     pub resource_wake: Arc<Notify>,
 }
 
@@ -116,10 +120,18 @@ pub struct RendererViewportPointerInput {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RendererViewportWheelPhase {
+    /// A mouse wheel whose platform does not provide transaction phases.
+    Unspecified,
     Started,
     Moved,
     Ended,
     Cancelled,
+}
+
+impl RendererViewportWheelPhase {
+    pub fn is_terminal(self) -> bool {
+        matches!(self, Self::Ended | Self::Cancelled)
+    }
 }
 
 /// A wheel event expressed in CSS pixels for a particular viewport revision.
@@ -137,8 +149,10 @@ pub struct RendererViewportWheelInput {
 
 impl RendererViewportWheelInput {
     pub(crate) fn coalesce(&mut self, next: &Self) -> bool {
-        if self.phase != RendererViewportWheelPhase::Moved
-            || next.phase != RendererViewportWheelPhase::Moved
+        if !matches!(
+            self.phase,
+            RendererViewportWheelPhase::Moved | RendererViewportWheelPhase::Unspecified
+        ) || next.phase != self.phase
             || self.document != next.document
             || self.viewport_revision != next.viewport_revision
             || self.buttons != next.buttons
@@ -170,6 +184,7 @@ impl RendererViewportWheelInput {
 pub(super) struct ViewportFrameState {
     subscription: RendererViewportSubscription,
     painted: Option<RendererVisualStateToken>,
+    paint_session: RendererScreencastPaintSession,
     sequence: u64,
     editing: crate::context_bootstrap::viewport_edit::ViewportEditing,
     pointer: Option<(f64, f64)>,
@@ -321,25 +336,30 @@ impl PageVm {
         Ok(())
     }
 
-    fn dispatch_viewport_mouse(
-        &mut self,
-        input: RendererViewportPointerInput,
-        delta: (f64, f64),
-    ) -> anyhow::Result<Option<RendererInputDispatchOutcome>> {
-        if input.document != self.document_lifecycle.identity()
-            || !self.document_settings.document_activity.visible
-            || !self.viewport_frames.as_ref().is_some_and(|state| {
-                state.subscription.viewport_revision == input.viewport_revision
+    fn accepts_viewport_input(
+        &self,
+        document: RendererDocumentLifecycleIdentity,
+        revision: u64,
+    ) -> bool {
+        document == self.document_lifecycle.identity()
+            && self.document_settings.document_activity.visible
+            && self.viewport_frames.as_ref().is_some_and(|state| {
+                state.subscription.viewport_revision == revision
                     && state
                         .subscription
                         .updates
                         .borrow()
                         .as_ref()
-                        .is_some_and(|frame| {
-                            frame.document == input.document && frame.snapshot.is_some()
-                        })
+                        .is_some_and(|frame| frame.document == document && frame.snapshot.is_some())
             })
-        {
+    }
+
+    fn dispatch_viewport_mouse(
+        &mut self,
+        input: RendererViewportPointerInput,
+        delta: (f64, f64),
+    ) -> anyhow::Result<Option<RendererInputDispatchOutcome>> {
+        if !self.accepts_viewport_input(input.document, input.viewport_revision) {
             return Ok(None);
         }
         match self.dispatch_mouse_event_at_point_with_pointer(
@@ -371,22 +391,65 @@ impl PageVm {
         &mut self,
         input: RendererViewportWheelInput,
     ) -> anyhow::Result<()> {
-        // Wheel input observes the buttons admitted by pointer dispatch.
-        let buttons = self.viewport_pressed_buttons();
-        let result = self.dispatch_viewport_mouse(
-            RendererViewportPointerInput {
-                document: input.document,
-                viewport_revision: input.viewport_revision,
-                position: input.position,
-                event: "wheel",
-                button: -1,
-                buttons,
-                click_count: 0,
-                modifiers: input.modifiers,
-            },
-            input.delta,
-        );
+        use crate::script_vm::WheelDispatchOptions;
+        use crate::wheel_input::{WheelInput, WheelPhase, WheelSource};
+        if input.document != self.document_lifecycle.identity() {
+            return Ok(());
+        }
+        let phase = match input.phase {
+            RendererViewportWheelPhase::Ended => WheelPhase::Ended,
+            RendererViewportWheelPhase::Cancelled => WheelPhase::Cancelled,
+            RendererViewportWheelPhase::Unspecified => WheelPhase::Unspecified,
+            RendererViewportWheelPhase::Started => WheelPhase::Began,
+            RendererViewportWheelPhase::Moved => WheelPhase::Changed,
+        };
+        // Some platforms include the last movement with End. Forward that
+        // delta only with current geometry, and always finish the sequence.
+        let has_update = match phase {
+            WheelPhase::Ended => {
+                input.delta != (0., 0.)
+                    && self.wheel_position_in_bounds(input.position.0, input.position.1)
+            }
+            WheelPhase::Cancelled => false,
+            _ => true,
+        };
+        let result =
+            if has_update && self.accepts_viewport_input(input.document, input.viewport_revision) {
+                let buttons = self.viewport_pressed_buttons();
+                let result = self.vm_mut().dispatch_wheel_input(
+                    WheelInput {
+                        position: input.position,
+                        delta: input.delta,
+                        modifiers: input.modifiers,
+                        timestamp: std::time::Instant::now(),
+                        phase: if phase == WheelPhase::Ended {
+                            WheelPhase::Changed
+                        } else {
+                            phase
+                        },
+                        source: WheelSource::Platform,
+                    },
+                    WheelDispatchOptions {
+                        buttons: Some(buttons),
+                        ..Default::default()
+                    },
+                );
+                if result.is_ok() {
+                    self.update_viewport_pointer_position(Some(input.position));
+                }
+                result
+            } else {
+                Ok(RendererInputDispatchOutcome::default())
+            };
+        if input.phase.is_terminal() {
+            self.vm().wheel_input.borrow_mut().end_platform_sequence();
+        }
         if let Err(error) = &result {
+            if error.downcast_ref::<moli_layout::LayoutError>()
+                == Some(&moli_layout::LayoutError::NoLayoutSnapshot)
+            {
+                return Ok(());
+            }
             tracing::warn!(%error, "viewport wheel dispatch failed");
         }
         result.map(drop)
@@ -452,18 +515,24 @@ impl PageVm {
         &mut self,
         edit: RendererViewportEdit,
     ) -> anyhow::Result<RendererViewportEditReply> {
+        let last_frame_sequence = self
+            .viewport_frames
+            .as_ref()
+            .map_or(0, |state| state.sequence);
         if edit.document != self.document_lifecycle.identity()
             || !self.document_settings.document_activity.focused
         {
             return Ok(RendererViewportEditReply {
                 applied: false,
                 editor: None,
+                last_frame_sequence,
             });
         }
         let (Some(state), Some(vm)) = (self.viewport_frames.as_mut(), self.vm.as_mut()) else {
             return Ok(RendererViewportEditReply {
                 applied: false,
                 editor: None,
+                last_frame_sequence,
             });
         };
         let applied = vm.apply_viewport_editor_input(&mut state.editing, edit)?;
@@ -471,6 +540,7 @@ impl PageVm {
         Ok(RendererViewportEditReply {
             applied,
             editor: self.read_viewport_editor(),
+            last_frame_sequence,
         })
     }
 
@@ -502,6 +572,7 @@ impl PageVm {
         self.restore_viewport_frames(Box::new(ViewportFrameState {
             subscription,
             painted: None,
+            paint_session: RendererScreencastPaintSession::default(),
             sequence: 0,
             editing,
             pointer,
@@ -514,8 +585,38 @@ impl PageVm {
     pub(super) fn restore_viewport_frames(&mut self, state: Box<ViewportFrameState>) {
         self.vm()
             .set_viewport_resource_wake(&state.subscription.resource_wake);
+        self.vm().set_viewport_display_clock(Some((
+            state.subscription.viewport_revision,
+            state.subscription.display_tick_requests.clone(),
+        )));
         self.viewport_frames = Some(state);
         self.wake_viewport_frames();
+    }
+
+    pub(super) fn take_viewport_frames(&mut self) -> Option<Box<ViewportFrameState>> {
+        let frames = self.viewport_frames.take()?;
+        if let Some(vm) = &self.vm {
+            vm.set_viewport_display_clock(None);
+        }
+        Some(frames)
+    }
+
+    pub(super) fn accept_viewport_display_tick(
+        &self,
+        revision: u64,
+        time: std::time::Instant,
+    ) -> bool {
+        if let Some(vm) = &self.vm
+            && self.document_settings.document_activity.visible
+            && self.viewport_frames.as_ref().is_some_and(|state| {
+                state.subscription.viewport_revision == revision
+                    && !state.subscription.updates.is_closed()
+            })
+        {
+            vm.accept_viewport_display_tick(time)
+        } else {
+            false
+        }
     }
 
     pub(super) fn wake_viewport_frames(&mut self) {
@@ -536,16 +637,13 @@ impl PageVm {
             return;
         };
         if state.subscription.updates.is_closed() {
-            self.viewport_frames = None;
+            drop(self.take_viewport_frames());
             self.vm().clear_viewport_hover();
             return;
         }
         let surface = state.subscription.surface;
-        let viewport = PaintViewport::new(
-            surface.inner_width,
-            surface.inner_height,
-            surface.device_pixel_ratio as f32,
-        );
+        let viewport = layout_viewport_for_surface(surface);
+        let paint_session = state.paint_session.clone();
         let document = self.document_lifecycle.identity();
         let before = self.vm().visual_state_token(document, viewport, [255; 4]);
         let pixels_current = state.painted.as_ref() == Some(&before);
@@ -575,13 +673,21 @@ impl PageVm {
             return;
         }
 
-        let snapshot = match self.vm_mut().paint_layout_snapshot_with_capture(
-            viewport,
-            LayoutFlushReason::RenderingOpportunity,
-            PaintCaptureRequest::viewport(),
-            LayoutPublicationRequest::Screen,
-            None,
-        ) {
+        let vm = self.vm_mut();
+        let reason = LayoutFlushReason::RenderingOpportunity;
+        let capture = PaintCaptureRequest::viewport();
+        let snapshot = match vm
+            .paint_current_screen_layout(Some(&paint_session), viewport, capture, reason)
+            .and_then(|snapshot| match snapshot {
+                Some(_) => Ok(snapshot),
+                None => vm.paint_layout_snapshot_with_capture(
+                    viewport,
+                    reason,
+                    capture,
+                    LayoutPublicationRequest::Screen,
+                    None,
+                ),
+            }) {
             Ok(snapshot) => snapshot,
             Err(error) => {
                 tracing::warn!(%error, "could not produce viewport frame");

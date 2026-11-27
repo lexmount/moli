@@ -4,31 +4,38 @@ use style::Atom;
 use taffy::{Cache, DetailedLayoutInfo, Layout, Point, Size, Style};
 
 use crate::{
-    LayoutCssImageReference, LayoutElementSemantics, LayoutError, LayoutPoint, LayoutPseudo,
-    LayoutResolvedGridTracks, LayoutScrollbarAxis, LayoutScrollbarColors, LayoutScrollbarGutter,
-    LayoutScrollbarWidth, ResolvedLayoutStyle, inline::InlineFormattingContext,
-    replaced::ReplacedContext, style::LayoutOverflowMode,
+    LayoutCssImageReference, LayoutElementSemantics, LayoutError, LayoutOutputBoxId, LayoutPoint,
+    LayoutPseudo, LayoutResolvedGridTracks, LayoutScrollbarAxis, LayoutScrollbarColors,
+    LayoutScrollbarGutter, LayoutScrollbarWidth, ResolvedLayoutStyle,
+    inline::InlineFormattingContext, replaced::ReplacedContext, style::LayoutOverflowMode,
 };
 
-/// Dense identifier scoped to exactly one [`LayoutWorld`].
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub struct LayoutBoxId(u32);
+mod storage;
+use slotmap::{Key, KeyData};
+pub(crate) use storage::{BoxOrder, LayoutBoxes};
+
+slotmap::new_key_type! {
+    /// Opaque generational identity scoped to one LayoutWorld.
+    pub struct LayoutBoxId;
+}
 
 impl LayoutBoxId {
-    pub fn index(self) -> usize {
-        self.0 as usize
-    }
-
-    pub(crate) fn from_index(index: usize) -> Self {
-        Self(u32::try_from(index).expect("one layout pass exceeded the u32 box limit"))
-    }
-
     pub(crate) fn to_taffy(self) -> taffy::NodeId {
-        taffy::NodeId::from(self.index())
+        taffy::NodeId::from(self.data().as_ffi())
     }
 
     pub(crate) fn from_taffy(node: taffy::NodeId) -> Self {
-        Self::from_index(usize::from(node))
+        let bits = u64::from(node);
+        assert!(bits >> 32 != 0, "viewport nodes are not layout box handles");
+        KeyData::from_ffi(bits).into()
+    }
+
+    // Synthetic handles for standalone cache/geometry fixtures, never for
+    // production box allocation or traversal.
+    #[cfg(test)]
+    pub(crate) fn from_index(index: usize) -> Self {
+        let slot = u32::try_from(index + 1).expect("test handle exceeds u32");
+        KeyData::from_ffi((1u64 << 32) | u64::from(slot)).into()
     }
 }
 
@@ -262,7 +269,6 @@ pub struct LayoutBox<N> {
     /// Pass-local natural sizing retained once at box construction.
     pub(crate) replaced_context: Option<ReplacedContext>,
     pub(crate) replaced_image: Option<crate::LayoutImageResource>,
-    pub(crate) css_images: crate::source::LayoutCssImageResources,
     /// Suppresses ordinary per-box border paint for parts participating in a
     /// collapsed table. Their authored borders have already entered the table
     /// owner's conflict-resolution grid.
@@ -338,6 +344,10 @@ impl Default for ViewportScrollPolicy {
 }
 
 impl ViewportScrollPolicy {
+    pub(crate) const fn disables_user_scrolling(self) -> bool {
+        !self.embedder_allows_user_scroll
+    }
+
     pub(crate) const fn new(
         defining_box: ViewportDefiningBox,
         effective_overflow: [LayoutOverflowMode; 2],
@@ -656,20 +666,20 @@ impl<N> LayoutBox<N> {
     }
 }
 
-/// Entire short-lived sidecar used for one construction/layout demand.
+/// Owned working box tree and its layout inputs and results.
 #[derive(Debug)]
 pub struct LayoutWorld<N>
 where
     N: Copy + Debug + Eq + Hash,
 {
-    pub(crate) boxes: Vec<LayoutBox<N>>,
-    /// Pass-local numeric caches, created only for boxes with actual stores.
+    pub(crate) boxes: LayoutBoxes<N>,
+    /// Numeric caches, created only for boxes with actual stores.
     /// Flattened text boxes need no empty Taffy measurement arrays.
     pub(crate) box_caches: Vec<Cache>,
     /// Winning collapsed-table edges, computed and consumed in this pass.
     /// Empty slots are not embedded in boxes that do not own a table.
     pub(crate) collapsed_table_borders: HashMap<LayoutBoxId, crate::table::CollapsedTableBorders>,
-    /// Row and column structure stays valid throughout one numeric pass.
+    /// Row and column structure shares the lifetime of the numeric topology.
     pub(crate) table_structures: HashMap<LayoutBoxId, std::sync::Arc<crate::table::TableStructure>>,
     /// Used Grid tracks for actual owners. Their canonical result is frozen
     /// for CSSOM before this pass-local map is released.
@@ -686,8 +696,11 @@ where
     pub(crate) environment: crate::LayoutEnvironment,
     pub(crate) viewport_scroll_policy: ViewportScrollPolicy,
     pub(crate) viewport_layout: ViewportLayoutState,
+    pub(crate) numeric_tree: Option<crate::taffy_tree::NumericTree>,
     pub(crate) fixed_viewport_layout: Option<Box<ViewportLayoutState>>,
     pub(crate) css_image_references: Vec<LayoutCssImageReference<N>>,
+    pub(crate) inline_numeric_reuse: Option<Box<crate::inline::InlineNumericReuse>>,
+    pub(crate) retained_inline_fonts: Option<Box<crate::text::LayoutFontInputs>>,
     /// Full numeric measurement retains baselines without publishing layouts.
     pub(crate) measure_baselines: bool,
     /// The active table cell's used height need not be a percentage guarantee.
@@ -695,6 +708,13 @@ where
     numeric_layout_tracking: bool,
     numeric_layout_touched: Vec<LayoutBoxId>,
     numeric_layout_touched_marks: Vec<bool>,
+    retained_cache_reads: Option<Box<RetainedCacheReads>>,
+}
+
+#[derive(Debug)]
+struct RetainedCacheReads {
+    pending_slots: Vec<bool>,
+    final_hits: usize,
 }
 
 impl<N> LayoutWorld<N>
@@ -702,8 +722,10 @@ where
     N: Copy + Debug + Eq + Hash,
 {
     pub(crate) fn new(root: LayoutBox<N>, root_is_document_element: bool) -> Self {
+        let mut boxes = LayoutBoxes::default();
+        let root = boxes.insert(root);
         Self {
-            boxes: vec![root],
+            boxes,
             box_caches: Vec::new(),
             collapsed_table_borders: HashMap::new(),
             table_structures: HashMap::new(),
@@ -711,24 +733,34 @@ where
             native_grid_details: HashMap::new(),
             source_mapping: HashMap::new(),
             display_contents_mapping: HashMap::new(),
-            root: LayoutBoxId::from_index(0),
+            root,
             root_is_document_element,
             quirks_mode: style::context::QuirksMode::NoQuirks,
             environment: crate::LayoutEnvironment::default(),
             viewport_scroll_policy: ViewportScrollPolicy::default(),
             viewport_layout: ViewportLayoutState::default(),
+            numeric_tree: None,
             fixed_viewport_layout: None,
             css_image_references: Vec::new(),
+            inline_numeric_reuse: None,
+            retained_inline_fonts: None,
             measure_baselines: false,
             table_cell_percentage_height: None,
             numeric_layout_tracking: false,
             numeric_layout_touched: Vec::new(),
             numeric_layout_touched_marks: vec![false],
+            retained_cache_reads: None,
         }
     }
 
     pub(crate) fn clear_layout_caches(&mut self, id: LayoutBoxId) {
-        let layout_box = &mut self.boxes[id.index()];
+        if let Some(tree) = &mut self.numeric_tree
+            && tree.overflow.is_some()
+        {
+            tree.overflow_dirty.insert(id);
+        }
+        self.note_retained_cache_access(id, false);
+        let layout_box = &mut self.boxes[id];
         if let Some(slot) = layout_box.cache_slot {
             self.box_caches[(slot.get() - 1) as usize].clear();
         }
@@ -737,13 +769,140 @@ where
         }
     }
 
+    pub(crate) fn clear_all_layout_caches(&mut self) {
+        self.retained_cache_reads = None;
+        for cache in &mut self.box_caches {
+            cache.clear();
+        }
+        for layout_box in self.boxes.values_mut() {
+            if let Some(cache) = &mut layout_box.table_measure_cache {
+                cache.clear();
+            }
+        }
+        if let Some(tree) = &mut self.numeric_tree {
+            tree.overflow = None;
+            tree.overflow_dirty.clear();
+        }
+    }
+
+    pub(crate) fn track_retained_cache_reads(&mut self) {
+        self.retained_cache_reads = Some(Box::new(RetainedCacheReads {
+            pending_slots: vec![true; self.box_caches.len()],
+            final_hits: 0,
+        }));
+    }
+
+    pub(crate) fn note_retained_cache_access(&mut self, id: LayoutBoxId, hit: bool) {
+        if let Some(reads) = &mut self.retained_cache_reads
+            && let Some(slot) = self
+                .boxes
+                .get(id)
+                .and_then(|layout_box| layout_box.cache_slot)
+            && let Some(pending) = reads.pending_slots.get_mut((slot.get() - 1) as usize)
+            && std::mem::take(pending)
+        {
+            reads.final_hits += usize::from(hit);
+        }
+    }
+
+    pub(crate) fn finish_retained_cache_reads(&mut self) -> usize {
+        self.retained_cache_reads
+            .take()
+            .map_or(0, |reads| reads.final_hits)
+    }
+
+    pub(crate) fn release_numeric_cache_storage(&mut self) {
+        self.inline_numeric_reuse = None;
+        self.numeric_tree = None;
+        self.retained_inline_fonts = None;
+        self.box_caches = Vec::new();
+        for layout_box in self.boxes.values_mut() {
+            layout_box.cache_slot = None;
+        }
+    }
+
+    pub(crate) fn release_paint_storage(&mut self) {
+        self.collapsed_table_borders = HashMap::new();
+        if let Some(numeric) = &mut self.inline_numeric_reuse {
+            numeric.retain_owners(|id| {
+                self.boxes[id]
+                    .inline_layout
+                    .as_ref()
+                    .is_some_and(|context| context.laid_out.is_some())
+            });
+        }
+        for (id, layout_box) in self.boxes.keyed_mut() {
+            if self.retained_inline_fonts.is_none() {
+                layout_box.inline_layout = None;
+            } else if let Some(context) = &mut layout_box.inline_layout {
+                let preserve_numeric = self
+                    .inline_numeric_reuse
+                    .as_ref()
+                    .is_some_and(|numeric| numeric.contains(id));
+                context.prepare_for_retention(preserve_numeric);
+            }
+            layout_box.table_measure_cache = None;
+            layout_box.replaced_image = None;
+        }
+    }
+
+    pub(crate) fn replace_retained_leaf(&mut self, id: LayoutBoxId, source: N) {
+        let replacement = self.boxes.pop().expect("the new leaf was appended");
+        self.numeric_layout_touched_marks.pop();
+        self.replace_retained_box(id, replacement);
+        self.source_mapping.insert(source, id);
+    }
+
+    pub(crate) fn replace_retained_box(&mut self, id: LayoutBoxId, mut replacement: LayoutBox<N>) {
+        let previous = &mut self.boxes[id];
+        if previous.kind == replacement.kind
+            && previous.inline_layout.is_some()
+            && previous.style.same_inline_preparation(&replacement.style)
+        {
+            // New sizing inputs invalidate measurements and line placement.
+            // The shaped runs remain valid when the inline inputs match and
+            // construction retains the children.
+            replacement.inline_layout = previous.inline_layout.take();
+        }
+        self.invalidate_retained_inline(id);
+        self.clear_layout_caches(id);
+        let is_document_element = self.is_document_element(id);
+        let old = &mut self.boxes[id];
+        replacement.structural_parent = old.structural_parent;
+        replacement.parent = old.parent;
+        replacement.cache_slot = old.cache_slot;
+        replacement.children = std::mem::take(&mut old.children);
+        replacement.inline_formatting_context = old.inline_formatting_context;
+        if self.numeric_tree.is_some() {
+            replacement.inline_context_owner = old.inline_context_owner;
+            replacement.inline_flattened = old.inline_flattened;
+            if crate::taffy_tree::same_numeric_box_role(old, &replacement, is_document_element) {
+                replacement.layout_parent = old.layout_parent;
+                replacement.layout_children = std::mem::take(&mut old.layout_children);
+                replacement.positioned_containing_block = old.positioned_containing_block;
+            } else {
+                self.numeric_tree = None;
+            }
+        }
+        self.boxes[id] = replacement;
+    }
+
+    /// Retained paragraphs borrow their identity from the current box graph.
+    /// Retire their numeric keys before replacing styles with borrowed lengths.
+    pub(crate) fn invalidate_retained_inline(&mut self, id: LayoutBoxId) {
+        if let Some(numeric) = &mut self.inline_numeric_reuse {
+            numeric.discard_owner(id);
+        }
+        self.boxes[id].inline_layout = None;
+    }
+
     pub(crate) fn numeric_cache(&mut self, id: LayoutBoxId) -> Option<&mut Cache> {
-        let slot = self.boxes.get(id.index())?.cache_slot?;
+        let slot = self.boxes.get(id)?.cache_slot?;
         self.box_caches.get_mut((slot.get() - 1) as usize)
     }
 
     pub(crate) fn numeric_cache_mut(&mut self, id: LayoutBoxId) -> &mut Cache {
-        let slot = if let Some(slot) = self.boxes[id.index()].cache_slot {
+        let slot = if let Some(slot) = self.boxes[id].cache_slot {
             slot
         } else {
             if self.box_caches.is_empty() {
@@ -757,7 +916,7 @@ where
                 .and_then(NonZeroU32::new)
                 .expect("one layout pass exceeded the u32 cache limit");
             self.box_caches.push(Cache::new());
-            self.boxes[id.index()].cache_slot = Some(slot);
+            self.boxes[id].cache_slot = Some(slot);
             slot
         };
         &mut self.box_caches[(slot.get() - 1) as usize]
@@ -771,6 +930,10 @@ where
         self.viewport_scroll_policy.defining_body() == Some(id)
     }
 
+    pub(crate) fn output_id(&self, id: LayoutBoxId) -> crate::LayoutOutputBoxId {
+        crate::LayoutOutputBoxId::from_index(self.boxes.index_of(id))
+    }
+
     pub fn len(&self) -> usize {
         self.boxes.len()
     }
@@ -780,7 +943,7 @@ where
     }
 
     pub fn box_by_id(&self, id: LayoutBoxId) -> Option<&LayoutBox<N>> {
-        self.boxes.get(id.index())
+        self.boxes.get(id)
     }
 
     pub fn source_box(&self, source: N) -> Option<LayoutBoxId> {
@@ -788,24 +951,24 @@ where
     }
 
     pub(crate) fn box_by_id_mut(&mut self, id: LayoutBoxId) -> Option<&mut LayoutBox<N>> {
-        self.boxes.get_mut(id.index())
+        self.boxes.get_mut(id)
     }
 
     pub(crate) fn viewport_taffy_node(&self) -> taffy::NodeId {
-        taffy::NodeId::from(self.boxes.len())
+        taffy::NodeId::from(0u64)
     }
 
     pub(crate) fn fixed_viewport_taffy_node(&self) -> taffy::NodeId {
-        taffy::NodeId::from(self.boxes.len() + 1)
+        taffy::NodeId::from(1u64)
     }
 
     pub(crate) fn viewport_layout_for_node(
         &self,
         node: taffy::NodeId,
     ) -> Option<&ViewportLayoutState> {
-        match usize::from(node).checked_sub(self.boxes.len()) {
-            Some(0) => Some(&self.viewport_layout),
-            Some(1) => self.fixed_viewport_layout.as_deref(),
+        match u64::from(node) {
+            0 => Some(&self.viewport_layout),
+            1 => self.fixed_viewport_layout.as_deref(),
             _ => None,
         }
     }
@@ -814,9 +977,9 @@ where
         &mut self,
         node: taffy::NodeId,
     ) -> Option<&mut ViewportLayoutState> {
-        match usize::from(node).checked_sub(self.boxes.len()) {
-            Some(0) => Some(&mut self.viewport_layout),
-            Some(1) => self.fixed_viewport_layout.as_deref_mut(),
+        match u64::from(node) {
+            0 => Some(&mut self.viewport_layout),
+            1 => self.fixed_viewport_layout.as_deref_mut(),
             _ => None,
         }
     }
@@ -835,41 +998,39 @@ where
         let count = self.boxes.len();
         let mut first_child = vec![None; count];
         let mut next_sibling = vec![None; count];
-        let mut roots = Vec::new();
-        for index in (0..count).rev() {
-            let id = LayoutBoxId::from_index(index);
-            if let Some(parent) = self.boxes[index].layout_parent {
+        let mut stack = Vec::new();
+        for (index, layout_box) in self.boxes.ordered().enumerate().rev() {
+            let id = LayoutOutputBoxId::from_index(index);
+            if let Some(parent) = layout_box.layout_parent {
+                let parent_index = self.boxes.index_of(parent);
                 assert!(
-                    parent.index() < count,
+                    parent_index < count,
                     "numeric layout parent must belong to this world"
                 );
-                next_sibling[index] = first_child[parent.index()];
-                first_child[parent.index()] = Some(id);
+                next_sibling[index] = first_child[parent_index];
+                first_child[parent_index] = Some(id);
             } else {
-                roots.push(id);
+                stack.push((id, LayoutPoint::ZERO));
             }
         }
 
         let mut origins = vec![LayoutPoint::ZERO; count];
         let mut visited = vec![false; count];
-        let mut stack = roots
-            .into_iter()
-            .map(|root| (root, LayoutPoint::ZERO))
-            .collect::<Vec<_>>();
         let mut resolved = 0usize;
         while let Some((id, parent_origin)) = stack.pop() {
+            let index = id.index();
             assert!(
-                !visited[id.index()],
+                !visited[index],
                 "numeric layout parents must form an acyclic forest"
             );
-            visited[id.index()] = true;
+            visited[index] = true;
             resolved = resolved.saturating_add(1);
-            let location = self.boxes[id.index()].final_layout.location;
+            let location = self.boxes[index].final_layout.location;
             let origin =
                 LayoutPoint::new(parent_origin.x + location.x, parent_origin.y + location.y);
-            origins[id.index()] = origin;
+            origins[index] = origin;
 
-            let mut child = first_child[id.index()];
+            let mut child = first_child[index];
             while let Some(child_id) = child {
                 stack.push((child_id, origin));
                 child = next_sibling[child_id.index()];
@@ -894,10 +1055,12 @@ where
     }
 
     pub(crate) fn record_numeric_layout_touch(&mut self, id: LayoutBoxId) {
-        if !self.numeric_layout_tracking || self.numeric_layout_touched_marks[id.index()] {
+        if !self.numeric_layout_tracking
+            || self.numeric_layout_touched_marks[self.boxes.index_of(id)]
+        {
             return;
         }
-        self.numeric_layout_touched_marks[id.index()] = true;
+        self.numeric_layout_touched_marks[self.boxes.index_of(id)] = true;
         self.numeric_layout_touched.push(id);
     }
 
@@ -909,20 +1072,108 @@ where
         self.numeric_layout_tracking = false;
         let touched = std::mem::take(&mut self.numeric_layout_touched);
         for id in touched.iter().copied() {
-            self.numeric_layout_touched_marks[id.index()] = false;
+            self.numeric_layout_touched_marks[self.boxes.index_of(id)] = false;
         }
         touched
     }
 
     pub(crate) fn allocate(&mut self, layout_box: LayoutBox<N>) -> LayoutBoxId {
-        let id = LayoutBoxId::from_index(self.boxes.len());
-        self.boxes.push(layout_box);
+        let id = self.boxes.insert(layout_box);
         self.numeric_layout_touched_marks.push(false);
         id
     }
 
     pub(crate) fn map_source(&mut self, source: N, id: LayoutBoxId) {
         self.source_mapping.entry(source).or_insert(id);
+    }
+
+    pub(crate) fn preorder(&self) -> Result<Vec<LayoutBoxId>, LayoutError> {
+        let mut order = Vec::with_capacity(self.boxes.len());
+        let mut pending = vec![(self.root, 1)];
+        while let Some((id, depth)) = pending.pop() {
+            crate::error::check_layout_depth(depth)?;
+            order.push(id);
+            pending.extend(
+                self.boxes[id]
+                    .children
+                    .iter()
+                    .rev()
+                    .map(|&child| (child, depth + 1)),
+            );
+        }
+        Ok(order)
+    }
+
+    /// Keeps the existing box allocation and restores dense source order.
+    /// Changed IDs or discarded numeric placeholders retire the old topology.
+    pub(crate) fn compact_for_reuse(&mut self, order: Vec<LayoutBoxId>) {
+        let previous_len = self.boxes.len();
+        if self.boxes.keys().eq(order.iter().copied()) {
+            return;
+        }
+        let started = moli_trace::cpu_profile_enabled().then(std::time::Instant::now);
+        // Per-order numeric sidecars belong to the old topology. Stable IFC
+        // handles and their independently validated measurements survive.
+        self.numeric_tree = None;
+        self.boxes.retain_in_order(order);
+        if self.boxes.len() != previous_len {
+            let live = self.boxes.order_snapshot();
+            for layout_box in self.boxes.values_mut() {
+                layout_box.structural_parent =
+                    layout_box.structural_parent.filter(|id| live.contains(*id));
+                layout_box.parent = layout_box.parent.filter(|id| live.contains(*id));
+                layout_box.children.retain(|id| live.contains(*id));
+                if layout_box
+                    .inline_layout
+                    .as_ref()
+                    .is_some_and(|context| !context.references_only(|id| live.contains(id)))
+                {
+                    layout_box.inline_layout = None;
+                }
+            }
+            // Both numeric owner maps can use the outcomes of the IFC check
+            // above. Reordering living boxes cannot retire a reference.
+            if let Some(numeric) = &mut self.inline_numeric_reuse {
+                numeric.retain_owners(|id| {
+                    self.boxes
+                        .get(id)
+                        .is_some_and(|b| b.inline_layout.is_some())
+                });
+            }
+            self.source_mapping.retain(|_, id| live.contains(*id));
+            self.display_contents_mapping.retain(|_, ids| {
+                ids.retain(|id| live.contains(*id));
+                !ids.is_empty()
+            });
+            self.compact_cache_slots();
+        }
+        self.numeric_layout_touched_marks.clear();
+        self.numeric_layout_touched_marks
+            .resize(self.boxes.len(), false);
+        if let Some(started) = started {
+            tracing::info!(target: "moli_cpu_profile", stage="layout_box_retention",
+                total_us=started.elapsed().as_micros(), previous_len, live_count=self.boxes.len());
+        }
+    }
+
+    fn compact_cache_slots(&mut self) {
+        let mut owners = vec![None; self.box_caches.len()];
+        for (id, layout_box) in self.boxes.keyed() {
+            if let Some(slot) = layout_box.cache_slot {
+                owners[(slot.get() - 1) as usize] = Some(id);
+            }
+        }
+        let mut next = 0;
+        for (old, owner) in owners.into_iter().enumerate() {
+            if let Some(owner) = owner {
+                if old != next {
+                    self.box_caches.swap(old, next);
+                    self.boxes[owner].cache_slot = NonZeroU32::new((next + 1) as u32);
+                }
+                next += 1;
+            }
+        }
+        self.box_caches.truncate(next);
     }
 
     pub(crate) fn map_display_contents_source(&mut self, source: N, child_boxes: &[LayoutBoxId]) {
@@ -942,15 +1193,11 @@ where
         children: Vec<LayoutBoxId>,
     ) -> Result<(), LayoutError> {
         if self.box_by_id(parent).is_none() {
-            return Err(LayoutError::InvalidBoxReference {
-                index: parent.index(),
-            });
+            return Err(LayoutError::InvalidBoxHandle { id: parent });
         }
         for &child in &children {
             let Some(child_box) = self.box_by_id_mut(child) else {
-                return Err(LayoutError::InvalidBoxReference {
-                    index: child.index(),
-                });
+                return Err(LayoutError::InvalidBoxHandle { id: child });
             };
             // Raw source ownership is recorded before normalization. Boxes
             // synthesized by normalization have no earlier owner, so their
@@ -958,7 +1205,7 @@ where
             child_box.structural_parent.get_or_insert(parent);
             child_box.parent = Some(parent);
         }
-        self.boxes[parent.index()].children = children;
+        self.boxes[parent].children = children;
         Ok(())
     }
 
@@ -970,9 +1217,7 @@ where
         child: LayoutBoxId,
     ) -> Result<(), LayoutError> {
         let Some(parent_box) = self.box_by_id(parent) else {
-            return Err(LayoutError::InvalidBoxReference {
-                index: parent.index(),
-            });
+            return Err(LayoutError::InvalidBoxHandle { id: parent });
         };
         let mut children = parent_box.children.clone();
         children.push(child);
@@ -991,15 +1236,11 @@ where
         children: &[LayoutBoxId],
     ) -> Result<(), LayoutError> {
         if self.box_by_id(parent).is_none() {
-            return Err(LayoutError::InvalidBoxReference {
-                index: parent.index(),
-            });
+            return Err(LayoutError::InvalidBoxHandle { id: parent });
         }
         for child in children {
             let Some(child_box) = self.box_by_id_mut(*child) else {
-                return Err(LayoutError::InvalidBoxReference {
-                    index: child.index(),
-                });
+                return Err(LayoutError::InvalidBoxHandle { id: *child });
             };
             child_box.structural_parent.get_or_insert(parent);
         }
@@ -1007,89 +1248,46 @@ where
     }
 
     pub(crate) fn compact_reachable(&mut self) {
-        let mut reachable = vec![false; self.boxes.len()];
+        let mut reachable = slotmap::SecondaryMap::new();
         let mut stack = vec![self.root];
         while let Some(id) = stack.pop() {
-            if std::mem::replace(&mut reachable[id.index()], true) {
+            if reachable.insert(id, ()).is_some() {
                 continue;
             }
-            stack.extend(self.boxes[id.index()].children.iter().copied());
+            stack.extend(self.boxes[id].children.iter().copied());
         }
-
-        // Most trees do not discard any construction boxes. Their IDs already
-        // form the final dense mapping; keep the pass-local allocation instead
-        // of moving every box and rebuilding every child vector unchanged.
-        if reachable.iter().all(|is_reachable| *is_reachable) {
-            self.display_contents_mapping
-                .retain(|_, ids| !ids.is_empty());
-            return;
-        }
-
-        let mut remap = vec![None; self.boxes.len()];
-        let mut next_index = 0;
-        for (index, is_reachable) in reachable.iter().copied().enumerate() {
-            if is_reachable {
-                remap[index] = Some(LayoutBoxId::from_index(next_index));
-                next_index += 1;
-            }
-        }
-
-        let mut compacted = Vec::with_capacity(next_index);
-        for (index, mut layout_box) in self.boxes.drain(..).enumerate() {
-            if !reachable[index] {
-                continue;
-            }
-            layout_box.structural_parent = layout_box
-                .structural_parent
-                .and_then(|parent| remap[parent.index()]);
-            layout_box.parent = layout_box.parent.and_then(|parent| remap[parent.index()]);
-            layout_box.children = layout_box
-                .children
-                .into_iter()
-                .filter_map(|child| remap[child.index()])
-                .collect();
-            compacted.push(layout_box);
-        }
-        self.boxes = compacted;
-        self.root = remap[self.root.index()].expect("the layout root is always reachable");
-        self.source_mapping.retain(|_, id| {
-            let Some(remapped) = remap[id.index()] else {
-                return false;
-            };
-            *id = remapped;
-            true
-        });
-        self.display_contents_mapping.retain(|_, ids| {
-            *ids = ids.iter().filter_map(|id| remap[id.index()]).collect();
-            !ids.is_empty()
-        });
+        let order = self
+            .boxes
+            .keys()
+            .filter(|id| reachable.contains_key(*id))
+            .collect();
+        self.display_contents_mapping
+            .retain(|_, ids| !ids.is_empty());
+        self.compact_for_reuse(order);
     }
 
     /// Validates graph ownership invariants without relying on allocator IDs.
     pub fn validate_invariants(&self) -> Result<(), LayoutError> {
         let mut reachable = vec![false; self.boxes.len()];
-        let mut stack = vec![self.root];
-        while let Some(id) = stack.pop() {
+        let mut stack = vec![(self.root, 1)];
+        while let Some((id, depth)) = stack.pop() {
+            crate::error::check_layout_depth(depth)?;
             let Some(layout_box) = self.box_by_id(id) else {
-                return Err(LayoutError::InvalidBoxReference { index: id.index() });
+                return Err(LayoutError::InvalidBoxHandle { id });
             };
-            if std::mem::replace(&mut reachable[id.index()], true) {
+            if std::mem::replace(&mut reachable[self.boxes.index_of(id)], true) {
                 return Err(LayoutError::SourceCycle {
                     source_label: layout_box.source_label.clone(),
                 });
             }
             for child in layout_box.children.iter().rev().copied() {
                 let Some(child_box) = self.box_by_id(child) else {
-                    return Err(LayoutError::InvalidBoxReference {
-                        index: child.index(),
-                    });
+                    return Err(LayoutError::InvalidBoxHandle { id: child });
                 };
                 if child_box.parent != Some(id) {
-                    return Err(LayoutError::InvalidBoxReference {
-                        index: child.index(),
-                    });
+                    return Err(LayoutError::InvalidBoxHandle { id: child });
                 }
-                stack.push(child);
+                stack.push((child, depth + 1));
             }
         }
         if let Some(index) = reachable.iter().position(|reachable| !reachable) {
@@ -1097,9 +1295,7 @@ where
         }
         if let Some(body) = self.viewport_scroll_policy.defining_body() {
             let Some(body_box) = self.box_by_id(body) else {
-                return Err(LayoutError::InvalidBoxReference {
-                    index: body.index(),
-                });
+                return Err(LayoutError::InvalidBoxHandle { id: body });
             };
             if body == self.root
                 || !body_box
@@ -1112,8 +1308,7 @@ where
                 ));
             }
         }
-        for (index, layout_box) in self.boxes.iter().enumerate() {
-            let id = LayoutBoxId::from_index(index);
+        for (id, layout_box) in self.boxes.keyed() {
             self.validate_box_provenance(id, layout_box)?;
             self.validate_table_parentage(id, layout_box)?;
         }
@@ -1127,17 +1322,15 @@ where
     ) -> Result<(), LayoutError> {
         if id == self.root {
             if layout_box.structural_parent.is_some() {
-                return Err(LayoutError::InvalidBoxReference { index: id.index() });
+                return Err(LayoutError::InvalidBoxHandle { id });
             }
         } else if layout_box.structural_parent.is_none() {
-            return Err(LayoutError::InvalidBoxReference { index: id.index() });
+            return Err(LayoutError::InvalidBoxHandle { id });
         }
         if let Some(parent) = layout_box.structural_parent
             && (parent == id || self.box_by_id(parent).is_none())
         {
-            return Err(LayoutError::InvalidBoxReference {
-                index: parent.index(),
-            });
+            return Err(LayoutError::InvalidBoxHandle { id: parent });
         }
         if let Some(source) = layout_box.source {
             if layout_box.owner.is_some()
@@ -1299,7 +1492,6 @@ where
             scroll_offset: LayoutPoint::ZERO,
             replaced_context: None,
             replaced_image: None,
-            css_images: crate::source::LayoutCssImageResources::default(),
             collapsed_table_border_part: false,
             inline_formatting_context: false,
             cache_slot: None,

@@ -96,6 +96,8 @@ impl PageScriptHost {
             url,
         )?;
         self.initial_empty_main_document = false;
+        #[cfg(feature = "devtools")]
+        self.retire_wheel_scroll_targets(WindowDocumentOwner::Frame(transition.retired_owner()));
         self.rebind_runtime_binding_document_owner(
             transition.retired_owner(),
             transition.current_owner(),
@@ -373,8 +375,9 @@ impl PageScriptHost {
             document_runtime: runtime as *mut DocumentRuntime,
             layout_policy: moli_page_types::LayoutPolicy::default(),
             scrollbars_hidden: false,
-            document_layout_state: RefCell::new(super::layout_state::DocumentLayoutState::default()),
+            document_layout_state: Rc::default(),
             realtime_layout_state: None,
+            media_queries: RefCell::default(),
             layout_pass_active: Cell::new(false),
             completed_layout_pass_count: Cell::new(0),
             completed_layout_pass_time: Cell::new(std::time::Duration::ZERO),
@@ -485,9 +488,21 @@ impl PageScriptHost {
                 super::file_entry_file_callbacks::FileEntryFileCallbackState::default(),
             user_interaction_tasks:
                 super::user_interaction_tasks::UserInteractionTaskState::default(),
-            pending_image_load_events: HashMap::new(),
+            image_loaders: HashMap::new(),
             next_image_load_event_id: 1,
             pending_media_load_sequences: HashMap::new(),
+            #[cfg(all(
+                feature = "media-ext",
+                any(target_os = "linux", target_os = "macos"),
+                target_pointer_width = "64"
+            ))]
+            video_playbacks: HashMap::new(),
+            #[cfg(all(
+                feature = "media-ext",
+                any(target_os = "linux", target_os = "macos"),
+                target_pointer_width = "64"
+            ))]
+            media_source_urls: HashMap::new(),
             next_media_load_sequence_id: 1,
             pending_text_track_load_sequences: HashMap::new(),
             next_text_track_load_sequence_id: 1,
@@ -495,6 +510,8 @@ impl PageScriptHost {
             pointers: HashMap::new(),
             #[cfg(feature = "devtools")]
             mouse_input: mouse_click::MouseInputState::default(),
+            #[cfg(feature = "devtools")]
+            wheel_scroll_targets: RefCell::default(),
             lazy_media_load_candidates: HashSet::new(),
             canvas_resources: super::canvas_resources::CanvasResourceStore::new(
                 visual_resource_generation.clone(),
@@ -531,7 +548,6 @@ impl PageScriptHost {
             style_engine: MoliStyleEngine::new_with_author_styles_disabled(
                 runtime.author_styles_disabled(),
             ),
-            inline_style_declarations: HashMap::new(),
             css_module_texts_by_url: HashMap::new(),
             css_module_failed_urls: HashSet::new(),
             popover_focus_restore_targets: HashMap::new(),
@@ -764,11 +780,13 @@ impl PageScriptHost {
                 tracing::debug!("dropped rebound meta refresh because its Page source closed");
             }
         }
+        #[cfg(feature = "devtools")]
+        self.retire_wheel_scroll_targets(WindowDocumentOwner::Frame(transition.retired_owner()));
         let runtime_binding_transition = self.rebind_runtime_binding_document_owner(
             transition.retired_owner(),
             transition.current_owner(),
         );
-        self.rebind_realtime_document_after_open(
+        self.rebind_rendering_document_after_open(
             transition.retired_owner(),
             transition.current_owner(),
         );
@@ -792,7 +810,6 @@ impl PageScriptHost {
             dropped_image_decode_context_count = image_decode_retirement.dropped_context_count(),
             "applied main document replacement owner transaction"
         );
-        self.inline_style_declarations.clear();
         self.style_engine
             .clear_for_document_replacement(document_handle);
         if self.layout_policy().is_realtime() {
@@ -1305,11 +1322,6 @@ impl PageScriptHost {
         self.compact_scoped_custom_element_registry_wrappers();
     }
 
-    #[cfg(test)]
-    pub(crate) fn has_pending_image_load_event_for_test(&self, handle: DomHandle) -> bool {
-        self.pending_image_load_events.contains_key(&handle)
-    }
-
     fn queue_page_module_reaction(&self, event: RendererPageModuleReactionEvent) {
         if self.page_module_reaction_sender().send(event).is_err() {
             tracing::debug!("discarded module reaction after its stable Page route closed");
@@ -1463,6 +1475,23 @@ impl PageScriptHost {
                     .and_then(moli_dom::native::Node::data_value)
                     .map(utf16_units)
             })
+    }
+
+    pub(crate) fn create_text_node_with_utf16(
+        &mut self,
+        document: Option<DomHandle>,
+        units: Vec<u16>,
+    ) -> DomHandle {
+        let value = string_from_utf16_units_lossy(&units);
+        let handle = match document {
+            Some(document) => self.create_text_node_for_document(document, &value),
+            None => self.create_text_node(&value),
+        };
+        if utf16_units_contain_unpaired_surrogate(&units) {
+            self.character_data_utf16_overrides
+                .insert(handle, U16String::from_vec(units));
+        }
+        handle
     }
 
     pub(crate) fn set_character_data_utf16_units(
@@ -1712,58 +1741,6 @@ impl PageScriptHost {
         {
             self.pending_text_control_change_commit = None;
         }
-    }
-
-    pub(crate) fn pending_image_load_event(
-        &self,
-        handle: DomHandle,
-    ) -> Option<super::PendingImageLoadEvent> {
-        self.pending_image_load_events.get(&handle).copied()
-    }
-
-    pub(crate) fn next_image_load_event_id(&mut self) -> super::ImageLoadEventId {
-        let id = super::ImageLoadEventId::new(self.next_image_load_event_id);
-        self.next_image_load_event_id = self
-            .next_image_load_event_id
-            .checked_add(1)
-            .expect("image load-event id space exhausted");
-        id
-    }
-
-    pub(crate) fn insert_pending_image_load_event(
-        &mut self,
-        handle: DomHandle,
-        pending: super::PendingImageLoadEvent,
-    ) -> bool {
-        let std::collections::hash_map::Entry::Vacant(entry) =
-            self.pending_image_load_events.entry(handle)
-        else {
-            return false;
-        };
-        entry.insert(pending);
-        true
-    }
-
-    pub(crate) fn take_pending_image_load_event(
-        &mut self,
-        handle: DomHandle,
-    ) -> Option<super::PendingImageLoadEvent> {
-        self.pending_image_load_events.remove(&handle)
-    }
-
-    pub(crate) fn take_pending_image_load_event_if_matches(
-        &mut self,
-        handle: DomHandle,
-        id: super::ImageLoadEventId,
-    ) -> Option<super::PendingImageLoadEvent> {
-        if !self
-            .pending_image_load_events
-            .get(&handle)
-            .is_some_and(|pending| pending.id() == id)
-        {
-            return None;
-        }
-        self.pending_image_load_events.remove(&handle)
     }
 
     pub(crate) fn pending_media_load_sequence(

@@ -1,4 +1,4 @@
-use super::cssom_mutation::parse_inline_css_text_with_base;
+use super::cssom_mutation::{commit_inline_style_declaration, parse_inline_css_text_with_base};
 use super::inline_state::{
     inline_style_declaration_state_from_entries,
     inline_style_declaration_state_from_serialized_entries,
@@ -57,20 +57,17 @@ pub(in crate::native_bridge::element::styles) fn set_style_entries_with_inline_b
     inline_base_url: Option<&url::Url>,
 ) {
     let state = inline_style_declaration_state_from_entries(entries);
-    let css_text = state.css_text();
-    let resolution_text = state.style_resolution_text();
-    set_reflected_style_attribute_with_inline_base_url(
+    let (css_text, override_text) = state.css_text_and_style_resolution_override();
+    let state =
+        inline_style_declaration_state_from_serialized_entries(state, &css_text, inline_base_url);
+    commit_inline_style_declaration(
         scope,
         runtime_ptr,
         handle,
-        &css_text,
+        state,
+        Some(&css_text),
+        override_text,
         inline_base_url,
-    );
-    let runtime = unsafe { &mut *runtime_ptr };
-    runtime.set_element_inline_style_resolution_text(handle, resolution_text);
-    runtime.set_element_inline_style_declaration_state(
-        handle,
-        inline_style_declaration_state_from_serialized_entries(entries, &css_text, inline_base_url),
     );
 }
 
@@ -82,33 +79,18 @@ pub(in crate::native_bridge::element::styles) fn set_style_entries_if_changed_wi
     inline_base_url: Option<&url::Url>,
 ) -> bool {
     let state = inline_style_declaration_state_from_entries(entries);
-    let css_text = state.css_text();
-    let resolution_text = state.style_resolution_text();
-    if style_string(unsafe { &*runtime_ptr }, handle) == css_text {
-        let runtime = unsafe { &mut *runtime_ptr };
-        runtime.set_element_inline_style_resolution_text(handle, resolution_text);
-        runtime.set_element_inline_style_declaration_state(
-            handle,
-            inline_style_declaration_state_from_serialized_entries(
-                entries,
-                &css_text,
-                inline_base_url,
-            ),
-        );
-        return false;
-    }
-    set_reflected_style_attribute_with_inline_base_url(
+    let (css_text, override_text) = state.css_text_and_style_resolution_override();
+    let attribute_changed = style_string(unsafe { &*runtime_ptr }, handle) != css_text;
+    let state =
+        inline_style_declaration_state_from_serialized_entries(state, &css_text, inline_base_url);
+    commit_inline_style_declaration(
         scope,
         runtime_ptr,
         handle,
-        &css_text,
-        inline_base_url,
+        state,
+        attribute_changed.then_some(css_text.as_str()),
+        override_text,
+        inline_base_url.filter(|_| attribute_changed),
     );
-    let runtime = unsafe { &mut *runtime_ptr };
-    runtime.set_element_inline_style_resolution_text(handle, resolution_text);
-    runtime.set_element_inline_style_declaration_state(
-        handle,
-        inline_style_declaration_state_from_serialized_entries(entries, &css_text, inline_base_url),
-    );
-    true
+    attribute_changed
 }

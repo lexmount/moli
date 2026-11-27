@@ -6,31 +6,121 @@
 //! line fragmentation, and emits the same owned background/image/border
 //! primitives used by block boxes.
 
-use std::{fmt::Debug, hash::Hash};
+use std::{collections::HashMap, fmt::Debug, hash::Hash};
 
 use taffy::ResolveOrZero;
 
 use super::{
     PaintSpace,
     background::{project_background_color, project_background_layers},
+    border::{
+        BorderImageGeometry, border_image_outsets, outset_border_image_rect, project_box_border,
+    },
     geometry::{BoxAreas, inset_radii},
     text::TextClipMaskScope,
 };
-use crate::{LayoutBox, LayoutRect, LayoutWorld, PaintEdgeSizes, PaintFragment, PaintSnapshot};
+use crate::{
+    LayoutBoxId, LayoutFragment, LayoutFragmentId, LayoutFragmentKind, LayoutOutputBoxId,
+    LayoutRect, PaintEdgeSizes, PaintSnapshot, projection::PaintProjection, style::InlineDirection,
+};
+
+pub(super) type InlineBorderImages = HashMap<LayoutFragmentId, BorderImageGeometry>;
+
+pub(super) fn inline_border_images<N>(projection: &PaintProjection<'_, N>) -> InlineBorderImages
+where
+    N: Copy + Debug + Eq + Hash,
+{
+    fn inline_box(fragment: &LayoutFragment) -> Option<LayoutOutputBoxId> {
+        match fragment.kind {
+            LayoutFragmentKind::InlineBox { box_id, .. } => Some(box_id),
+            _ => None,
+        }
+    }
+
+    let mut images = HashMap::new();
+    // Each structural inline's projected boxes are adjacent and in line
+    // order. Compute their cumulative widths once even when paint order
+    // visits the fragments individually around atomic inlines.
+    for fragments in projection
+        .fragments
+        .chunk_by(|left, right| inline_box(left).is_some_and(|id| inline_box(right) == Some(id)))
+    {
+        let Some(id) = inline_box(&fragments[0]) else {
+            continue;
+        };
+        let style = &projection.world.boxes[id.index()].style;
+        let widths = style
+            .taffy
+            .border
+            .resolve_or_zero(None, crate::style::resolve_stylo_calc_value);
+        let widths = PaintEdgeSizes::new(widths.top, widths.right, widths.bottom, widths.left);
+        let Some(outsets) = border_image_outsets(style, widths) else {
+            continue;
+        };
+        let strip_width: f32 = fragments.iter().map(|fragment| fragment.rect.width).sum();
+        let ltr = style.direction() == InlineDirection::Ltr;
+        let mut advance = 0.0;
+        for fragment in fragments {
+            let LayoutFragmentKind::InlineBox {
+                has_start_edge,
+                has_end_edge,
+                ..
+            } = fragment.kind
+            else {
+                unreachable!("grouped by inline box");
+            };
+            let rect = fragment.rect;
+            let offset = if ltr {
+                advance
+            } else {
+                strip_width - advance - rect.width
+            };
+            advance += rect.width;
+            let strip = LayoutRect::new(rect.x - offset, rect.y, strip_width, rect.height);
+            let fragment_clip = (fragments.len() > 1).then(|| {
+                let (has_left, has_right) = if ltr {
+                    (has_start_edge, has_end_edge)
+                } else {
+                    (has_end_edge, has_start_edge)
+                };
+                let mut clip_outsets = outsets;
+                if !has_left {
+                    clip_outsets.left = 0.0;
+                }
+                if !has_right {
+                    clip_outsets.right = 0.0;
+                }
+                outset_border_image_rect(rect, clip_outsets)
+            });
+            images.insert(
+                fragment.id,
+                BorderImageGeometry {
+                    area: outset_border_image_rect(strip, outsets),
+                    widths,
+                    fragment_clip,
+                },
+            );
+        }
+    }
+    images
+}
 
 #[allow(clippy::too_many_arguments)]
 pub(super) fn project_inline_box_fragments<N>(
-    world: &LayoutWorld<N>,
-    owner: &LayoutBox<N>,
+    projection: &PaintProjection<'_, N>,
+    owner_id: LayoutBoxId,
     selected_fragment: Option<usize>,
     paint_space: PaintSpace,
     include_backgrounds: bool,
+    border_images: &InlineBorderImages,
     snapshot: &mut PaintSnapshot,
     local_cull: Option<LayoutRect>,
     text_clip_mask: &mut impl FnMut(TextClipMaskScope, &mut PaintSnapshot),
 ) where
     N: Copy + Debug + Eq + Hash,
 {
+    let world = projection.world;
+    let owner = &world.boxes[owner_id];
     let Some(context) = owner.inline_layout.as_ref() else {
         return;
     };
@@ -44,10 +134,17 @@ pub(super) fn project_inline_box_fragments<N>(
         - owner_layout.padding.right)
         .max(0.0);
 
-    let fragments = selected_fragment.map_or(context.fragments.boxes.as_slice(), |index| {
-        &context.fragments.boxes[index..index + 1]
-    });
-    for fragment in fragments {
+    let fragments =
+        selected_fragment.map_or(0..context.fragments.boxes.len(), |index| index..index + 1);
+    let projected_fragments = projection.inline_fragments(owner_id);
+    let visible_lines = context.visible_lines(context.fragments.lines.len());
+    let pixel_grid = snapshot.pixel_grid();
+    let paint_cull = local_cull.map(|rect| paint_space.pre_transform_rect(rect));
+    for index in fragments {
+        let fragment = &context.fragments.boxes[index];
+        if fragment.line_index >= visible_lines {
+            continue;
+        }
         let Some(inline_box) = world.box_by_id(fragment.box_id) else {
             continue;
         };
@@ -67,7 +164,7 @@ pub(super) fn project_inline_box_fragments<N>(
             Some(containing_width),
             crate::style::resolve_stylo_calc_value,
         );
-        let ltr = style.direction() == crate::style::InlineDirection::Ltr;
+        let ltr = style.direction() == InlineDirection::Ltr;
         let has_left_edge = if ltr {
             fragment.has_start_edge
         } else {
@@ -97,17 +194,25 @@ pub(super) fn project_inline_box_fragments<N>(
         if rect.width <= 0.0 || rect.height <= 0.0 {
             continue;
         }
-        if local_cull.is_some_and(|cull| !super::cull::rects_intersect(rect, cull)) {
-            continue;
-        }
-        let color = style.background_color();
-        let radii = style.border_radii(rect.width, rect.height);
         let widths = PaintEdgeSizes::new(
             border.top,
             if has_right_edge { border.right } else { 0.0 },
             border.bottom,
             if has_left_edge { border.left } else { 0.0 },
         );
+        let border_image = border_images.get(&projected_fragments[index].id).copied();
+        if paint_cull.is_some_and(|cull| {
+            let snap = |rect| paint_space.pixel_snapped_rect(rect, pixel_grid);
+            let mut ink = snap(rect).unwrap_or_else(|| paint_space.pre_transform_rect(rect));
+            if let Some(border_ink) = border_image.and_then(|image| snap(image.ink_bounds())) {
+                ink = ink.union(border_ink);
+            }
+            !super::cull::rects_intersect(ink, cull)
+        }) {
+            continue;
+        }
+        let color = style.background_color();
+        let radii = style.border_radii(rect.width, rect.height);
         let padding_widths = PaintEdgeSizes::new(
             padding.top,
             if has_right_edge { padding.right } else { 0.0 },
@@ -157,22 +262,23 @@ pub(super) fn project_inline_box_fragments<N>(
                 inline_box,
                 areas,
                 paint_space,
+                projection.css_images,
                 snapshot,
                 &mut project_text_clip_mask,
             );
         }
 
-        let colors = style.border_colors();
-        if widths.has_positive_edge() && colors.has_visible_edge() {
-            snapshot.push_fragment(PaintFragment::Border {
-                rect: paint_space.pre_transform_rect(rect),
-                widths,
-                colors,
-                styles: style.border_styles(),
-                radii,
-                transform: paint_space.property_transform(),
-            });
-        }
+        project_box_border(
+            inline_box,
+            rect,
+            widths,
+            radii,
+            border_image,
+            paint_space,
+            projection.css_images,
+            || local_cull,
+            snapshot,
+        );
     }
 }
 

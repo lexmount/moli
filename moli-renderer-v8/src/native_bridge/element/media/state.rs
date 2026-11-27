@@ -221,6 +221,12 @@ pub(in crate::native_bridge) fn media_playback_rate_setter_function<'s>(
         return;
     };
     let _ = unsafe { &mut *runtime_ptr }.set_media_playback_rate(handle, number);
+    #[cfg(all(
+        feature = "media-ext",
+        any(target_os = "linux", target_os = "macos"),
+        target_pointer_width = "64"
+    ))]
+    unsafe { &mut *runtime_ptr }.update_video_clock(scope, handle);
     rv.set_undefined();
 }
 
@@ -241,6 +247,14 @@ pub(in crate::native_bridge) fn media_current_time_getter_function<'s>(
         .and_then(Node::as_element)
         .map(Element::media_current_time)
         .unwrap_or(0.0);
+    #[cfg(all(
+        feature = "media-ext",
+        any(target_os = "linux", target_os = "macos"),
+        target_pointer_width = "64"
+    ))]
+    let value = unsafe { &*runtime_ptr }
+        .video_current_time(handle)
+        .unwrap_or(value);
     rv.set(v8::Number::new(scope, value).into());
 }
 
@@ -258,9 +272,20 @@ pub(in crate::native_bridge) fn media_current_time_setter_function<'s>(
     let Some(number) = media_double_value(scope, args.get(0), "currentTime") else {
         return;
     };
+    let number = number.max(0.0);
+    #[cfg(all(
+        feature = "media-ext",
+        any(target_os = "linux", target_os = "macos"),
+        target_pointer_width = "64"
+    ))]
+    let number = number.min(
+        unsafe { &*runtime_ptr }
+            .video_duration(handle)
+            .unwrap_or(f64::INFINITY),
+    );
     let changed = {
         let runtime = unsafe { &mut *runtime_ptr };
-        let time_changed = runtime.set_media_current_time(handle, number.max(0.0));
+        let time_changed = runtime.set_media_current_time(handle, number);
         let seeking_changed = runtime.set_media_seeking(handle, true);
         time_changed || seeking_changed
     };
@@ -285,6 +310,22 @@ fn schedule_media_seek_completion(
     if !unsafe { &mut *runtime_ptr }.queue_media_seeking_event(scope, handle) {
         let _ = unsafe { &mut *runtime_ptr }.set_media_seeking(handle, false);
         return;
+    }
+    #[cfg(all(
+        feature = "media-ext",
+        any(target_os = "linux", target_os = "macos"),
+        target_pointer_width = "64"
+    ))]
+    {
+        let host = unsafe { &mut *runtime_ptr };
+        let position = host
+            .dom_host()
+            .node(handle)
+            .and_then(Node::as_element)
+            .map_or(0.0, Element::media_current_time);
+        if host.seek_video(scope, handle, position, token) {
+            return;
+        }
     }
     if !unsafe { &mut *runtime_ptr }.queue_media_seek_completion(scope, handle, token) {
         let _ = unsafe { &mut *runtime_ptr }.set_media_seeking(handle, false);
@@ -330,6 +371,14 @@ pub(crate) fn dispatch_media_seek_completion(
     {
         return false;
     }
+    #[cfg(all(
+        feature = "media-ext",
+        any(target_os = "linux", target_os = "macos"),
+        target_pointer_width = "64"
+    ))]
+    {
+        crate::native_bridge::start_video_if_playing(scope, runtime_ptr, handle);
+    }
     dispatch_text_control_event(scope, runtime_ptr, handle, "seeked");
     true
 }
@@ -368,11 +417,21 @@ pub(in crate::native_bridge) fn media_duration_getter_function<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'s, v8::Value>,
 ) {
-    if html_media_element_getter_receiver(scope, args.this(), "duration").is_none() {
+    let Some((_host, _handle)) = html_media_element_getter_receiver(scope, args.this(), "duration")
+    else {
         rv.set(v8::Number::new(scope, f64::NAN).into());
         return;
-    }
-    rv.set(v8::Number::new(scope, f64::NAN).into());
+    };
+    let duration = f64::NAN;
+    #[cfg(all(
+        feature = "media-ext",
+        any(target_os = "linux", target_os = "macos"),
+        target_pointer_width = "64"
+    ))]
+    let duration = unsafe { &*_host }
+        .video_duration(_handle)
+        .unwrap_or(duration);
+    rv.set(v8::Number::new(scope, duration).into());
 }
 
 pub(in crate::native_bridge) fn media_ended_getter_function<'s>(
@@ -380,11 +439,24 @@ pub(in crate::native_bridge) fn media_ended_getter_function<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'s, v8::Value>,
 ) {
-    if html_media_element_getter_receiver(scope, args.this(), "ended").is_none() {
+    let Some((_host, _handle)) = html_media_element_getter_receiver(scope, args.this(), "ended")
+    else {
         rv.set_bool(false);
         return;
-    }
-    rv.set_bool(false);
+    };
+    #[cfg(not(all(
+        feature = "media-ext",
+        any(target_os = "linux", target_os = "macos"),
+        target_pointer_width = "64"
+    )))]
+    let ended = false;
+    #[cfg(all(
+        feature = "media-ext",
+        any(target_os = "linux", target_os = "macos"),
+        target_pointer_width = "64"
+    ))]
+    let ended = unsafe { &*_host }.video_ended(_handle);
+    rv.set_bool(ended);
 }
 
 pub(in crate::native_bridge) fn media_seeking_getter_function<'s>(

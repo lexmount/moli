@@ -265,7 +265,12 @@ async def _layout_boundaries(results: list[dict[str, Any]]) -> None:
         message_id = await client.send("Emulation.setScrollbarsHidden", {"hidden": True}, session_id=session)
         response, _ = await _response_for_id(client, message_id)
         assert_equal(response.get("error", {}).get("code"), -32000, "scrollbar emulation requires layout")
-        assert_equal(response["error"]["message"], "Emulation.setScrollbarsHidden requires --layout", "scrollbar layout boundary")
+        assert_equal(
+            response["error"]["message"],
+            "Emulation.setScrollbarsHidden requires layout. "
+            "Start Moli with --lazy or --realtime.",
+            "scrollbar layout boundary",
+        )
         await _success(client, "Target.closeTarget", {"targetId": target})
         record(results, "scrollbar_mock_layout_boundary")
     finally:
@@ -286,8 +291,11 @@ async def _layout_boundaries(results: list[dict[str, Any]]) -> None:
             [str(moli_binary()), "fetch", *args, "--eval", ROOT_METRICS, REPRO_URL],
             env=child_env, timeout_seconds=15,
         )
-        assert_equal(result.returncode != 0 and b"--layout" in result.stderr, True,
-                     "enabling scrollbars requires layout")
+        assert_equal(
+            result.returncode != 0 and b"--lazy" in result.stderr and b"--realtime" in result.stderr,
+            True,
+            "enabling scrollbars requires a layout mode",
+        )
     record(results, "scrollbar_cli_layout_dependency")
 
 

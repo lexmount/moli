@@ -20,8 +20,8 @@ pub(crate) use mutation_record::install_template_bindings as install_mutation_re
 
 pub(crate) use dom_access::{
     ObserverStoreAccessToken, coalesce_child_list_replacement_records, flush_slotchange_microtask,
-    queue_intersection_checks, queue_mutation_records, retire_context_token,
-    retire_execution_context_owner,
+    observes_attribute_old_value, queue_intersection_checks, queue_mutation_records,
+    retire_context_token, retire_execution_context_owner,
 };
 pub(crate) use dom_access::{
     activate_realtime_resize_observer, begin_realtime_resize_observer_sampling,
@@ -428,6 +428,21 @@ impl ObserverStore {
         self.mutation_observers
             .values()
             .any(|state| !state.registrations.is_empty())
+    }
+
+    fn observes_attribute_old_value(
+        &self,
+        dom_host: &DomHost,
+        target: NativeNodeId,
+        name: &str,
+    ) -> bool {
+        self.mutation_observers.values().any(|state| {
+            state.registrations.iter().any(|registration| {
+                registration.options.attribute_old_value
+                    && registration.matches_attribute(None, name)
+                    && registration.matches_target(dom_host, target)
+            })
+        })
     }
 
     pub(crate) fn has_scheduled_mutation_delivery(&self) -> bool {
@@ -904,22 +919,28 @@ fn child_list_record_belongs_to_replacement(
 }
 
 impl MutationObserverRegistration {
+    fn matches_target(&self, dom_host: &DomHost, target: NativeNodeId) -> bool {
+        self.target == target
+            || (self.options.subtree && is_ancestor_or_self(dom_host, self.target, target))
+    }
+
+    fn matches_attribute(&self, namespace: Option<&str>, name: &str) -> bool {
+        self.options.attributes
+            && self
+                .options
+                .attribute_filter
+                .as_ref()
+                .is_none_or(|filter| namespace.is_none() && filter.contains(name))
+    }
+
     fn matches(&self, dom_host: &DomHost, record: &DomMutationRecord) -> bool {
-        if self.target != record.target()
-            && (!self.options.subtree
-                || !is_ancestor_or_self(dom_host, self.target, record.target()))
-        {
+        if !self.matches_target(dom_host, record.target()) {
             return false;
         }
 
         match record.kind() {
             DomMutationRecordKind::Attributes(mutation) => {
-                if !self.options.attributes {
-                    return false;
-                }
-                self.options.attribute_filter.as_ref().is_none_or(|filter| {
-                    mutation.namespace().is_none() && filter.contains(mutation.local_name())
-                })
+                self.matches_attribute(mutation.namespace(), mutation.local_name())
             }
             DomMutationRecordKind::CharacterData { .. } => self.options.character_data,
             DomMutationRecordKind::ChildList(_) => self.options.child_list,
@@ -1534,7 +1555,7 @@ fn rect_from_intersection_geometry(
 
 // The helpers below belong exclusively to the legacy `LayoutPolicy::Mock`
 // IntersectionObserver branch and read **only** the inline `style="..."`
-// attribute. The default OnDemand branch batches real layout queries in
+// attribute. The default Lazy branch batches real layout queries in
 // `observer_runtime::intersection` and never calls them.
 //
 // The compatibility path intentionally does not consult the cascade: doing so

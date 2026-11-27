@@ -387,7 +387,7 @@ fn realtime_raf_watchdog_failure_settles_running_state_and_allows_explicit_recov
 fn legacy_raf_keeps_its_timer_registration_and_cancellation_routes() {
     run_page_vm_large_stack_async_test("legacy-raf-timers", || async move {
         let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default()).unwrap();
-        for policy in [LayoutPolicy::Mock, LayoutPolicy::OnDemand] {
+        for policy in [LayoutPolicy::Mock, LayoutPolicy::Lazy] {
             let (mut page, _, _) = page_vm_with_bound_task_sources_and_owner_wake(
                 &loader,
                 Url::parse("https://example.com/legacy-raf").unwrap(),

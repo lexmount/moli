@@ -56,6 +56,17 @@ pub(in crate::context_bootstrap) fn window_indexed_property_getter<'s>(
     v8::Intercepted::kYes
 }
 
+pub(in crate::context_bootstrap) fn window_indexed_property_setter(
+    _scope: &mut v8::PinScope<'_, '_>,
+    _index: u32,
+    _value: v8::Local<'_, v8::Value>,
+    _args: v8::PropertyCallbackArguments<'_>,
+    mut rv: v8::ReturnValue<'_, v8::Boolean>,
+) -> v8::Intercepted {
+    rv.set_bool(false);
+    v8::Intercepted::kYes
+}
+
 pub(in crate::context_bootstrap) fn window_indexed_property_query<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     index: u32,
@@ -66,6 +77,17 @@ pub(in crate::context_bootstrap) fn window_indexed_property_query<'s>(
         return v8::Intercepted::kNo;
     }
     rv.set_int32(v8::PropertyAttribute::READ_ONLY.as_u32() as i32);
+    v8::Intercepted::kYes
+}
+
+pub(in crate::context_bootstrap) fn window_indexed_property_definer(
+    _scope: &mut v8::PinScope<'_, '_>,
+    _index: u32,
+    _descriptor: &v8::PropertyDescriptor,
+    _args: v8::PropertyCallbackArguments<'_>,
+    mut rv: v8::ReturnValue<'_, v8::Boolean>,
+) -> v8::Intercepted {
+    rv.set_bool(false);
     v8::Intercepted::kYes
 }
 
@@ -169,6 +191,42 @@ pub(in crate::context_bootstrap) fn window_named_property_query<'s>(
     v8::Intercepted::kYes
 }
 
+pub(in crate::context_bootstrap) fn window_named_properties_indexed_property_getter<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    index: u32,
+    args: v8::PropertyCallbackArguments<'s>,
+    mut rv: v8::ReturnValue<'_, v8::Value>,
+) -> v8::Intercepted {
+    let index = index.to_string();
+    let Some(key) = crate::util::v8_string(scope, &index) else {
+        return v8::Intercepted::kNo;
+    };
+    let key: v8::Local<'s, v8::Name> = key.into();
+    let Some(value) = window_named_access_value(scope, key, args.holder()) else {
+        return v8::Intercepted::kNo;
+    };
+    rv.set(value);
+    v8::Intercepted::kYes
+}
+
+pub(in crate::context_bootstrap) fn window_named_properties_indexed_property_query<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    index: u32,
+    args: v8::PropertyCallbackArguments<'s>,
+    mut rv: v8::ReturnValue<'_, v8::Integer>,
+) -> v8::Intercepted {
+    let index = index.to_string();
+    let Some(key) = crate::util::v8_string(scope, &index) else {
+        return v8::Intercepted::kNo;
+    };
+    let key: v8::Local<'s, v8::Name> = key.into();
+    if window_named_access_value(scope, key, args.holder()).is_none() {
+        return v8::Intercepted::kNo;
+    }
+    rv.set_int32(v8::PropertyAttribute::DONT_ENUM.as_u32() as i32);
+    v8::Intercepted::kYes
+}
+
 fn window_named_property_is_shadowed_by_prototype(
     scope: &mut v8::PinScope<'_, '_>,
     holder: v8::Local<'_, v8::Object>,
@@ -202,7 +260,7 @@ fn window_named_access_value<'s>(
         return None;
     }
     let key_name = key.to_rust_string_lossy(scope);
-    if key_name.is_empty() || key_name.parse::<u32>().is_ok() {
+    if key_name.is_empty() {
         return None;
     }
     if is_reserved_window_name(&key_name) {

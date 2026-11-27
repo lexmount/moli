@@ -42,10 +42,30 @@ struct DocumentCreateCommentArgs {
 #[derive(webidl::WebIdlArgs)]
 #[webidl(prefix = "Document.createProcessingInstruction")]
 struct DocumentCreateProcessingInstructionArgs {
-    #[webidl(required)]
-    target: String,
+    #[webidl(required, converter = "raw")]
+    target: webidl::DomString16,
     #[webidl(required)]
     data: String,
+}
+
+pub(super) fn validate_processing_instruction(
+    scope: &mut v8::PinScope<'_, '_>,
+    target: &[u16],
+    data: &str,
+) -> Option<String> {
+    let target = String::from_utf16(target)
+        .ok()
+        .filter(|target| is_valid_pi_target(target));
+    if target.is_none() || data.contains("?>") {
+        throw_dom_exception(
+            scope,
+            "InvalidCharacterError",
+            5,
+            "String contains an invalid character",
+        );
+        return None;
+    }
+    target
 }
 
 #[derive(webidl::WebIdlArgs)]

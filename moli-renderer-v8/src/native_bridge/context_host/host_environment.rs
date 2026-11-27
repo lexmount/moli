@@ -17,9 +17,9 @@ use crate::{
     style_engine::{
         AdoptedStyleSheetInstallation, CssCustomPropertyRegistration,
         CssCustomPropertyRegistrationError, FullStyleWorldSnapshot,
-        OwnedStyleSourceDocumentContext, PreparedStyleWorldUpdate, StyleAttributeImpact,
-        StyleMutationEffect, StyleObservationSnapshot, StyleViewport, StylesheetResourceSnapshot,
-        StyloStyleEnvironment, StyloStylesheetSource,
+        OwnedStyleSourceDocumentContext, PreparedStyleWorldUpdate, StyleMutationEffect,
+        StyleObservationSnapshot, StyleViewport, StylesheetResourceSnapshot, StyloStyleEnvironment,
+        StyloStylesheetSource,
     },
     {
         RendererWebStorageHandles,
@@ -1668,7 +1668,7 @@ impl PageScriptHost {
 
     pub(crate) fn retire_computed_style_for_inactive_handle(&self, handle: DomHandle) {
         self.style_engine
-            .retire_computed_style_for_inactive_handle(handle);
+            .retire_computed_style_for_inactive_handle(self.dom_host(), handle);
     }
 
     pub(crate) fn stylesheet_resource_snapshot_for_document(
@@ -1929,13 +1929,11 @@ impl PageScriptHost {
         update: Option<&PreparedStyleWorldUpdate>,
         resolve: impl FnOnce(&mut crate::style_engine::StyleResolutionPass<'_, '_>) -> R,
     ) -> R {
-        let source_context =
-            update.map(|_| self.style_source_document_context_for_read_document(document));
         self.style_engine.with_style_resolution_pass(
             self.dom_host(),
             self.document_url(),
             document,
-            update.zip(source_context.as_ref().map(|context| context.as_ref())),
+            update,
             resolve,
         )
     }
@@ -2087,15 +2085,8 @@ impl PageScriptHost {
             self.note_realtime_layout_input_change();
         }
         let dom_host = self.dom_host() as *const _;
-        let emulated_media = self.emulated_media().clone();
-        let viewport = self.style_viewport();
-        self.style_engine.invalidate_for_focus_change_with_viewport(
-            unsafe { &*dom_host },
-            previous,
-            next,
-            &emulated_media,
-            viewport,
-        );
+        self.style_engine
+            .invalidate_focus_change(unsafe { &*dom_host }, previous, next);
     }
 
     pub(crate) fn note_focus_style_activity_with_previous_focus_within(
@@ -2106,16 +2097,12 @@ impl PageScriptHost {
     ) {
         self.note_realtime_layout_input_change();
         let dom_host = self.dom_host() as *const _;
-        let emulated_media = self.emulated_media().clone();
-        let viewport = self.style_viewport();
         self.style_engine
-            .invalidate_for_focus_change_with_previous_focus_within_and_viewport(
+            .invalidate_focus_change_with_previous_focus_within(
                 unsafe { &*dom_host },
                 previous,
                 next,
                 previous_focus_within,
-                &emulated_media,
-                viewport,
             );
     }
 
@@ -2128,16 +2115,8 @@ impl PageScriptHost {
             self.note_realtime_layout_input_change();
         }
         let dom_host = self.dom_host() as *const _;
-        let emulated_media = self.emulated_media().clone();
-        let viewport = self.style_viewport();
         self.style_engine
-            .invalidate_for_target_change_with_viewport(
-                unsafe { &*dom_host },
-                previous,
-                next,
-                &emulated_media,
-                viewport,
-            );
+            .invalidate_target_change(unsafe { &*dom_host }, previous, next);
     }
 
     pub(crate) fn note_element_state_style_activity_with_old_state(
@@ -2147,22 +2126,27 @@ impl PageScriptHost {
         old_state: Option<StyloElementState>,
     ) {
         if self.layout_policy().is_realtime()
+            && self.dom_host().is_connected(element)
             && (old_state.is_none() || old_state != self.retained_current_element_state(element))
         {
             self.note_realtime_layout_input_change();
         }
+        self.invalidate_style_for_element_state_change(element, state, old_state);
+    }
+
+    fn invalidate_style_for_element_state_change(
+        &mut self,
+        element: DomHandle,
+        state: StyloElementState,
+        old_state: Option<StyloElementState>,
+    ) {
         let dom_host = self.dom_host() as *const _;
-        let emulated_media = self.emulated_media().clone();
-        let viewport = self.style_viewport();
-        self.style_engine
-            .invalidate_for_element_state_change_with_old_state_and_viewport(
-                unsafe { &*dom_host },
-                element,
-                state,
-                old_state,
-                &emulated_media,
-                viewport,
-            );
+        self.style_engine.invalidate_element_state_change(
+            unsafe { &*dom_host },
+            element,
+            state,
+            old_state,
+        );
     }
 
     #[cfg(feature = "devtools")]
@@ -2186,16 +2170,16 @@ impl PageScriptHost {
             return false;
         }
         for (handle, old_state) in old_states {
-            self.note_element_state_style_activity_with_old_state(
+            self.invalidate_style_for_element_state_change(
                 handle,
                 StyloElementState::HOVER,
                 old_state,
             );
         }
-        // Hover changes the source style, not the published rendered world.
-        // Geometry reads and pointer phases keep consuming the retained
-        // snapshot until a fresh visual publication replaces it.
-        self.invalidate_layout_after_interaction_state_change();
+        // Keep the published layout available while Stylo classifies the
+        // hover damage. Repaint-only changes can reuse its numeric geometry.
+        self.invalidate_layout_projection();
+        self.request_realtime_rendering_opportunity();
         true
     }
 
@@ -2218,21 +2202,16 @@ impl PageScriptHost {
         state_names: Vec<String>,
         old_custom_states: Vec<String>,
     ) {
-        if !state_names.is_empty() {
+        if !state_names.is_empty() && self.dom_host().is_connected(element) {
             self.note_realtime_layout_input_change();
         }
         let dom_host = self.dom_host() as *const _;
-        let emulated_media = self.emulated_media().clone();
-        let viewport = self.style_viewport();
-        self.style_engine
-            .invalidate_for_custom_state_change_with_viewport(
-                unsafe { &*dom_host },
-                element,
-                state_names,
-                old_custom_states,
-                &emulated_media,
-                viewport,
-            );
+        self.style_engine.invalidate_custom_state_change(
+            unsafe { &*dom_host },
+            element,
+            state_names,
+            old_custom_states,
+        );
     }
 
     pub(crate) fn set_media_paused(&mut self, handle: DomHandle, paused: bool) -> bool {
@@ -2318,10 +2297,12 @@ impl PageScriptHost {
                 ))
             })
             .collect::<Vec<_>>();
+        let validity = self.snapshot_select_validity(handle);
         let changed = unsafe {
             DocumentRuntime::set_select_value(&mut *self.document_runtime, handle, value)
         };
         if changed {
+            self.invalidate_validity_snapshots(validity);
             for (option, was_selected, old_state) in old_states {
                 let selected = self
                     .dom_host()
@@ -2526,6 +2507,30 @@ impl PageScriptHost {
             .collect()
     }
 
+    pub(crate) fn snapshot_select_validity(
+        &self,
+        select: DomHandle,
+    ) -> Vec<(DomHandle, StyloElementState)> {
+        let mut states = self.retained_old_states_for_validity_container_change(select);
+        if let Some(state) = self.retained_current_element_state(select) {
+            states.push((select, state));
+        }
+        states
+    }
+
+    pub(crate) fn invalidate_validity_snapshots(
+        &mut self,
+        snapshots: impl IntoIterator<Item = (DomHandle, StyloElementState)>,
+    ) {
+        for (element, state) in snapshots {
+            self.note_element_state_style_activity_with_old_state(
+                element,
+                StyloElementState::VALIDITY_STATES,
+                Some(state),
+            );
+        }
+    }
+
     fn retained_old_states_for_validity_container_change(
         &self,
         handle: DomHandle,
@@ -2575,31 +2580,50 @@ impl PageScriptHost {
     }
 
     pub(crate) fn note_style_mutation_effects(&mut self, effects: &[StyleMutationEffect]) {
-        if !effects.is_empty() {
-            self.note_realtime_layout_input_change();
+        // The native DOM revision already covers removals from a live tree,
+        // even when the removed roots themselves are now disconnected.
+        if self.layout_policy().is_realtime()
+            && effects.iter().any(|effect| {
+                effect.touches_connected_tree(self.dom_host())
+                    && effect.affects_native_layout(self.dom_host())
+            })
+        {
+            self.note_realtime_tracked_input_change();
         }
-        if style_mutation_effects_affect_layout_metric(effects) {
+        if effects
+            .iter()
+            .any(|effect| effect.affects_layout_metric(self.dom_host()))
+        {
             self.clear_layout_rect_cache();
         }
-        let changed_iframe_attributes = effects.iter().filter_map(|effect| {
-            let StyleMutationEffect::Attribute { element, name, .. } = effect else {
-                return None;
-            };
-            (StyleAttributeImpact::for_attribute_name(name).affects_layout_metric()
-                && self.dom_host().is_html_element_named(*element, "iframe"))
-            .then_some(*element)
-        });
-        self.invalidate_published_frame_viewports(changed_iframe_attributes);
+        if self.layout_policy() == moli_page_types::LayoutPolicy::Lazy {
+            for effect in effects {
+                if let StyleMutationEffect::Attribute {
+                    element,
+                    old_value,
+                    new_value,
+                    ..
+                } = effect
+                    && old_value != new_value
+                {
+                    self.note_lazy_frame_style_change(*element);
+                }
+            }
+        } else if self.layout_policy() == moli_page_types::LayoutPolicy::Mock {
+            let changed_iframe_attributes = effects.iter().filter_map(|effect| {
+                let StyleMutationEffect::Attribute { element, .. } = effect else {
+                    return None;
+                };
+                (self.dom_host().is_html_element_named(*element, "iframe")
+                    && effect.affects_layout_metric(self.dom_host()))
+                .then_some(*element)
+            });
+            self.invalidate_mock_frame_viewports(changed_iframe_attributes);
+        }
         let validity_containers = self.validity_containers_for_child_list_mutations(effects);
         let dom_host = self.dom_host() as *const _;
-        let emulated_media = self.emulated_media().clone();
-        let viewport = self.style_viewport();
-        self.style_engine.invalidate_for_mutations_with_viewport(
-            unsafe { &*dom_host },
-            effects,
-            &emulated_media,
-            viewport,
-        );
+        self.style_engine
+            .invalidate_dom_mutations(unsafe { &*dom_host }, effects);
         for container in validity_containers {
             // Child-list effects are produced after the tree splice, so the
             // previous aggregate validity is unavailable. An absent old state
@@ -2613,7 +2637,11 @@ impl PageScriptHost {
     }
 
     pub(crate) fn note_element_inline_style_subtree_activity(&mut self, root: DomHandle) {
-        self.note_realtime_layout_input_change();
+        self.note_lazy_frame_style_change(root);
+        if self.dom_host().is_connected(root) {
+            self.dom_host().note_tracked_inline_style_target(root);
+            self.note_realtime_tracked_input_change();
+        }
         self.clear_layout_rect_cache();
         let dom_host = self.dom_host() as *const _;
         self.style_engine
@@ -2621,7 +2649,9 @@ impl PageScriptHost {
     }
 
     pub(crate) fn note_style_subtree_context_change(&mut self, root: DomHandle) {
-        self.note_realtime_layout_input_change();
+        if self.dom_host().is_connected(root) {
+            self.note_realtime_layout_input_change();
+        }
         self.clear_layout_rect_cache();
         let dom_host = self.dom_host() as *const _;
         self.style_engine
@@ -2674,22 +2704,6 @@ impl PageScriptHost {
             .clear_inline_style_base_url_with_host(unsafe { &*dom_host }, handle);
     }
 
-    pub(crate) fn set_element_inline_style_resolution_text(
-        &mut self,
-        handle: DomHandle,
-        text: String,
-    ) {
-        let dom_host = self.dom_host() as *const _;
-        self.style_engine
-            .set_inline_style_resolution_text_with_host(unsafe { &*dom_host }, handle, text);
-    }
-
-    pub(crate) fn clear_element_inline_style_resolution_text(&mut self, handle: DomHandle) {
-        let dom_host = self.dom_host() as *const _;
-        self.style_engine
-            .clear_inline_style_resolution_text_with_host(unsafe { &*dom_host }, handle);
-    }
-
     pub(crate) fn set_element_inline_style_csp_state(
         &mut self,
         handle: DomHandle,
@@ -2711,28 +2725,74 @@ impl PageScriptHost {
         &self,
         handle: DomHandle,
     ) -> crate::style_engine::InlineStyleCspState {
+        if self
+            .element_cssom_style(handle)
+            .is_some_and(crate::css_style::CssomStyleAttribute::is_cssom_authored)
+        {
+            return crate::style_engine::InlineStyleCspState::Cssom;
+        }
         self.style_engine
             .inline_style_csp_state_with_host(self.dom_host(), handle)
+    }
+
+    pub(crate) fn element_cssom_style(
+        &self,
+        handle: DomHandle,
+    ) -> Option<&crate::css_style::CssomStyleAttribute> {
+        self.dom_host()
+            .dom()
+            .find_attribute(handle, "style")?
+            .cssom_style()
     }
 
     pub(crate) fn element_inline_style_declaration_state(
         &self,
         handle: DomHandle,
-    ) -> Option<&crate::css_style::CssInlineStyleDeclarationState> {
-        self.inline_style_declarations.get(&handle)
+    ) -> Option<parking_lot::RwLockReadGuard<'_, crate::css_style::CssInlineStyleDeclarationState>>
+    {
+        self.element_cssom_style(handle)
+            .map(crate::css_style::CssomStyleAttribute::read)
     }
 
     pub(crate) fn set_element_inline_style_declaration_state(
         &mut self,
         handle: DomHandle,
         state: crate::css_style::CssInlineStyleDeclarationState,
+        resolution_text: Option<String>,
     ) {
-        self.inline_style_declarations.insert(handle, state);
+        let Some(text) = self.dom_host().get_attribute(handle, "style") else {
+            return;
+        };
+        let cssom_authored = self.element_inline_style_csp_state(handle)
+            == crate::style_engine::InlineStyleCspState::Cssom;
+        let source = crate::css_style::CssomStyleAttribute::with_text(
+            state,
+            text,
+            resolution_text,
+            cssom_authored,
+        );
+        let resolution_changed = self
+            .element_cssom_style(handle)
+            .and_then(crate::css_style::CssomStyleAttribute::resolution_text)
+            != source.resolution_text();
+        self.dom_host_mut()
+            .replace_style_attribute_source(handle, Box::new(source));
+        if resolution_changed {
+            self.note_element_inline_style_subtree_activity(handle);
+        }
     }
 
-    pub(crate) fn clear_element_inline_style_declaration_state(&mut self, handle: DomHandle) {
-        self.inline_style_declarations.remove(&handle);
-        self.clear_element_inline_style_resolution_text(handle);
+    pub(crate) fn can_defer_cssom_attribute(&self, handle: DomHandle) -> bool {
+        let dom = self.dom_host();
+        dom.dom()
+            .find_attribute(handle, "style")
+            .is_none_or(|attribute| attribute.namespace().is_empty())
+            && !dom.devtools_mutation_records_enabled()
+            && !self.has_dom_debugger_dom_breakpoints()
+            && (!dom.is_connected(handle)
+                || !self
+                    .style_engine
+                    .has_retained_style_attribute_selector(dom, handle))
     }
 
     pub(crate) fn set_element_inline_style_current_base_url(&mut self, handle: DomHandle) {
@@ -2902,17 +2962,4 @@ impl PageScriptHost {
         self.page_network_policy
             .should_intercept_subresource(resource_type)
     }
-}
-
-fn style_mutation_effects_affect_layout_metric(effects: &[StyleMutationEffect]) -> bool {
-    effects.iter().any(|effect| match effect {
-        StyleMutationEffect::Attribute { name, .. } => {
-            StyleAttributeImpact::for_attribute_name(name).affects_layout_metric()
-        }
-        StyleMutationEffect::ConnectedSubtrees { .. }
-        | StyleMutationEffect::DisconnectedSubtrees { .. }
-        | StyleMutationEffect::SlotAssignment { .. }
-        | StyleMutationEffect::CharacterData { .. }
-        | StyleMutationEffect::ChildList { .. } => true,
-    })
 }

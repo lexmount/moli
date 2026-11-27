@@ -1,4 +1,4 @@
-use anyhow::{Result, ensure};
+use anyhow::Result;
 
 use super::ScriptVm;
 use crate::{
@@ -97,57 +97,16 @@ impl ScriptVm {
                     continue;
                 }
                 if matches!(phase, PreAnimationPhase::Media) {
-                    let events = context_bootstrap::take_realtime_media_query_events(
-                        scope, host_ptr, target,
-                    );
-                    for (event_index, prepared) in events.iter().enumerate() {
-                        if !unsafe { &*host_ptr }
-                            .realtime_rendering_opportunity_is_current(id, root)
-                        {
-                            break;
-                        }
-                        // Only document.open can transfer this running list;
-                        // a navigation/detach cannot select a new Document.
-                        let Some(target) = unsafe { &*host_ptr }.realtime_rendering_document(
-                            id,
-                            root,
-                            document_index,
-                        ) else {
-                            break;
-                        };
-                        if !unsafe { &*host_ptr }
-                            .realtime_media_query_is_current(target, prepared.id)
-                        {
-                            continue;
-                        }
-                        let result = prepared
-                            .binding
-                            .with_current_scope(scope, host_ptr, |scope, _| -> Result<bool> {
-                                let list = v8::Local::new(scope, &prepared.list);
-                                let event = v8::Local::new(scope, &prepared.event);
-                                context_bootstrap::dispatch_realtime_media_query_event(
-                                    scope, list, event,
-                                );
-                                Self::environment_checkpoint(scope)?;
-                                Ok(true)
-                            })
-                            .unwrap_or(Ok(false));
-                        if result.is_err()
-                            && let Some(target) = unsafe { &*host_ptr }.realtime_rendering_document(
-                                id,
-                                root,
-                                document_index,
-                            )
-                        {
-                            let uncalled = events[event_index + 1..]
-                                .iter()
-                                .map(|event| event.id)
-                                .collect::<Vec<_>>();
-                            unsafe { &*host_ptr }
-                                .restore_realtime_media_query_notifications(target, &uncalled);
-                        }
-                        invoked |= result?;
-                    }
+                    invoked |=
+                        context_bootstrap::dispatch_media_query_events(scope, host_ptr, || {
+                            let host = unsafe { &*host_ptr };
+                            if !host.realtime_rendering_opportunity_is_current(id, root) {
+                                return None;
+                            }
+                            // Only document.open can transfer the running batch;
+                            // navigation/detachment cannot select a new Document.
+                            host.realtime_rendering_document(id, root, document_index)
+                        })?;
                     continue;
                 }
                 let Some(binding) = environment_binding(scope, host_ptr, target) else {
@@ -212,20 +171,6 @@ impl ScriptVm {
             }
         }
         Ok(invoked)
-    }
-
-    fn environment_checkpoint(scope: &mut v8::PinScope<'_, '_>) -> Result<()> {
-        if !V8ExecutionWatchdog::callback_dispatch_has_timed_out(scope)
-            && !scope.is_execution_terminating()
-        {
-            Self::perform_microtask_checkpoints(scope, None)?;
-        }
-        ensure!(
-            !V8ExecutionWatchdog::callback_dispatch_has_timed_out(scope)
-                && !scope.is_execution_terminating(),
-            "pre-animation lifecycle was terminated"
-        );
-        Ok(())
     }
 }
 

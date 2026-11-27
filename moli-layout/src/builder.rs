@@ -23,7 +23,9 @@ use crate::{
     text_is_ignorable_in_anonymous_run,
     world::{ViewportDefiningBox, ViewportScrollPolicy},
 };
-use style::values::generics::image::GenericImage;
+
+mod retained;
+pub(crate) use retained::{can_retain_root, update_layout_world};
 
 /// Constructs a complete pass-local CSS box tree from a borrowed source view.
 pub fn build_layout_world<S, R>(
@@ -45,7 +47,7 @@ where
     source: &'a S,
     styles: &'a mut R,
     active_sources: HashSet<S::NodeId>,
-    seen_sources: HashMap<S::NodeId, String>,
+    seen_sources: HashMap<S::NodeId, S::NodeId>,
     seen_css_images: HashSet<(S::NodeId, String, crate::LayoutCssImagePurpose)>,
     css_image_references: Vec<crate::LayoutCssImageReference<S::NodeId>>,
     source_root: Option<S::NodeId>,
@@ -160,8 +162,7 @@ where
         if root_generates_principal_box {
             world.map_source(source_root, root_box);
         }
-        self.seen_sources
-            .insert(source_root, self.source.label(source_root));
+        self.seen_sources.insert(source_root, source_root);
 
         if !matches!(
             root_style.display(),
@@ -216,11 +217,7 @@ where
         before: Option<ResolvedLayoutPseudoStyle>,
         after: Option<ResolvedLayoutPseudoStyle>,
     ) -> Result<(), LayoutError> {
-        if !self.active_sources.insert(source_node) {
-            return Err(LayoutError::SourceCycle {
-                source_label: self.source.label(source_node),
-            });
-        }
+        self.enter_source(source_node)?;
         let result = (|| {
             let children =
                 self.build_element_child_stream(world, source_node, style, before, after)?;
@@ -231,11 +228,22 @@ where
         result
     }
 
+    fn enter_source(&mut self, source_node: S::NodeId) -> Result<(), LayoutError> {
+        crate::error::check_layout_depth(self.active_sources.len() + 1)?;
+        if !self.active_sources.insert(source_node) {
+            return Err(LayoutError::SourceCycle {
+                source_label: self.source.label(source_node),
+            });
+        }
+        Ok(())
+    }
+
     fn build_source_node(
         &mut self,
         world: &mut LayoutWorld<S::NodeId>,
         source_node: S::NodeId,
         inherited_style: &ResolvedLayoutStyle,
+        may_replace_leaf: bool,
     ) -> Result<Vec<LayoutBoxId>, LayoutError> {
         let source_kind = self.source.node_kind(source_node);
         match source_kind {
@@ -244,40 +252,52 @@ where
                 Ok(Vec::new())
             }
             LayoutSourceKind::Text => {
-                self.validate_non_element_semantics(source_node, source_kind)?;
-                let Some(text) = self.source.text(source_node) else {
+                let Some(text_box) = self.text_box(source_node, inherited_style)? else {
                     return Ok(Vec::new());
                 };
-                let id = world.allocate(LayoutWorld::new_box(
-                    Some(source_node),
-                    None,
-                    None,
-                    self.source.label(source_node),
-                    None,
-                    None,
-                    None,
-                    LayoutBoxKind::Text,
-                    ResolvedLayoutStyle::text_leaf_from(inherited_style),
-                    Some(Arc::from(text)),
-                ));
-                world.boxes[id.index()].text_selection = self.source.text_selection(source_node);
+                if !may_replace_leaf {
+                    world.numeric_tree = None;
+                }
+                let id = world.allocate(text_box);
                 world.map_source(source_node, id);
                 Ok(vec![id])
             }
-            LayoutSourceKind::Element => self.build_element(world, source_node),
+            LayoutSourceKind::Element => self.build_element(world, source_node, may_replace_leaf),
         }
+    }
+
+    fn text_box(
+        &self,
+        source_node: S::NodeId,
+        inherited_style: &ResolvedLayoutStyle,
+    ) -> Result<Option<crate::LayoutBox<S::NodeId>>, LayoutError> {
+        self.validate_non_element_semantics(source_node, LayoutSourceKind::Text)?;
+        let Some(text) = self.source.text(source_node) else {
+            return Ok(None);
+        };
+        let mut layout_box = LayoutWorld::new_box(
+            Some(source_node),
+            None,
+            None,
+            self.source.label(source_node),
+            None,
+            None,
+            None,
+            LayoutBoxKind::Text,
+            ResolvedLayoutStyle::text_leaf_from(inherited_style),
+            Some(Arc::from(text)),
+        );
+        layout_box.text_selection = self.source.text_selection(source_node);
+        Ok(Some(layout_box))
     }
 
     fn build_element(
         &mut self,
         world: &mut LayoutWorld<S::NodeId>,
         source_node: S::NodeId,
+        may_replace_leaf: bool,
     ) -> Result<Vec<LayoutBoxId>, LayoutError> {
-        if !self.active_sources.insert(source_node) {
-            return Err(LayoutError::SourceCycle {
-                source_label: self.source.label(source_node),
-            });
-        }
+        self.enter_source(source_node)?;
 
         let result = (|| {
             let semantics =
@@ -286,19 +306,7 @@ where
                 return Ok(Vec::new());
             };
             let (mut style, before, after) = styles.into_parts();
-            if self.viewport_body_candidate.is_none()
-                && self.root_is_html
-                && self
-                    .source_root
-                    .is_some_and(|root| self.source.flat_parent(source_node) == Some(root))
-                && semantics.is_html_element("body")
-            {
-                self.viewport_body_candidate = Some(ViewportBodyCandidate {
-                    source: source_node,
-                    overflow: style.overflow_modes(),
-                    blocks_propagation: style.applies_any_viewport_containment(),
-                });
-            }
+            self.record_viewport_body_candidate(source_node, &semantics, &style);
             let metrics = self.source.replaced_metrics(source_node);
             if semantics.is_replaced() {
                 style.mark_replaced(
@@ -336,13 +344,17 @@ where
                         style.clone(),
                         metrics,
                     );
+                    // A new principal box retires the old order held by the
+                    // numeric tree before insert makes the working order unique.
+                    if !may_replace_leaf {
+                        world.numeric_tree = None;
+                    }
                     let id = world.allocate(box_node);
                     if matches!(
                         semantics.category,
                         crate::LayoutElementCategory::FormControl(_)
                     ) {
-                        world.boxes[id.index()].text_selection =
-                            self.source.text_selection(source_node);
+                        world.boxes[id].text_selection = self.source.text_selection(source_node);
                     }
                     world.map_source(source_node, id);
 
@@ -365,12 +377,33 @@ where
         result
     }
 
+    fn record_viewport_body_candidate(
+        &mut self,
+        node: S::NodeId,
+        semantics: &LayoutElementSemantics,
+        style: &ResolvedLayoutStyle,
+    ) {
+        if self.viewport_body_candidate.is_none()
+            && self.root_is_html
+            && semantics.is_html_element("body")
+            && self
+                .source_root
+                .is_some_and(|root| self.source.flat_parent(node) == Some(root))
+        {
+            self.viewport_body_candidate = Some(ViewportBodyCandidate {
+                source: node,
+                overflow: style.overflow_modes(),
+                blocks_propagation: style.applies_any_viewport_containment(),
+            });
+        }
+    }
+
     /// Converts the construction-only body candidate into the final viewport
     /// policy before the world crosses into numeric layout. No body computed
     /// style is retained by `LayoutWorld`.
     fn finalize_viewport_scroll_policy(&self, world: &mut LayoutWorld<S::NodeId>) {
         let root = world.root;
-        let root_style = &world.boxes[root.index()].style;
+        let root_style = &world.boxes[root].style;
         let body_box = self
             .viewport_body_candidate
             .as_ref()
@@ -431,23 +464,33 @@ where
             None,
         );
         layout_box.replaced_context = replaced_context;
-        layout_box.replaced_image = self.source.replaced_image(source_node, &style);
+        if semantics.replaced != Some(crate::LayoutReplacedKind::Svg) {
+            layout_box.replaced_image = self.source.replaced_image(source_node, &style);
+        }
         if !matches!(
             style.display(),
             LayoutDisplay::None | LayoutDisplay::Contents
         ) {
-            layout_box.css_images = self.css_image_resources(source_node, &style);
+            self.collect_css_images(source_node, &style);
         }
+        layout_box.scroll_offset = self.sample_scroll_offset(source_node, &style);
+        layout_box
+    }
+
+    fn sample_scroll_offset(
+        &self,
+        source_node: S::NodeId,
+        style: &ResolvedLayoutStyle,
+    ) -> crate::LayoutPoint {
         // DOM scroll state is stored in CSSOM units. Numeric layout operates
         // in effective-zoomed CSS pixels, so import the sampled state into the
         // same coordinate space as the box geometry.
         let scroll_offset = self.source.scroll_offset(source_node);
         let effective_zoom = style.effective_zoom();
-        layout_box.scroll_offset = crate::LayoutPoint::new(
+        crate::LayoutPoint::new(
             scroll_offset.x * effective_zoom,
             scroll_offset.y * effective_zoom,
-        );
-        layout_box
+        )
     }
 
     fn build_element_child_stream(
@@ -459,22 +502,48 @@ where
         after: Option<ResolvedLayoutPseudoStyle>,
     ) -> Result<Vec<LayoutBoxId>, LayoutError> {
         let mut children = Vec::new();
-        if style.display().is_list_item()
-            && let Some(marker) = self.styles.marker_style(source_node)?
-        {
-            children.extend(self.build_generated_pseudo(
-                world,
-                source_node,
-                LayoutPseudo::Marker,
-                marker.into_style(),
-            )?);
+        if style.display().is_list_item() {
+            children.extend(self.build_list_marker(world, source_node, None)?);
         }
         children.extend(self.build_pseudo(world, source_node, LayoutPseudo::Before, before)?);
         for child in self.checked_flat_children(source_node)? {
-            children.extend(self.build_source_node(world, child, style)?);
+            children.extend(self.build_source_node(world, child, style, false)?);
         }
         children.extend(self.build_pseudo(world, source_node, LayoutPseudo::After, after)?);
         Ok(children)
+    }
+
+    fn build_list_marker(
+        &mut self,
+        world: &mut LayoutWorld<S::NodeId>,
+        source_node: S::NodeId,
+        retained_item: Option<LayoutBoxId>,
+    ) -> Result<Vec<LayoutBoxId>, LayoutError> {
+        let Some(marker) = self.styles.marker_style(source_node)? else {
+            return Ok(Vec::new());
+        };
+        let style = marker.into_style();
+        if let Some(item) = retained_item
+            && let Some(id) = world.boxes[item].children.iter().copied().find(|id| {
+                let child = &world.boxes[id];
+                child.kind == LayoutBoxKind::PseudoMarker && child.owner == Some(source_node)
+            })
+        {
+            let previous = &world.boxes[id];
+            let item_style = &world.boxes[item].style;
+            let outside =
+                item_style.list_marker_position() == crate::LayoutListMarkerPosition::Outside;
+            let default_text = item_style.list_marker_type() != &crate::LayoutListMarkerType::None;
+            if previous.outside_list_marker == outside
+                && (!style.has_normal_generated_content()
+                    || previous.children.len() == usize::from(default_text))
+                && self.styles.can_reuse_marker_style(&previous.style, &style)
+            {
+                self.collect_css_images(source_node, &style);
+                return Ok(vec![id]);
+            }
+        }
+        self.build_generated_pseudo(world, source_node, LayoutPseudo::Marker, style)
     }
 
     fn build_pseudo(
@@ -501,8 +570,11 @@ where
         pseudo: LayoutPseudo,
         style: ResolvedLayoutStyle,
     ) -> Result<Vec<LayoutBoxId>, LayoutError> {
-        let generated_child = style
-            .generated_text()
+        let generated_text = style.generated_text();
+        if generated_text.is_some() || style.display() != LayoutDisplay::Contents {
+            world.numeric_tree = None;
+        }
+        let generated_child = generated_text
             .map(|text| self.allocate_generated_text(world, owner, pseudo, &style, text));
 
         // `display: contents` suppresses the pseudo's own principal box, but
@@ -540,7 +612,7 @@ where
             style.clone(),
             None,
         );
-        layout_box.css_images = self.css_image_resources(owner, &style);
+        self.collect_css_images(owner, &style);
         if style.has_unsupported_generated_content() {
             push_diagnostic(
                 &mut layout_box.capability_diagnostics,
@@ -712,7 +784,7 @@ where
         style: &ResolvedLayoutStyle,
         semantics: Option<LayoutElementSemantics>,
     ) -> LayoutBoxId {
-        let mut continuation = LayoutWorld::new_box(
+        let continuation = LayoutWorld::new_box(
             None,
             Some(owner),
             None,
@@ -724,51 +796,34 @@ where
             style.clone(),
             None,
         );
-        continuation.css_images = self.css_image_resources(owner, style);
+        self.collect_css_images(owner, style);
         world.allocate(continuation)
     }
 
-    fn css_image_resources(
-        &mut self,
-        source: S::NodeId,
-        style: &ResolvedLayoutStyle,
-    ) -> crate::source::LayoutCssImageResources {
+    fn collect_css_images(&mut self, source: S::NodeId, style: &ResolvedLayoutStyle) {
         let Some(computed) = style.stylo_computed_values() else {
-            return crate::source::LayoutCssImageResources::default();
+            return;
         };
-        let background = computed
-            .get_background()
-            .background_image
-            .0
-            .iter()
-            .map(|image| {
-                self.css_image_resource(source, image, crate::LayoutCssImagePurpose::Background)
-            })
-            .collect();
-        let mask = computed
-            .get_svg()
-            .mask_image
-            .0
-            .iter()
-            .map(|image| self.css_image_resource(source, image, crate::LayoutCssImagePurpose::Mask))
-            .collect();
-        crate::source::LayoutCssImageResources { background, mask }
+        use crate::LayoutCssImagePurpose::{Background, Border, Mask};
+        for image in computed.get_background().background_image.0.iter() {
+            self.note_css_image(source, image, Background);
+        }
+        self.note_css_image(source, &computed.get_border().border_image_source, Border);
+        for image in computed.get_svg().mask_image.0.iter() {
+            self.note_css_image(source, image, Mask);
+        }
     }
 
-    fn css_image_resource(
+    fn note_css_image(
         &mut self,
         source: S::NodeId,
         image: &style::values::computed::Image,
         purpose: crate::LayoutCssImagePurpose,
-    ) -> Option<crate::LayoutImageResource> {
-        let GenericImage::Url(computed_url) = image else {
-            return None;
+    ) {
+        let Some(url) = crate::source::css_image_url(image) else {
+            return;
         };
-        let url = computed_url.url()?;
-        if !matches!(url.scheme(), "http" | "https" | "data" | "blob") || url.fragment().is_some() {
-            return None;
-        }
-        let resolved_url = url.as_str().to_owned();
+        let resolved_url = url.to_owned();
         if self
             .seen_css_images
             .insert((source, resolved_url.clone(), purpose))
@@ -780,7 +835,6 @@ where
                     resolved_url,
                 });
         }
-        self.source.css_image_resource(url.as_str())
     }
 
     fn normalize_flow_children(
@@ -813,7 +867,7 @@ where
                 .filter(|id| {
                     !self.is_ignorable_whitespace_text(world, *id)
                         || (preserve_whitespace
-                            && world.boxes[id.index()]
+                            && world.boxes[id]
                                 .text
                                 .as_deref()
                                 .is_some_and(|text| !text.is_empty()))
@@ -1150,9 +1204,7 @@ where
         world.replace_children(parent, children)?;
         world
             .box_by_id_mut(parent)
-            .ok_or(LayoutError::InvalidBoxReference {
-                index: parent.index(),
-            })?
+            .ok_or(LayoutError::InvalidBoxHandle { id: parent })?
             .inline_formatting_context = establishes_inline_context;
         Ok(())
     }
@@ -1164,7 +1216,7 @@ where
     ) -> Result<Option<TableBoxRole>, LayoutError> {
         let layout_box = world
             .box_by_id(id)
-            .ok_or(LayoutError::InvalidBoxReference { index: id.index() })?;
+            .ok_or(LayoutError::InvalidBoxHandle { id })?;
         Ok(TableBoxRole::from_display(layout_box.style.display()))
     }
 
@@ -1221,13 +1273,11 @@ where
     }
 
     fn checked_flat_children(&mut self, parent: S::NodeId) -> Result<Vec<S::NodeId>, LayoutError> {
-        let parent_label = self.source.label(parent);
         let children = self.source.flat_children(parent).collect::<Vec<_>>();
         for child in &children {
-            let child_label = self.source.label(*child);
             if self.active_sources.contains(child) {
                 return Err(LayoutError::SourceCycle {
-                    source_label: child_label,
+                    source_label: self.source.label(*child),
                 });
             }
             let actual_parent = self.source.flat_parent(*child);
@@ -1236,21 +1286,24 @@ where
                     .map(|node| self.source.label(node))
                     .unwrap_or_else(|| "<none>".to_owned());
                 return Err(LayoutError::source_contract(
-                    child_label,
+                    self.source.label(*child),
                     format!(
-                        "flat_children({parent_label}) disagrees with flat_parent; got {actual}"
+                        "flat_children({}) disagrees with flat_parent; got {actual}",
+                        self.source.label(parent)
                     ),
                 ));
             }
             if let Some(first_parent) = self.seen_sources.get(child) {
                 return Err(LayoutError::source_contract(
-                    child_label,
+                    self.source.label(*child),
                     format!(
-                        "flat-tree node appears more than once; first parent was {first_parent}, second parent is {parent_label}"
+                        "flat-tree node appears more than once; first parent was {}, second parent is {}",
+                        self.source.label(*first_parent),
+                        self.source.label(parent),
                     ),
                 ));
             }
-            self.seen_sources.insert(*child, parent_label.clone());
+            self.seen_sources.insert(*child, parent);
         }
         Ok(children)
     }

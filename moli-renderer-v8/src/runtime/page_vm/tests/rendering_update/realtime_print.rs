@@ -102,9 +102,14 @@ fn realtime_print_preserves_screen_observers_and_screencast_without_an_extra_fra
         let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default()).unwrap();
         let mut page = fixture(&loader).await;
         #[cfg(feature = "devtools")]
+        let paint_session = crate::runtime::RendererScreencastPaintSession::default();
+        #[cfg(feature = "devtools")]
         let first = {
             let CastReply::Captured(first) = page
-                .capture_screencast_frame(viewport_screencast_request(None))
+                .capture_screencast_frame(crate::runtime::RendererCaptureScreencastFrameRequest {
+                    paint_session: Some(paint_session.clone()),
+                    ..viewport_screencast_request(None)
+                })
                 .unwrap()
             else {
                 panic!("screen capture");
@@ -121,11 +126,14 @@ fn realtime_print_preserves_screen_observers_and_screencast_without_an_extra_fra
         let builds = page.vm().layout_pass_observability_for_test().1;
         let publishes = page.vm().layout_snapshot_cache_observability_for_test().2;
         #[cfg(feature = "devtools")]
-        assert_eq!(
-            screen_token(&page),
-            first.visual_state,
-            "clean frame and reads preserve the captured token"
-        );
+        {
+            assert!(page.vm().has_screencast_paint_for_test());
+            assert_eq!(
+                screen_token(&page),
+                first.visual_state,
+                "clean frame and reads preserve the captured token"
+            );
+        }
 
         let RendererCaptureScreenshotReply::Captured(print) =
             page.capture_screenshot(print_request()).unwrap()
@@ -177,6 +185,7 @@ fn realtime_print_preserves_screen_observers_and_screencast_without_an_extra_fra
         }
         #[cfg(feature = "devtools")]
         {
+            assert!(page.vm().has_screencast_paint_for_test());
             assert!(matches!(
                 page.capture_screencast_frame(viewport_screencast_request(Some(
                     first.visual_state
@@ -186,6 +195,92 @@ fn realtime_print_preserves_screen_observers_and_screencast_without_an_extra_fra
             ));
             assert_eq!(page.vm().layout_pass_observability_for_test().1, builds + 1);
         }
+    });
+}
+
+#[test]
+fn realtime_geometry_applies_attribute_changes_after_transient_print() {
+    run_page_vm_large_stack_async_test("realtime-print-attr", || async move {
+        let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default()).unwrap();
+        let (mut page, _, _) = page_vm_with_bound_task_sources_and_owner_wake(
+            &loader,
+            Url::parse("https://example.com/realtime-print").unwrap(),
+        );
+        page.layout_configuration.policy = LayoutPolicy::Realtime;
+        page.vm_mut().set_layout_policy(LayoutPolicy::Realtime);
+        page.vm_mut()
+            .eval(
+                r#"
+document.head.innerHTML = `<style>
+  html, body { margin: 0; background: white }
+  #probe { width: attr(data-width type(<length>), 120px); height: 20px; background: red }
+  @media print { #probe { width: 60px } }
+</style>`;
+document.body.innerHTML = '<div id="probe"></div>';
+"#,
+            )
+            .unwrap();
+        assert_eq!(
+            page.vm_mut().eval("String(probe.offsetWidth)").unwrap(),
+            "120"
+        );
+
+        let RendererCaptureScreenshotReply::Captured(print) =
+            page.capture_screenshot(print_request()).unwrap()
+        else {
+            panic!("print capture");
+        };
+        let image = moli_image::decode_png(&print.bytes).unwrap();
+        assert_eq!(&image.rgba[59 * 4..60 * 4], [255, 0, 0, 255]);
+        assert_eq!(&image.rgba[60 * 4..61 * 4], [255, 255, 255, 255]);
+
+        assert_eq!(
+            page.vm_mut()
+                .eval("probe.dataset.width = '200px'; String(probe.offsetWidth)")
+                .unwrap(),
+            "200"
+        );
+    });
+}
+
+#[test]
+fn realtime_print_keeps_screen_layout_work_after_a_cssom_read() {
+    use style::servo::restyle_damage::ServoRestyleDamage;
+
+    run_page_vm_large_stack_async_test("realtime-print-screen-damage", || async move {
+        let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default()).unwrap();
+        let mut page = fixture(&loader).await;
+        let host = page.vm().context_host_weak_for_test().upgrade().unwrap();
+        let target = page
+            .vm()
+            .document_runtime
+            .get_element_by_id("target")
+            .unwrap();
+        let builds = page.vm().layout_pass_observability_for_test().1;
+
+        page.vm_mut()
+            .eval("target.style.width = '65px'; getComputedStyle(target).color")
+            .unwrap();
+        assert!(
+            host.borrow()
+                .screen_style_damage_for_node_for_test(target)
+                .unwrap()
+                .contains(ServoRestyleDamage::RELAYOUT)
+        );
+        assert_eq!(page.vm().layout_pass_observability_for_test().1, builds);
+
+        page.capture_screenshot(print_request()).unwrap();
+        assert!(!host.borrow().realtime_screen_layout_is_current());
+
+        assert_eq!(
+            page.vm_mut().eval("String(target.offsetWidth)").unwrap(),
+            "65"
+        );
+        assert_eq!(
+            host.borrow().screen_style_damage_for_node_for_test(target),
+            None
+        );
+        assert!(host.borrow().realtime_screen_layout_is_current());
     });
 }
 

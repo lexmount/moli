@@ -10,6 +10,7 @@ use crate::types::SubresourceResourceType;
 mod backend;
 pub mod context;
 mod devtools_resource_load;
+mod file_loader;
 pub(crate) mod loads;
 pub mod navigation;
 mod policy;

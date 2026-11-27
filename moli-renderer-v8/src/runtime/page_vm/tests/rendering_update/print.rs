@@ -34,10 +34,10 @@ document.body.innerHTML = '<input type=password value="Aß😀e\u0301Z">';
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn native_pdf_only_admits_css_images_used_by_the_capture() {
+async fn native_pdf_requests_only_css_images_used_by_the_capture() {
     run_page_vm_async_test(async move {
         let image = "data:image/webp;base64,UklGRhwAAABXRUJQVlA4TA8AAAAvAUAAAAcQ/Y/+ByKi/wEA";
-        for policy in [LayoutPolicy::OnDemand, LayoutPolicy::Realtime] {
+        for policy in [LayoutPolicy::Lazy, LayoutPolicy::Realtime] {
             for (print_background, uses_mask) in [(false, false), (true, false), (false, true)] {
                 let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default())?;
                 loader.set_optional_resource_fetch_mask(
@@ -56,8 +56,10 @@ async fn native_pdf_only_admits_css_images_used_by_the_capture() {
                 } else {
                     String::new()
                 };
-                let css =
-                    format!("@media print {{ p {{ background-image: url('{image}'); {mask} }} }}");
+                let css = format!(
+                    "@media screen {{ p {{ background-image: url('/screen.png') }} }} \
+                     @media print {{ p {{ background-image: url('{image}'); {mask} }} }}"
+                );
                 page.vm_mut().eval(&format!(
                     "document.head.innerHTML='<style></style>';\
                      document.querySelector('style').textContent={};\
@@ -71,6 +73,11 @@ async fn native_pdf_only_admits_css_images_used_by_the_capture() {
                         .is_empty()
                 );
 
+                let expected = if print_background || uses_mask {
+                    vec![image.to_owned()]
+                } else {
+                    Vec::new()
+                };
                 let request = RendererPrintToPdfRequest {
                     print_background,
                     ..Default::default()
@@ -79,14 +86,9 @@ async fn native_pdf_only_admits_css_images_used_by_the_capture() {
                     page.print_to_pdf(request)?,
                     RendererPrintToPdfReply::Printed(_)
                 ));
-                let admitted = page.vm().css_image_resource_observability_for_test().4;
-                let expected = if print_background || uses_mask {
-                    vec![image.to_owned()]
-                } else {
-                    Vec::new()
-                };
                 assert_eq!(
-                    admitted, expected,
+                    page.vm().css_image_resource_observability_for_test().4,
+                    expected,
                     "{policy:?}, print_background={print_background}, uses_mask={uses_mask}"
                 );
             }
@@ -107,7 +109,7 @@ async fn native_pdf_embeds_a_loaded_font_under_its_print_declaration() {
         let data = base64::engine::general_purpose::STANDARD.encode(include_bytes!(
             "../../../../../../moli-layout/tests/fixtures/moli-ahem.woff2"
         ));
-        for policy in [LayoutPolicy::OnDemand, LayoutPolicy::Realtime] {
+        for policy in [LayoutPolicy::Lazy, LayoutPolicy::Realtime] {
             let mut page = test_page_vm_with_loader_and_document_url(
                 &loader,
                 Vec::new(),
@@ -166,7 +168,7 @@ async fn native_pdf_embeds_a_loaded_font_under_its_print_declaration() {
 fn print_truncates_deep_frames_without_publishing_partial_screen_layout() {
     run_page_vm_large_stack_async_test("bounded-print-frame-coverage", || async move {
         let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default()).unwrap();
-        for policy in [LayoutPolicy::OnDemand, LayoutPolicy::Realtime] {
+        for policy in [LayoutPolicy::Lazy, LayoutPolicy::Realtime] {
             for depth in [31, 32] {
                 let (mut page, _, _) = page_vm_with_bound_task_sources_and_owner_wake(
                     &loader,

@@ -219,8 +219,8 @@ fn style_property_exists(
     mode: StyleMode,
     property: &str,
 ) -> bool {
-    inline_style_has_property(runtime, handle, property)
-        || known_style_property(property)
+    known_style_property(property)
+        || inline_style_has_property(runtime, handle, property)
         || (mode == StyleMode::Computed
             && !computed_style_default_value(runtime, handle, property).is_empty())
 }

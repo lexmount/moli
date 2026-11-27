@@ -3,6 +3,7 @@ use crate::{
         set_window_body_onerror_handler_compiled, set_window_onerror_handler_value,
         window_body_onerror_handler_is_compiled,
     },
+    native_bridge::OwnerDispatchScope,
     util::{get_private_value, set_private_value, v8_string, v8str},
 };
 
@@ -262,19 +263,34 @@ pub(super) fn invalidate_body_window_event_attribute_handler(
         return;
     }
     let normalized_name = name.to_ascii_lowercase();
-    let handler_name = match normalized_name.as_str() {
-        "onload" => "onload",
-        "onerror" => "onerror",
+    let (handler_name, event_type) = match normalized_name.as_str() {
+        "onload" => ("onload", "load"),
+        "onerror" => ("onerror", "error"),
         _ => return,
     };
+    // A detached document has no Window for these attributes to update.
+    let Some(owner) = runtime.owner_dispatch_scope_for_node(handle) else {
+        return;
+    };
+    if let Some(child) = owner.child_window() {
+        runtime.clear_child_window_event_handler_property(child, event_type);
+    }
+
+    let Some((_, context)) = runtime
+        .current_window_execution_context_owner(owner)
+        .and_then(|execution_owner| {
+            runtime.window_execution_context(scope, execution_owner, owner)
+        })
+    else {
+        return;
+    };
+    let scope = &mut v8::ContextScope::new(scope, context);
     let _ = set_body_window_event_handler_compiled(scope, handler_name, false);
-    if handler_name == "onload"
-        && runtime.owner_dispatch_scope_for_node(handle)
-            == Some(crate::native_bridge::OwnerDispatchScope::Top)
-    {
-        // The shared attribute mutation entry has invalidated the Window
-        // registration. Only the legacy compilation flag needs resetting here.
+    if handler_name == "onload" && !matches!(owner, OwnerDispatchScope::LightweightPopup(_)) {
+        // The generic attribute path clears the main Window load registration.
+        // The child Window registration was cleared above.
         return;
     }
-    body_window_event_handler_set(scope, handler_name, v8::null(scope).into());
+    let value = v8::null(scope).into();
+    body_window_event_handler_set(scope, handler_name, value);
 }

@@ -170,6 +170,7 @@ impl DomHost {
             .is_some_and(Node::is_document)
             .then_some(())?;
         self.node(handle).filter(|node| !node.is_document())?;
+        let previous_document = self.layout_document_for_mutation_target(handle);
         let mut owners = self
             .dom
             .mark_subtree_tree_scope_collecting_stylesheet_owners(
@@ -188,7 +189,7 @@ impl DomHost {
                 )
             })
             .collect();
-        self.record_mutation(MutationScope::QueryState);
+        self.record_mutation(MutationScope::QueryState, previous_document);
         Some((handle, owner_changes))
     }
 

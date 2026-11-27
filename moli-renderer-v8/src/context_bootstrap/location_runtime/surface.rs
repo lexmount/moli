@@ -238,10 +238,9 @@ pub(in crate::context_bootstrap) fn window_location_setter<'s>(
         );
         return;
     };
-    let Some(href) = super::helpers::v8_value_to_string(scope, args.get(0)) else {
-        return;
-    };
-    navigate_location_object(scope, location, LocationNavigationKind::Assign, Some(href));
+    if location.set(scope, v8str(scope, "href").into(), args.get(0)) == Some(false) {
+        webidl::throw_type_error(scope, "Cannot assign href to Location.");
+    }
 }
 
 fn window_location_slot_value<'s>(

@@ -113,7 +113,13 @@ fn character_data_structural_sibling_dependency_invalidates_following_siblings()
             document_url.clone(),
         )],
     );
-    let inputs = FullStyleWorldSnapshot::default();
+    let mut inputs = FullStyleWorldSnapshot::default();
+    inputs
+        .document_stylesheet_sources
+        .push(StyloStylesheetSource::new(
+            ".parent:empty + .target { color: red; }".into(),
+            document_url.clone(),
+        ));
     for handle in [parent, target] {
         assert!(
             engine
@@ -255,7 +261,6 @@ fn child_list_has_empty_dependency_invalidates_ancestor_subjects() {
             parent: child,
             added_nodes: vec![text],
             removed_nodes: Vec::new(),
-            removed_element_snapshots: Vec::new(),
             previous_sibling: None,
             next_sibling: None,
         }],
@@ -327,7 +332,6 @@ fn child_list_type_sibling_invalidation_clears_next_sibling_without_keyed_depend
             parent: document,
             added_nodes: vec![inserted],
             removed_nodes: Vec::new(),
-            removed_element_snapshots: Vec::new(),
             previous_sibling: Some(previous),
             next_sibling: Some(target),
         }],
@@ -392,7 +396,6 @@ fn child_list_universal_sibling_invalidation_keeps_later_sibling_cache() {
             parent: document,
             added_nodes: vec![inserted],
             removed_nodes: Vec::new(),
-            removed_element_snapshots: Vec::new(),
             previous_sibling: Some(previous),
             next_sibling: Some(target),
         }],
@@ -450,7 +453,6 @@ fn child_list_universal_sibling_removal_keeps_later_sibling_cache() {
         2
     );
 
-    let removed_snapshot = removed_element_dependency_snapshots(&host, &[removed]);
     assert!(host.remove_child(document, removed));
     let media = crate::protocol_types::EmulatedMediaOverrides::default();
     engine.invalidate_for_mutations(
@@ -459,7 +461,6 @@ fn child_list_universal_sibling_removal_keeps_later_sibling_cache() {
             parent: document,
             added_nodes: Vec::new(),
             removed_nodes: vec![removed],
-            removed_element_snapshots: removed_snapshot,
             previous_sibling: Some(previous),
             next_sibling: Some(target),
         }],
@@ -539,12 +540,14 @@ fn retained_stylo_invalidator_uses_batch_snapshot_for_outer_dependency() {
     let effects = [
         StyleMutationEffect::Attribute {
             element: scoped_marker,
+            namespace: None,
             name: "class".to_owned(),
             old_value: Some("marker".to_owned()),
             new_value: Some("other".to_owned()),
         },
         StyleMutationEffect::Attribute {
             element: loose_marker,
+            namespace: None,
             name: "class".to_owned(),
             old_value: Some("marker".to_owned()),
             new_value: Some("other".to_owned()),
@@ -629,12 +632,14 @@ fn retained_stylo_invalidator_uses_attribute_value_snapshot_for_outer_dependency
     let effects = [
         StyleMutationEffect::Attribute {
             element: scoped_marker,
+            namespace: None,
             name: "data-state".to_owned(),
             old_value: Some("old".to_owned()),
             new_value: Some("new".to_owned()),
         },
         StyleMutationEffect::Attribute {
             element: loose_marker,
+            namespace: None,
             name: "data-state".to_owned(),
             old_value: Some("old".to_owned()),
             new_value: Some("new".to_owned()),
@@ -859,7 +864,6 @@ fn retained_stylo_child_list_insertion_preserves_broken_next_sibling_target() {
             parent: document,
             added_nodes: vec![inserted],
             removed_nodes: Vec::new(),
-            removed_element_snapshots: Vec::new(),
             previous_sibling: Some(previous),
             next_sibling: Some(target),
         }],
@@ -867,13 +871,31 @@ fn retained_stylo_child_list_insertion_preserves_broken_next_sibling_target() {
     );
     engine.drain_pending_style_invalidations_for_document_for_test(&host, document);
 
-    assert_eq!(
-        engine.computed_style_cache_entry_count_for_document_for_test(document),
-        1
-    );
-    assert!(!engine.computed_style_cache_contains_handle_for_document_for_test(document, target));
-    assert!(!engine.computed_style_cache_contains_handle_for_document_for_test(document, later));
     assert!(engine.computed_style_cache_contains_handle_for_document_for_test(document, unrelated));
+    assert_eq!(
+        engine.computed_style_property_value(
+            &host,
+            &document_url,
+            target,
+            "color",
+            None,
+            &inputs,
+            None
+        ),
+        Some("rgb(0, 0, 0)".to_owned()),
+    );
+    assert_eq!(
+        engine.computed_style_property_value(
+            &host,
+            &document_url,
+            later,
+            "color",
+            None,
+            &inputs,
+            None
+        ),
+        Some("rgb(0, 128, 0)".to_owned()),
+    );
 }
 #[test]
 fn retained_stylo_child_list_insertion_uses_element_sibling_relation_across_text() {
@@ -932,7 +954,6 @@ fn retained_stylo_child_list_insertion_uses_element_sibling_relation_across_text
             parent: container,
             added_nodes: vec![inserted],
             removed_nodes: Vec::new(),
-            removed_element_snapshots: Vec::new(),
             previous_sibling: Some(previous),
             next_sibling: Some(text),
         }],
@@ -998,7 +1019,6 @@ fn retained_stylo_child_list_removal_uses_mutation_time_removed_snapshot() {
         parent: document,
         added_nodes: Vec::new(),
         removed_nodes: vec![removed],
-        removed_element_snapshots: removed_element_dependency_snapshots(&host, &[removed]),
         previous_sibling: Some(previous),
         next_sibling: Some(target),
     }];
@@ -1069,7 +1089,6 @@ fn retained_stylo_child_list_removal_preserves_new_previous_sibling_match() {
             parent: document,
             added_nodes: Vec::new(),
             removed_nodes: vec![removed],
-            removed_element_snapshots: removed_element_dependency_snapshots(&host, &[removed]),
             previous_sibling: Some(previous),
             next_sibling: Some(target),
         }],
@@ -1143,7 +1162,6 @@ fn retained_stylo_child_list_removal_uses_element_sibling_relation_across_text()
             parent: container,
             added_nodes: Vec::new(),
             removed_nodes: vec![removed],
-            removed_element_snapshots: removed_element_dependency_snapshots(&host, &[removed]),
             previous_sibling: Some(previous),
             next_sibling: Some(text),
         }],
@@ -1217,7 +1235,6 @@ fn retained_stylo_child_list_removal_uses_previous_element_sibling_across_text()
             parent: container,
             added_nodes: Vec::new(),
             removed_nodes: vec![removed],
-            removed_element_snapshots: removed_element_dependency_snapshots(&host, &[removed]),
             previous_sibling: Some(text),
             next_sibling: Some(target),
         }],
@@ -1290,10 +1307,6 @@ fn retained_stylo_child_list_multi_removal_uses_removed_element_sibling_relation
             parent: document,
             added_nodes: Vec::new(),
             removed_nodes: vec![removed_marker, removed_spacer],
-            removed_element_snapshots: removed_element_dependency_snapshots(
-                &host,
-                &[removed_marker, removed_spacer],
-            ),
             previous_sibling: Some(previous),
             next_sibling: Some(target),
         }],
@@ -1367,10 +1380,6 @@ fn retained_stylo_child_list_multi_removal_preserves_new_previous_sibling_match(
             parent: document,
             added_nodes: Vec::new(),
             removed_nodes: vec![removed_one, removed_two],
-            removed_element_snapshots: removed_element_dependency_snapshots(
-                &host,
-                &[removed_one, removed_two],
-            ),
             previous_sibling: Some(previous),
             next_sibling: Some(target),
         }],

@@ -19,7 +19,10 @@ from pathlib import Path
 
 
 class FixtureCertificateAuthority:
-    def __init__(self, primary_hostname: str, external_host: str | None = None) -> None:
+    def __init__(
+        self, primary_hostname: str, external_host: str | None = None,
+        *, additional_hostnames: tuple[str, ...] = (),
+    ) -> None:
         executable = shutil.which("openssl")
         if executable is None:
             raise RuntimeError("WPT HTTPS fixtures require the openssl executable")
@@ -32,6 +35,7 @@ class FixtureCertificateAuthority:
         self._contexts: dict[str, ssl.SSLContext] = {}
         self._lock = threading.Lock()
         self._closed = False
+        self._fixture_hostnames = ("localhost", *additional_hostnames)
         self._addresses = {"127.0.0.1", "::1"}
         if external_host is not None:
             self._addresses.add(external_host)
@@ -106,7 +110,10 @@ class FixtureCertificateAuthority:
         hostname = hostname.encode("idna").decode("ascii").lower()
         # Issue only for the local fixture namespace. An unrelated name keeps
         # the default certificate and fails normal client hostname validation.
-        if hostname != "localhost" and not hostname.endswith(".localhost"):
+        if not any(
+            hostname == fixture or hostname.endswith("." + fixture)
+            for fixture in self._fixture_hostnames
+        ):
             return
         if any(character not in "abcdefghijklmnopqrstuvwxyz0123456789.-_" for character in hostname):
             return

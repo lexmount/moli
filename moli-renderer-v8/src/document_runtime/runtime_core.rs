@@ -148,6 +148,7 @@ impl DocumentRuntime {
             resource_loader_binding: None,
             script_context_stack: Vec::new(),
             root_document_parser: None,
+            detached_document_write_streams: HashMap::new(),
             post_parse_schedule_invalidated: false,
             stylesheet_lifecycle,
             main_parser_continuation:
@@ -276,6 +277,7 @@ impl DocumentRuntime {
             resource_loader_binding: _,
             script_context_stack: _,
             root_document_parser: _,
+            detached_document_write_streams: _,
             post_parse_schedule_invalidated: _,
             stylesheet_lifecycle: _,
             main_parser_continuation: _,

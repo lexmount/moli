@@ -1,4 +1,4 @@
-use std::{fmt::Debug, hash::Hash, ops::Range};
+use std::{borrow::Cow, fmt::Debug, hash::Hash, ops::Range};
 
 use parley::PositionedLayoutItem;
 
@@ -96,6 +96,7 @@ struct StackingDescendants {
 /// Only IFCs containing atomic objects need fragment-level interleaving. Keep
 /// the existing single-pass text projection for all other paragraphs.
 struct InlineOrder {
+    order: std::sync::Arc<crate::world::BoxOrder>,
     split: Vec<bool>,
     entries: Vec<Vec<PaintOrderEvent>>,
     atomic_lines: Vec<Option<(LayoutBoxId, usize)>>,
@@ -107,11 +108,12 @@ impl InlineOrder {
         N: Copy + Debug + Eq + Hash,
     {
         let mut result = Self {
+            order: world.boxes.order_snapshot(),
             split: vec![false; world.boxes.len()],
             entries: vec![Vec::new(); world.boxes.len()],
             atomic_lines: vec![None; world.boxes.len()],
         };
-        for (owner_index, layout_box) in world.boxes.iter().enumerate() {
+        for (owner_index, layout_box) in world.boxes.ordered().enumerate() {
             let Some(context) = &layout_box.inline_layout else {
                 continue;
             };
@@ -122,10 +124,10 @@ impl InlineOrder {
             {
                 continue;
             }
-            let owner = LayoutBoxId::from_index(owner_index);
+            let owner = world.boxes.id_at(owner_index);
             result.split[owner_index] = true;
             for (fragment, inline) in context.fragments.boxes.iter().enumerate() {
-                result.entries[inline.box_id.index()]
+                result.entries[world.boxes.index_of(inline.box_id)]
                     .push(PaintOrderEvent::InlineBox { owner, fragment });
             }
             let Some(layout) = &context.laid_out else {
@@ -148,7 +150,8 @@ impl InlineOrder {
                     if let Some(object) = context.object(inline.id)
                         && object.role == InlineObjectRole::Atomic
                     {
-                        result.atomic_lines[object.box_id.index()] = Some((owner, line_index));
+                        result.atomic_lines[world.boxes.index_of(object.box_id)] =
+                            Some((owner, line_index));
                     }
                 }
                 for (item, positioned) in line.items().enumerate() {
@@ -179,11 +182,13 @@ impl InlineOrder {
                         .get(source_index)
                         .filter(|source| source.output_range.start < range.end)
                         .map_or(owner, |source| source.box_id);
-                    result.entries[target.index()].push(PaintOrderEvent::InlineText {
-                        owner,
-                        line: line_index,
-                        item,
-                    });
+                    result.entries[world.boxes.index_of(target)].push(
+                        PaintOrderEvent::InlineText {
+                            owner,
+                            line: line_index,
+                            item,
+                        },
+                    );
                 }
                 if let Some(selected) = selected {
                     covered.sort_unstable_by_key(|range| (range.start, range.end));
@@ -265,10 +270,10 @@ impl InlineOrder {
     ) where
         N: Copy + Debug + Eq + Hash,
     {
-        if !world.boxes[target.index()].style.is_visible() {
+        if !world.boxes[target].style.is_visible() {
             return;
         }
-        let entries = &mut self.entries[target.index()];
+        let entries = &mut self.entries[self.order.index_of(target)];
         if let Some(PaintOrderEvent::InlineSelection {
             owner: previous_owner,
             line: previous_line,
@@ -291,9 +296,21 @@ impl InlineOrder {
     }
 
     fn order(&self, id: LayoutBoxId, sequence: &[usize]) -> (usize, usize, usize, usize) {
-        self.atomic_lines[id.index()].map_or(
-            (sequence[id.index()], 0, sequence[id.index()], 0),
-            |(owner, line)| (sequence[owner.index()], line, sequence[id.index()], 0),
+        self.atomic_lines[self.order.index_of(id)].map_or(
+            (
+                sequence[self.order.index_of(id)],
+                0,
+                sequence[self.order.index_of(id)],
+                0,
+            ),
+            |(owner, line)| {
+                (
+                    sequence[self.order.index_of(owner)],
+                    line,
+                    sequence[self.order.index_of(id)],
+                    0,
+                )
+            },
         )
     }
 }
@@ -322,9 +339,9 @@ fn assign_tree_order<N>(
 ) where
     N: Copy + Debug + Eq + Hash,
 {
-    sequence[id.index()] = *next;
+    sequence[world.boxes.index_of(id)] = *next;
     *next += 1;
-    for child in ordered_children(world, id) {
+    for &child in ordered_children(world, id).iter() {
         assign_tree_order(world, child, sequence, next);
     }
 }
@@ -343,7 +360,7 @@ fn emit_context<N>(
     let mut flow = FlowCollection::default();
     let mut stacking = StackingDescendants::default();
     collect_contents(world, root, sequence, inline, &mut flow);
-    for child in ordered_children(world, root) {
+    for &child in ordered_children(world, root).iter() {
         collect_subtree(world, child, sequence, inline, &mut flow, &mut stacking);
     }
     stacking
@@ -376,13 +393,13 @@ fn collect_subtree<N>(
 ) where
     N: Copy + Debug + Eq + Hash,
 {
-    let layout_box = &world.boxes[id.index()];
+    let layout_box = &world.boxes[id];
     let flex_or_grid_item = is_flex_or_grid_item(world, id);
     if layout_box.creates_stacking_context(false, flex_or_grid_item) {
         let context = ChildContext {
             id,
             z_index: layout_box.style.explicit_z_index().unwrap_or(0),
-            sequence: sequence[id.index()],
+            sequence: sequence[world.boxes.index_of(id)],
         };
         match context.z_index.cmp(&0) {
             std::cmp::Ordering::Less => stacking.negative.push(context),
@@ -401,12 +418,17 @@ fn collect_subtree<N>(
     if positioned || floated || atomic {
         let mut local = FlowCollection::default();
         collect_contents(world, id, sequence, inline, &mut local);
-        for child in ordered_children(world, id) {
+        for &child in ordered_children(world, id).iter() {
             collect_subtree(world, child, sequence, inline, &mut local, stacking);
         }
         let entry = PaintEntry {
             order: if positioned || floated {
-                (sequence[id.index()], 0, sequence[id.index()], 0)
+                (
+                    sequence[world.boxes.index_of(id)],
+                    0,
+                    sequence[world.boxes.index_of(id)],
+                    0,
+                )
             } else {
                 inline.order(id, sequence)
             },
@@ -429,7 +451,7 @@ fn collect_subtree<N>(
     }
     collect_contents(world, id, sequence, inline, flow);
     flow.outlines.push(id);
-    for child in ordered_children(world, id) {
+    for &child in ordered_children(world, id).iter() {
         collect_subtree(world, child, sequence, inline, flow, stacking);
     }
 }
@@ -443,15 +465,15 @@ fn collect_contents<N>(
 ) where
     N: Copy + Debug + Eq + Hash,
 {
-    let layout_box = &world.boxes[id.index()];
-    let tree_order = sequence[id.index()];
+    let layout_box = &world.boxes[id];
+    let tree_order = sequence[world.boxes.index_of(id)];
     if !layout_box.inline_flattened {
         flow.inline_contents.push(PaintEntry::event(
             PaintOrderEvent::BoxContents(id),
             tree_order,
         ));
     }
-    if layout_box.inline_layout.is_some() && !inline.split[id.index()] {
+    if layout_box.inline_layout.is_some() && !inline.split[world.boxes.index_of(id)] {
         let mut entry = PaintEntry::event(PaintOrderEvent::InlineContents(id), tree_order);
         entry.order.3 = 1;
         flow.inline_contents.push(entry);
@@ -459,7 +481,7 @@ fn collect_contents<N>(
         text.order.3 = 2;
         flow.inline_contents.push(text);
     }
-    if inline.split[id.index()]
+    if inline.split[world.boxes.index_of(id)]
         && layout_box
             .inline_layout
             .as_ref()
@@ -472,11 +494,11 @@ fn collect_contents<N>(
             kind: PaintEntryKind::Event(PaintOrderEvent::BoxCaret(id)),
         });
     }
-    for event in &inline.entries[id.index()] {
+    for event in &inline.entries[world.boxes.index_of(id)] {
         let (owner, line, item) = match *event {
             PaintOrderEvent::InlineBox { owner, fragment } => (
                 owner,
-                world.boxes[owner.index()]
+                world.boxes[owner]
                     .inline_layout
                     .as_ref()
                     .unwrap()
@@ -492,7 +514,12 @@ fn collect_contents<N>(
             _ => unreachable!(),
         };
         flow.inline_contents.push(PaintEntry {
-            order: (sequence[owner.index()], line, tree_order, item),
+            order: (
+                sequence[world.boxes.index_of(owner)],
+                line,
+                tree_order,
+                item,
+            ),
             kind: PaintEntryKind::Event(*event),
         });
     }
@@ -555,38 +582,32 @@ fn is_flex_or_grid_item<N>(world: &LayoutWorld<N>, id: LayoutBoxId) -> bool
 where
     N: Copy + Debug + Eq + Hash,
 {
-    world.boxes[id.index()].parent.is_some_and(|parent| {
-        let display = world.boxes[parent.index()].style.display();
+    world.boxes[id].parent.is_some_and(|parent| {
+        let display = world.boxes[parent].style.display();
         display.is_flex_container() || display.is_grid_container()
     })
 }
 
-fn ordered_children<N>(world: &LayoutWorld<N>, id: LayoutBoxId) -> Vec<LayoutBoxId>
+fn ordered_children<N>(world: &LayoutWorld<N>, id: LayoutBoxId) -> Cow<'_, [LayoutBoxId]>
 where
     N: Copy + Debug + Eq + Hash,
 {
-    let layout_box = &world.boxes[id.index()];
+    let layout_box = &world.boxes[id];
     let display = layout_box.style.display();
     if !display.is_flex_container() && !display.is_grid_container() {
-        return layout_box.children.clone();
+        return Cow::Borrowed(&layout_box.children);
     }
-    let mut children = layout_box
-        .children
-        .iter()
-        .copied()
-        .enumerate()
-        .collect::<Vec<_>>();
-    children.sort_by_key(|(document_order, child)| {
-        let child = &world.boxes[child.index()];
-        let order = if matches!(
+    let mut children = layout_box.children.clone();
+    children.sort_by_key(|child| {
+        let child = &world.boxes[child];
+        if matches!(
             child.style.position(),
             LayoutPosition::Absolute | LayoutPosition::Fixed
         ) {
             0
         } else {
             child.style.order()
-        };
-        (order, *document_order)
+        }
     });
-    children.into_iter().map(|(_, child)| child).collect()
+    Cow::Owned(children)
 }

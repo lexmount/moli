@@ -67,11 +67,20 @@ pub(in crate::native_bridge) fn media_video_width_getter_function<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'s, v8::Value>,
 ) {
-    if video_getter_receiver(scope, args.this(), "videoWidth").is_none() {
+    let Some((_host, _handle)) = video_getter_receiver(scope, args.this(), "videoWidth") else {
         rv.set_uint32(0);
         return;
-    }
-    rv.set_uint32(0);
+    };
+    let width = 0;
+    #[cfg(all(
+        feature = "media-ext",
+        any(target_os = "linux", target_os = "macos"),
+        target_pointer_width = "64"
+    ))]
+    let width = unsafe { &*_host }
+        .video_dimensions(_handle)
+        .map_or(width, |(width, _)| width);
+    rv.set_uint32(width);
 }
 
 pub(in crate::native_bridge) fn media_video_height_getter_function<'s>(
@@ -79,11 +88,20 @@ pub(in crate::native_bridge) fn media_video_height_getter_function<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'s, v8::Value>,
 ) {
-    if video_getter_receiver(scope, args.this(), "videoHeight").is_none() {
+    let Some((_host, _handle)) = video_getter_receiver(scope, args.this(), "videoHeight") else {
         rv.set_uint32(0);
         return;
-    }
-    rv.set_uint32(0);
+    };
+    let height = 0;
+    #[cfg(all(
+        feature = "media-ext",
+        any(target_os = "linux", target_os = "macos"),
+        target_pointer_width = "64"
+    ))]
+    let height = unsafe { &*_host }
+        .video_dimensions(_handle)
+        .map_or(height, |(_, height)| height);
+    rv.set_uint32(height);
 }
 
 pub(in crate::native_bridge) fn media_width_getter_function<'s>(

@@ -58,6 +58,7 @@ pub(super) struct ChildBrowsingContextEntry {
     document_policy_container: ChildDocumentPolicyContainer,
     completed_frame_owner_resource_timing: Option<CompletedFrameOwnerResourceTiming>,
     performance_time_origin: ChildPerformanceTimeOrigin,
+    pending_stylesheet_resource_timing: Vec<crate::context_bootstrap::ResourcePerformanceEntry>,
     pending_document_load_id: Option<u64>,
     classic_script_document_state: classic_scripts::ChildClassicScriptDocumentState,
     document_domain_override: Rc<RefCell<Option<String>>>,
@@ -110,6 +111,7 @@ impl ChildBrowsingContextEntry {
     pub(super) fn clear_document_runtime_state(&mut self) {
         self.clear_script_execution_state();
         self.clear_document_domain_override();
+        self.pending_stylesheet_resource_timing.clear();
     }
 
     pub(super) fn document_domain_override(&self) -> Option<String> {
@@ -228,6 +230,10 @@ impl ChildBrowsingContextEntry {
 
     pub(super) fn security_origin_inherited(&self) -> bool {
         self.live_bootstrap.security_origin_inherited()
+    }
+
+    pub(super) fn content_security_policy_inherited(&self) -> bool {
+        self.live_bootstrap.content_security_policy_inherited()
     }
 
     pub(super) fn document_policy_container_snapshot(&self) -> ChildDocumentPolicyContainer {

@@ -104,12 +104,21 @@ async fn media_load_honors_media_src_csp() {
 
 #[tokio::test]
 async fn media_report_only_csp_reports_without_blocking_load() {
+    use base64::Engine as _;
+
+    let mp4 = base64::engine::general_purpose::STANDARD.encode(include_bytes!(
+        "../../../../../moli-video/tests/fixtures/primary-colors.mp4"
+    ));
     let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
     let mut vm = new_storage_page_task_executor_test_vm_with_loader(
         "https://media-csp-report-only.test/page.html",
         &loader,
     );
     vm.set_response_content_security_report_only_policies(&["media-src 'none'".to_owned()]);
+    vm.eval(&format!(
+        "globalThis.__reportOnlyMp4 = 'data:video/mp4;base64,{mp4}'"
+    ))
+    .expect("video fixture should install");
 
     vm.eval(
         r#"
@@ -121,7 +130,7 @@ async fn media_report_only_csp_reports_without_blocking_load() {
   const video = document.createElement('video');
   video.onloadeddata = () => __lmMediaReportOnlyEvents.push('loadeddata');
   video.onerror = () => __lmMediaReportOnlyEvents.push('error');
-  video.src = 'data:video/mp4;base64,AAAAGGZ0eXBtcDQyAAAAAG1wNDJtcDQx';
+  video.src = __reportOnlyMp4;
   (document.body || document.documentElement || document).appendChild(video);
   globalThis.__lmMediaReportOnlyVideo = video;
 })()
@@ -134,7 +143,30 @@ async fn media_report_only_csp_reports_without_blocking_load() {
         1
     );
 
-    for phase in ["loadstart", "loadedmetadata", "loadeddata", "canplay"] {
+    run_next_page_media_element_event_for_test(
+        &mut vm,
+        &loader,
+        "report-only media loadstart turn",
+    )
+    .await;
+    #[cfg(all(
+        feature = "media-ext",
+        any(target_os = "linux", target_os = "macos"),
+        target_pointer_width = "64"
+    ))]
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        while !vm
+            .run_one_media_element_event_executor_turn(&loader)
+            .await
+            .expect("video decoder completion should dispatch")
+        {
+            tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+        }
+    })
+    .await
+    .expect("local MP4 should decode");
+
+    for phase in ["loadedmetadata", "loadeddata", "canplay"] {
         run_next_page_media_element_event_for_test(
             &mut vm,
             &loader,
@@ -154,6 +186,306 @@ async fn media_report_only_csp_reports_without_blocking_load() {
         .expect("media report-only CSP events should evaluate"),
         "csp:report:media-src|loadeddata|4|1"
     );
+}
+
+#[cfg(all(
+    feature = "media-ext",
+    any(target_os = "linux", target_os = "macos"),
+    target_pointer_width = "64"
+))]
+#[tokio::test]
+async fn media_source_object_url_uses_the_executing_window_during_child_resource_tasks() {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
+    let mut vm = new_storage_page_task_executor_test_vm_with_loader(
+        "https://media-source-realm.test/",
+        &loader,
+    );
+    vm.eval(
+        r#"
+        const frame = document.createElement('iframe');
+        frame.id = 'child';
+        frame.setAttribute('sandbox', 'allow-scripts');
+        frame.srcdoc = '<!doctype html><p>Child</p>';
+        document.body.appendChild(frame);
+        globalThis.media = document.body.appendChild(document.createElement('video'));
+        globalThis.mediaSource = new MediaSource();
+        "#,
+    )
+    .unwrap();
+    vm.drain_ready_child_frame_task_executor_turns_for_setup(&loader, 32)
+        .await
+        .unwrap();
+
+    vm.with_default_context_scope(|scope, host_ptr| {
+        let host = unsafe { &mut *host_ptr };
+        let child = host.dom_host().element_handle_by_id("child").unwrap();
+        assert_eq!(
+            host.storage_context_for_child_browsing_context(child)
+                .unwrap()
+                .storage_key()
+                .origin(),
+            "null"
+        );
+        // The selected resource task can still attribute work to the child
+        // while a callback executes in the main Window.
+        let previous = crate::native_bridge::enter_active_child_window_scope(scope, Some(child));
+        let source = crate::util::v8str(
+            scope,
+            r#"
+            globalThis.mediaUrl = URL.createObjectURL(mediaSource);
+            media.src = mediaUrl;
+            URL.revokeObjectURL(mediaUrl);
+            "#,
+        );
+        let result = v8::Script::compile(scope, source, None)
+            .and_then(|script| crate::script_execution::execute_compiled_script(scope, script));
+        crate::native_bridge::restore_active_child_window_scope(scope, previous);
+        assert!(result.is_some(), "creating and attaching the object URL");
+        Ok(())
+    })
+    .unwrap();
+
+    assert_eq!(
+        vm.eval("new URL(mediaUrl).origin").unwrap(),
+        "https://media-source-realm.test"
+    );
+    assert_eq!(vm.eval("mediaSource.readyState").unwrap(), "open");
+}
+
+#[cfg(all(
+    feature = "media-ext",
+    any(target_os = "linux", target_os = "macos"),
+    target_pointer_width = "64"
+))]
+#[tokio::test]
+async fn media_source_appends_h264_and_paints_the_seeked_frame() {
+    use base64::Engine as _;
+    use moli_layout::{
+        LayoutFlushReason, LayoutPassRequest, LayoutRect, LayoutViewport, PaintFragment,
+    };
+    use std::time::Duration;
+
+    let mp4 = base64::engine::general_purpose::STANDARD.encode(include_bytes!(
+        "../../../../../moli-video/tests/fixtures/primary-colors-fragmented.mp4"
+    ));
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+    let mut vm = new_storage_page_task_executor_test_vm_with_loader(
+        "https://media-source-video.test/",
+        &loader,
+    );
+    vm.eval(&format!("globalThis.fragmentedFile = '{mp4}'"))
+        .unwrap();
+    vm.eval(
+        r#"
+        globalThis.testVideo = document.createElement('video');
+        globalThis.testSource = new MediaSource();
+        globalThis.testUrl = URL.createObjectURL(testSource);
+        globalThis.sourceEvents = [];
+        testSource.onsourceopen = () => {
+          URL.revokeObjectURL(testUrl);
+          const bytes = Uint8Array.from(atob(fragmentedFile), byte => byte.charCodeAt(0));
+          const buffer = testSource.addSourceBuffer('video/mp4; codecs="avc1.64000a"');
+          sourceEvents.push(testSource.sourceBuffers[0] === buffer);
+          buffer.onupdatestart = () => sourceEvents.push(buffer.updating);
+          buffer.onupdateend = () => {
+            sourceEvents.push(buffer.buffered.length);
+            testSource.endOfStream();
+          };
+          buffer.appendBuffer(bytes);
+        };
+        testVideo.style.cssText = 'position:absolute;inset:0 auto auto 0;width:96px;height:96px';
+        (document.body || document.documentElement).appendChild(testVideo);
+        testVideo.src = testUrl;
+        "#,
+    )
+    .unwrap();
+
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while vm
+            .eval("testVideo.readyState === 4 && testSource.readyState === 'ended'")
+            .unwrap()
+            != "true"
+        {
+            if !vm
+                .run_one_media_element_event_executor_turn(&loader)
+                .await
+                .unwrap()
+            {
+                tokio::time::sleep(Duration::from_millis(1)).await;
+            }
+        }
+        assert_eq!(
+            vm.eval("JSON.stringify(sourceEvents)").unwrap(),
+            "[true,true,1]"
+        );
+        assert_eq!(vm.eval("testVideo.videoWidth").unwrap(), "48");
+        vm.eval("testVideo.currentTime = 1.6").unwrap();
+        while vm.eval("testVideo.seeking").unwrap() == "true" {
+            if !vm
+                .run_one_media_element_event_executor_turn(&loader)
+                .await
+                .unwrap()
+            {
+                tokio::time::sleep(Duration::from_millis(1)).await;
+            }
+        }
+    })
+    .await
+    .expect("fragmented video decoded and seeked");
+
+    for (fit, destination) in [
+        ("", LayoutRect::new(0.0, 16.0, 96.0, 64.0)),
+        ("fill", LayoutRect::new(0.0, 0.0, 96.0, 96.0)),
+    ] {
+        vm.eval(&format!("testVideo.style.objectFit = '{fit}'"))
+            .unwrap();
+        let runtime = vm._context_host.borrow();
+        let pass = runtime
+            .build_layout_pass_for_document(
+                runtime.document_handle(),
+                LayoutPassRequest::with_paint(
+                    LayoutViewport::new(120, 120, 1.0),
+                    LayoutFlushReason::Test,
+                ),
+            )
+            .unwrap()
+            .unwrap();
+        let snapshot = pass.paint_snapshot().unwrap();
+        let image = snapshot
+            .fragments
+            .iter()
+            .find_map(|fragment| match fragment {
+                PaintFragment::Image(image) => Some(image),
+                _ => None,
+            })
+            .expect("the seeked video frame should be painted");
+        assert_eq!(
+            image.destination, destination,
+            "object-fit declaration {fit:?}"
+        );
+
+        let pixels = &snapshot.image(image.image).unwrap().image;
+        let pixel = &pixels.rgba[..4];
+        assert!(pixel[0] < 12 && pixel[1] < 12 && pixel[2] > 240 && pixel[3] == 255);
+    }
+}
+
+#[cfg(all(
+    feature = "media-ext",
+    target_os = "macos",
+    target_pointer_width = "64"
+))]
+#[tokio::test]
+async fn media_source_buffers_h264_and_aac() {
+    use base64::Engine as _;
+    use std::time::Duration;
+
+    let encode = |bytes| base64::engine::general_purpose::STANDARD.encode(bytes);
+    let audio = encode(
+        include_bytes!("../../../../../moli-video/tests/fixtures/aac-fragmented.mp4").as_slice(),
+    );
+    let video = encode(
+        include_bytes!("../../../../../moli-video/tests/fixtures/primary-colors-fragmented.mp4")
+            .as_slice(),
+    );
+    let muxed = encode(
+        include_bytes!(
+            "../../../../../moli-video/tests/fixtures/primary-colors-aac-fragmented.mp4"
+        )
+        .as_slice(),
+    );
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
+    for combined in [false, true] {
+        let mut vm = new_storage_page_task_executor_test_vm_with_loader(
+            "https://media-source-audio.test/",
+            &loader,
+        );
+        vm.eval(&format!(
+            "globalThis.mediaFixtures = {{combined: {combined}, audio: '{audio}', video: '{video}', muxed: '{muxed}'}}"
+        )).unwrap();
+        vm.eval(
+            r#"
+            globalThis.media = document.createElement('video');
+            media.id = 'media';
+            globalThis.source = new MediaSource();
+            globalThis.result = null;
+            const types = {
+              audio: 'audio/mp4; codecs="mp4a.40.2"',
+              video: 'video/mp4; codecs="avc1.64000a"',
+              muxed: 'video/mp4; codecs="avc1.64000a, mp4a.40.2"'
+            };
+            const bytes = key => Uint8Array.from(atob(mediaFixtures[key]), c => c.charCodeAt(0));
+            const url = URL.createObjectURL(source);
+            source.onsourceopen = () => {
+              URL.revokeObjectURL(url);
+              if (!Object.values(types).every(type => MediaSource.isTypeSupported(type))) {
+                result = 'unsupported';
+                return;
+              }
+              const kinds = mediaFixtures.combined ? ['muxed'] : ['audio', 'video'];
+              const buffers = kinds.map(kind => source.addSourceBuffer(types[kind]));
+              let pending = buffers.length;
+              for (let i = 0; i < buffers.length; i++) {
+                const buffer = buffers[i];
+                buffer.onerror = () => result = 'append error';
+                buffer.onupdateend = () => {
+                  if (--pending === 0 && result === null) {
+                    result = buffers.every((buffer, i) =>
+                      source.sourceBuffers[i] === buffer
+                      && source.activeSourceBuffers[i] === buffer
+                      && buffer.buffered.length === 1
+                      && buffer.buffered.end(0) >= 2)
+                      && source.sourceBuffers.length === buffers.length;
+                    source.endOfStream();
+                  }
+                };
+                buffer.appendBuffer(bytes(kinds[i]));
+              }
+            };
+            media.muted = true;
+            (document.body || document.documentElement).appendChild(media);
+            media.src = url;
+            "#,
+        )
+        .unwrap();
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while vm
+                .eval("result === null || (result === true && media.readyState < 4)")
+                .unwrap()
+                == "true"
+            {
+                if !vm
+                    .run_one_media_element_event_executor_turn(&loader)
+                    .await
+                    .unwrap()
+                {
+                    tokio::time::sleep(Duration::from_millis(1)).await;
+                }
+            }
+        })
+        .await
+        .expect("H.264 and AAC buffers should finish consuming the fixtures");
+        assert_eq!(vm.eval("String(result)").unwrap(), "true");
+        assert_eq!(vm.eval("media.videoWidth").unwrap(), "48");
+        assert_eq!(vm.eval("media.buffered.length").unwrap(), "1");
+        assert_eq!(vm.eval("source.readyState").unwrap(), "ended");
+
+        assert_eq!(vm.eval("(media.play(), media.paused)").unwrap(), "false");
+        let media = vm
+            ._context_host
+            .borrow()
+            .dom_host()
+            .element_handle_by_id("media")
+            .unwrap();
+        assert!(vm._context_host.borrow().video_current_time(media).unwrap() > 0.0);
+
+        vm.close_page_context_resources_for_context_teardown();
+
+        assert!(
+            !vm._context_host.borrow().manages_video(media),
+            "page teardown should release playback while its document host still exists"
+        );
+    }
 }
 
 #[tokio::test]

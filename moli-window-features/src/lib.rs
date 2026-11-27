@@ -143,6 +143,11 @@ impl WindowOpenFeatures {
         self.is_popup
     }
 
+    /// Returns the requested horizontal and vertical position of a new window.
+    pub fn requested_position(&self) -> (Option<i32>, Option<i32>) {
+        (self.x, self.y)
+    }
+
     /// Returns the normalized enabled features used by the popup runtime.
     pub fn enabled_feature_strings(&self) -> Vec<String> {
         let mut enabled = Vec::new();

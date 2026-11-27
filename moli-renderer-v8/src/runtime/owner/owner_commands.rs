@@ -24,6 +24,7 @@ impl RendererOwnerHandle {
         self.configure_layout_configuration(moli_page_types::LayoutConfiguration {
             policy,
             scrollbars_hidden,
+            ..Default::default()
         })
     }
 
@@ -857,6 +858,15 @@ impl RendererOwnerHandle {
                 .subscribe_page_navigation(token)
                 .map(RendererOwnerReply::PageNavigationSubscription)
                 .into(),
+            #[cfg(feature = "molio")]
+            RendererOwnerCommand::ViewportDisplayTick {
+                token,
+                viewport_revision,
+                time,
+            } => {
+                owner_local_store.accept_viewport_display_tick(token, viewport_revision, time);
+                Ok(RendererOwnerReply::ViewportDisplayTickProcessed).into()
+            }
             RendererOwnerCommand::TestingCurrentPageState { token } => {
                 owner_local_store_session(owner_local_store)
                     .current_page_state_for_testing(token)

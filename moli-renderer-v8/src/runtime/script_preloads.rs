@@ -247,6 +247,11 @@ impl BufferedDocumentPreloadState {
             .clone()
             .expect("script preloads require the navigation resource task runner");
         for request in requests {
+            // The pre-bootstrap scanner has no Document capability yet.
+            // Let the parser request file scripts after that Document commits.
+            if request.url.scheme() == "file" && !loader.has_document_file_access() {
+                continue;
+            }
             let key = request.cache_key();
             if self.entries.contains_key(&key) {
                 continue;
@@ -365,6 +370,20 @@ impl BufferedDocumentPreloadState {
         self.response_csp_requires_parser_admission = required;
     }
 
+    fn scan_main_document_chunk(
+        &mut self,
+        document_url: &Url,
+        html: &str,
+    ) -> BufferedPreloadScanBatch {
+        let scanner = self.main_document_scanner.get_or_insert_with(|| {
+            Box::new(IncrementalHtmlPreloadScanner::new(document_url.clone()))
+        });
+        let batch = scanner.scan_chunk(html);
+        self.meta_csp_preload_gate
+            .note_scanner_seen(batch.discovered_meta_csp_count);
+        batch
+    }
+
     pub(super) fn append_to_main_document_scan(
         &mut self,
         final_url: &Url,
@@ -386,12 +405,7 @@ impl BufferedDocumentPreloadState {
         if html.is_empty() {
             return;
         }
-        let scanner = self
-            .main_document_scanner
-            .get_or_insert_with(|| Box::new(IncrementalHtmlPreloadScanner::new(final_url.clone())));
-        let batch = scanner.scan_chunk(html);
-        self.meta_csp_preload_gate
-            .note_scanner_seen(batch.discovered_meta_csp_count);
+        let batch = self.scan_main_document_chunk(final_url, html);
         self.schedule_preloads_for_requests(
             batch.script_requests,
             final_url,
@@ -413,12 +427,7 @@ impl BufferedDocumentPreloadState {
             return;
         }
         let timing_started = moli_trace::cdp_nav_timing_enabled().then(std::time::Instant::now);
-        let scanner = self
-            .main_document_scanner
-            .get_or_insert_with(|| Box::new(IncrementalHtmlPreloadScanner::new(final_url.clone())));
-        let batch = scanner.scan_chunk(html);
-        self.meta_csp_preload_gate
-            .note_scanner_seen(batch.discovered_meta_csp_count);
+        let batch = self.scan_main_document_chunk(final_url, html);
         let discovered_count = batch.script_requests.len();
         // Bootstrap-time scanning runs before the parser can execute inline code.
         // Keep it narrow to requests that can affect DCL: parser-blocking classic,

@@ -156,6 +156,11 @@ class WptCrossCliRunnerTests(WptCrossTestCase):
                         120.0,
                         LONG_TIMEOUT_MULTIPLIER,
                     ),
+                    (
+                        "mixed.https.html",
+                        "https://web-platform.test:8443/mixed.https.html",
+                        120.0,
+                    ),
                 ],
                 parallelism=1,
                 progress_every=0,
@@ -172,6 +177,9 @@ class WptCrossCliRunnerTests(WptCrossTestCase):
             pool.submitted[1][1].harness_timeout_multiplier,
             LONG_TIMEOUT_MULTIPLIER,
         )
+        self.assertFalse(pool.submitted[0][1].mixed_content)
+        self.assertTrue(pool.submitted[2][1].mixed_content)
+        self.assertFalse(pool.submitted[2][1].external)
         self.assertTrue(all(case.status == "pass" for case in result.cases))
         self.assertEqual(result.shutdown_info["scheduler"], "process-pool")
     def test_moli_cli_worker_appends_hardcoded_wpt_user_agent(self) -> None:

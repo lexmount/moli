@@ -7,7 +7,7 @@ impl PageScriptHost {
         &self,
         url: &Url,
     ) -> bool {
-        matches!(url.scheme(), "http" | "https")
+        matches!(url.scheme(), "http" | "https" | "file")
     }
 
     pub(in crate::native_bridge::context_host::child_documents) fn child_document_bootstrap_requires_async_load(

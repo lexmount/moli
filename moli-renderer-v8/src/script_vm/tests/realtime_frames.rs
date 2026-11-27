@@ -72,10 +72,10 @@ fn realtime_frame_viewport_reads_share_current_layout_and_propagate_failures() {
 }
 
 #[test]
-fn viewport_reads_do_not_add_layout_to_legacy_modes_or_top_level_queries() {
+fn viewport_reads_refresh_only_the_affected_frame_layout() {
     for policy in [
         LayoutPolicy::Mock,
-        LayoutPolicy::OnDemand,
+        LayoutPolicy::Lazy,
         LayoutPolicy::Realtime,
     ] {
         let mut vm = frame_fixture(policy, 320, 100);
@@ -94,13 +94,19 @@ fn viewport_reads_do_not_add_layout_to_legacy_modes_or_top_level_queries() {
             "{policy:?}"
         );
         if policy != LayoutPolicy::Realtime {
-            vm.eval("viewport.width;viewport.height;query.matches;child.matchMedia('(width:400px)').matches")
-                .unwrap();
-            assert_eq!(
-                vm.layout_pass_observability_for_test().1,
-                before,
-                "{policy:?}"
-            );
+            let read = "JSON.stringify([viewport.width, viewport.height, query.matches, child.matchMedia('(width:400px)').matches])";
+            let expected_builds = before + u64::from(policy == LayoutPolicy::Lazy);
+            for _ in 0..2 {
+                let values = vm.eval(read).unwrap();
+                if policy == LayoutPolicy::Lazy {
+                    assert_eq!(values, "[400,100,true,true]");
+                }
+                assert_eq!(
+                    vm.layout_pass_observability_for_test().1,
+                    expected_builds,
+                    "{policy:?}"
+                );
+            }
             assert!(
                 !vm._context_host
                     .borrow()
@@ -186,7 +192,7 @@ fn realtime_layout_zero_frame_resize_and_display_none_have_distinct_results() {
 
 #[test]
 fn legacy_layout_keeps_its_existing_zero_frame_coverage() {
-    let mut vm = frame_fixture(LayoutPolicy::OnDemand, 0, 0);
+    let mut vm = frame_fixture(LayoutPolicy::Lazy, 0, 0);
     let before = vm.layout_pass_observability_for_test().1;
     assert_eq!(vm.eval("String(fixed.offsetWidth)").unwrap(), "0");
     assert_eq!(vm.layout_pass_observability_for_test().1, before + 1);
@@ -251,7 +257,7 @@ fn realtime_child_window_reads_refresh_then_preserve_hidden_viewports() {
 
 #[test]
 fn legacy_hidden_frame_cssom_keeps_its_existing_empty_declaration() {
-    for policy in [LayoutPolicy::Mock, LayoutPolicy::OnDemand] {
+    for policy in [LayoutPolicy::Mock, LayoutPolicy::Lazy] {
         let mut vm = frame_fixture(policy, 320, 100);
         vm.eval("globalThis.retained=getComputedStyle(fixed);frame.style.display='none'")
             .unwrap();
@@ -265,21 +271,30 @@ fn legacy_hidden_frame_cssom_keeps_its_existing_empty_declaration() {
 
 #[test]
 fn realtime_required_frame_depth_fails_instead_of_publishing_missing_geometry() {
-    let mut vm = frame_fixture(LayoutPolicy::Realtime, 320, 100);
-    vm.eval(
-        "let parent=child;\
-         for(let i=0;i<33;i++){\
-           const nested=parent.document.createElement('iframe');\
-           nested.style.cssText='width:320px;height:100px;border:0';\
-           parent.document.body.append(nested);parent=nested.contentWindow;\
-           parent.document.open();parent.document.write('<!doctype html><body><div id=deep style=width:100px></div>');parent.document.close();\
-         }\
-         globalThis.deep=parent.document.getElementById('deep')",
-    ).unwrap();
-    let before = vm.layout_pass_observability_for_test().1;
-    let error = vm.eval("deep.offsetWidth").unwrap_err();
-    assert!(error.to_string().contains("required Document"), "{error}");
-    assert_eq!(vm.layout_pass_observability_for_test().1, before);
-    vm.eval("frame.style.display='none'").unwrap();
-    assert_eq!(vm.eval("String(deep.offsetWidth)").unwrap(), "0");
+    // Exercise the layout depth limit on the renderer's native stack budget.
+    std::thread::Builder::new()
+        .name("realtime-frame-depth".to_owned())
+        .stack_size(crate::render_runtime::RENDER_RUNTIME_STACK_SIZE_BYTES)
+        .spawn(|| {
+            let mut vm = frame_fixture(LayoutPolicy::Realtime, 320, 100);
+            vm.eval(
+                "let parent=child;\
+                 for(let i=0;i<33;i++){\
+                   const nested=parent.document.createElement('iframe');\
+                   nested.style.cssText='width:320px;height:100px;border:0';\
+                   parent.document.body.append(nested);parent=nested.contentWindow;\
+                   parent.document.open();parent.document.write('<!doctype html><body><div id=deep style=width:100px></div>');parent.document.close();\
+                 }\
+                 globalThis.deep=parent.document.getElementById('deep')",
+            ).unwrap();
+            let before = vm.layout_pass_observability_for_test().1;
+            let error = vm.eval("deep.offsetWidth").unwrap_err();
+            assert!(error.to_string().contains("required Document"), "{error}");
+            assert_eq!(vm.layout_pass_observability_for_test().1, before);
+            vm.eval("frame.style.display='none'").unwrap();
+            assert_eq!(vm.eval("String(deep.offsetWidth)").unwrap(), "0");
+        })
+        .expect("frame-depth test thread should spawn")
+        .join()
+        .expect("frame-depth test thread should finish");
 }

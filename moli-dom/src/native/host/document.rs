@@ -52,6 +52,8 @@ impl DomHost {
         let mut host = Self {
             dom,
             dom_version: Cell::new(0),
+            document_layout_versions: RefCell::new(HashMap::new()),
+            tracked_layout_changes: RefCell::default(),
             query_version: Cell::new(0),
             shadow_root_binding_version: Cell::new(0),
             connected_shadow_roots_version: Cell::new(0),
@@ -197,6 +199,89 @@ impl DomHost {
         self.dom_version.get()
     }
 
+    /// Revision of the connected native layout inputs for one Document.
+    /// CSS-only attribute changes are tracked by style invalidation.
+    pub fn document_layout_version(&self, document: DomHandle) -> u64 {
+        self.document_layout_versions
+            .borrow()
+            .get(&document)
+            .copied()
+            .unwrap_or(0)
+    }
+
+    /// Start collecting changes for the newly published world, or retire it.
+    pub fn track_layout_changes(&self, document: Option<DomHandle>) {
+        let mut tracking = self.tracked_layout_changes.borrow_mut();
+        if let Some(tracked) = tracking.as_mut()
+            && document == Some(tracked.document)
+        {
+            tracked.targets.clear();
+            tracked.has_native_changes = false;
+            return;
+        }
+        *tracking = document.map(|document| {
+            Box::new(TrackedLayoutChanges {
+                document,
+                targets: IndexSet::new(),
+                has_native_changes: false,
+            })
+        });
+    }
+
+    pub fn tracked_layout_targets(&self, document: DomHandle) -> Option<Vec<DomHandle>> {
+        self.tracked_layout_changes
+            .borrow()
+            .as_ref()
+            .filter(|tracked| tracked.document == document)
+            .map(|tracked| tracked.targets.iter().copied().collect())
+    }
+
+    pub fn tracked_layout_changes_are_inline_style_only(&self, document: DomHandle) -> bool {
+        self.tracked_layout_changes
+            .borrow()
+            .as_ref()
+            .is_some_and(|tracked| {
+                tracked.document == document
+                    && !tracked.targets.is_empty()
+                    && !tracked.has_native_changes
+            })
+    }
+
+    /// A native source such as scrolling changed without a DOM mutation.
+    pub fn note_tracked_layout_target(&self, target: DomHandle) {
+        self.note_tracked_target(target, false);
+    }
+
+    pub fn note_tracked_inline_style_target(&self, target: DomHandle) {
+        self.note_tracked_target(target, true);
+    }
+
+    fn note_tracked_target(&self, target: DomHandle, inline_style: bool) {
+        if let Some(document) = self.layout_document_for_mutation_target(target) {
+            self.record_tracked_layout_target(document, target, inline_style);
+        }
+    }
+
+    fn record_tracked_layout_target(
+        &self,
+        document: DomHandle,
+        target: DomHandle,
+        inline_style: bool,
+    ) {
+        const MAX_TRACKED_LAYOUT_TARGETS: usize = 1_024;
+
+        let mut tracking = self.tracked_layout_changes.borrow_mut();
+        if let Some(tracked) = tracking.as_mut()
+            && tracked.document == document
+        {
+            tracked.targets.insert(target);
+            tracked.has_native_changes |= !inline_style;
+            if tracked.targets.len() > MAX_TRACKED_LAYOUT_TARGETS {
+                *tracking = None;
+            }
+        }
+    }
+
     pub fn shadow_root_binding_version(&self) -> u64 {
         self.shadow_root_binding_version.get()
     }
@@ -223,13 +308,49 @@ impl DomHost {
             .unwrap_or(0)
     }
 
-    pub(super) fn record_mutation(&self, scope: MutationScope) {
-        self.dom_version
-            .set(self.dom_version.get().saturating_add(1));
+    pub(super) fn record_mutation(
+        &self,
+        scope: MutationScope,
+        layout_targets: impl IntoIterator<Item = DomHandle>,
+    ) {
+        self.record_mutation_and_layout_input(scope, layout_targets, false);
+    }
+
+    pub(super) fn record_mutation_and_layout_input(
+        &self,
+        scope: MutationScope,
+        layout_targets: impl IntoIterator<Item = DomHandle>,
+        inline_style: bool,
+    ) {
+        let revision = self.dom_version.get().saturating_add(1);
+        self.dom_version.set(revision);
+        for handle in layout_targets {
+            if let Some(document) = self.layout_document_for_mutation_target(handle) {
+                self.document_layout_versions
+                    .borrow_mut()
+                    .insert(document, revision);
+                self.record_tracked_layout_target(document, handle, inline_style);
+            }
+        }
         if matches!(scope, MutationScope::QueryState) {
             self.query_version
                 .set(self.query_version.get().saturating_add(1));
             self.live_collection_cache.borrow_mut().clear();
+        }
+    }
+
+    pub(super) fn layout_document_for_mutation_target(
+        &self,
+        handle: DomHandle,
+    ) -> Option<DomHandle> {
+        let node = self.node(handle)?;
+        if node.is_document() {
+            Some(handle)
+        } else if node.is_connected() {
+            node.owner_document()
+        } else {
+            // DOM isConnected also includes nodes in inactive Documents.
+            None
         }
     }
 
@@ -384,10 +505,11 @@ impl DomHost {
             self.record_connected_shadow_roots_mutation();
             self.record_document_tree_scope_mutations(touched_documents);
         }
-        self.record_mutation(MutationScope::QueryState);
+        self.record_mutation(MutationScope::QueryState, [root]);
     }
 
     pub fn mark_subtree_disconnected_preserving_owner_document(&mut self, root: DomHandle) {
+        let previous_document = self.layout_document_for_mutation_target(root);
         let mut touched_shadow_root = false;
         let mut touched_documents = HashSet::new();
         let mut stylesheet_owners = Vec::new();
@@ -417,7 +539,7 @@ impl DomHost {
             self.record_connected_shadow_roots_mutation();
             self.record_document_tree_scope_mutations(touched_documents);
         }
-        self.record_mutation(MutationScope::QueryState);
+        self.record_mutation(MutationScope::QueryState, previous_document);
     }
 
     fn tree_scope_owner_document_for_shadow_host(&self, handle: DomHandle) -> Option<DomHandle> {
@@ -591,11 +713,13 @@ impl DomHost {
     }
 
     pub fn set_active_element_handle(&self, handle: Option<DomHandle>) {
-        if self.active_element.get() == handle {
-            return;
+        let previous = self.active_element.replace(handle);
+        if previous != handle {
+            self.record_mutation(
+                MutationScope::QueryState,
+                previous.into_iter().chain(handle),
+            );
         }
-        self.active_element.set(handle);
-        self.record_mutation(MutationScope::QueryState);
     }
 
     pub fn element_matches_focus(&self, handle: DomHandle) -> bool {
@@ -664,17 +788,18 @@ impl DomHost {
             return false;
         }
         *hovered = next;
-        drop(hovered);
-        self.record_mutation(MutationScope::QueryState);
+        // Hover is a selector input. The renderer invalidates the affected
+        // styles and determines whether their damage requires layout.
+        self.record_mutation(MutationScope::QueryState, []);
         true
     }
 
     pub fn clear_hovered_element_handles(&self) {
-        if self.hovered_elements.borrow().is_empty() {
+        let mut hovered = self.hovered_elements.borrow_mut();
+        if hovered.is_empty() {
             return;
         }
-        self.hovered_elements.borrow_mut().clear();
-        self.record_mutation(MutationScope::QueryState);
+        self.record_mutation(MutationScope::QueryState, hovered.drain(..));
     }
 
     pub(super) fn prune_disconnected_hovered_elements(&self) {
@@ -1071,7 +1196,7 @@ impl DomHost {
             return false;
         }
         document.set_design_mode_enabled(design_mode_enabled);
-        self.record_mutation(MutationScope::QueryState);
+        self.record_mutation(MutationScope::QueryState, [document_handle]);
         true
     }
 
@@ -1199,7 +1324,7 @@ impl DomHost {
         }
         document.set_url(url);
         self.dom.process_base_element(document_handle, true);
-        self.record_mutation(MutationScope::LocalState);
+        self.record_mutation(MutationScope::LocalState, [document_handle]);
         self.update_document_target_from_url(document_handle);
         true
     }
@@ -1219,7 +1344,7 @@ impl DomHost {
             return false;
         }
         self.dom.process_base_element(document_handle, true);
-        self.record_mutation(MutationScope::LocalState);
+        self.record_mutation(MutationScope::LocalState, [document_handle]);
         true
     }
 
@@ -1242,7 +1367,7 @@ impl DomHost {
             return false;
         }
         document.set_character_set(character_set);
-        self.record_mutation(MutationScope::LocalState);
+        self.record_mutation(MutationScope::LocalState, [document_handle]);
         true
     }
 
@@ -1262,7 +1387,7 @@ impl DomHost {
             return false;
         }
         document.set_content_type(content_type);
-        self.record_mutation(MutationScope::LocalState);
+        self.record_mutation(MutationScope::LocalState, [document_handle]);
         true
     }
 
@@ -1281,7 +1406,7 @@ impl DomHost {
             return false;
         }
         document.set_quirks_mode(quirks_mode);
-        self.record_mutation(MutationScope::QueryState);
+        self.record_mutation(MutationScope::QueryState, [document_handle]);
         true
     }
 
@@ -1300,7 +1425,7 @@ impl DomHost {
             return false;
         }
         document.set_default_language(language);
-        self.record_mutation(MutationScope::QueryState);
+        self.record_mutation(MutationScope::QueryState, [document_handle]);
         true
     }
 
@@ -1319,7 +1444,7 @@ impl DomHost {
             return false;
         }
         document.set_source_last_modified_ms(timestamp_ms);
-        self.record_mutation(MutationScope::QueryState);
+        self.record_mutation(MutationScope::QueryState, [document_handle]);
         true
     }
 
@@ -1369,7 +1494,7 @@ impl DomHost {
         };
         let changed = document.set_css_target(target);
         if changed {
-            self.record_mutation(MutationScope::QueryState);
+            self.record_mutation(MutationScope::QueryState, [document_handle]);
         }
         changed
     }
@@ -1478,7 +1603,7 @@ impl DomHost {
             return false;
         }
         document.set_ready_state(state);
-        self.record_mutation(MutationScope::LocalState);
+        self.record_mutation(MutationScope::LocalState, [document_handle]);
         true
     }
 
@@ -1767,7 +1892,7 @@ impl DomHost {
             return false;
         };
         *document = source.clone_for_node();
-        self.record_mutation(MutationScope::QueryState);
+        self.record_mutation(MutationScope::QueryState, [document_handle]);
         true
     }
 
@@ -1777,7 +1902,7 @@ impl DomHost {
         self.active_element.set(None);
         self.hovered_elements.borrow_mut().clear();
         let handle = self.dom.replace_main_document(document);
-        self.record_mutation(MutationScope::QueryState);
+        self.record_mutation(MutationScope::QueryState, [handle]);
         handle
     }
 
@@ -2223,7 +2348,7 @@ impl DomHost {
             // Reference-target forwarding changes live `labels` and form-control
             // resolution even though it is neither a tree nor an attribute
             // mutation. Keep it in the same query-version invalidation domain.
-            self.record_mutation(MutationScope::QueryState);
+            self.record_mutation(MutationScope::QueryState, [host]);
         }
         changed
     }
@@ -2234,6 +2359,15 @@ impl DomHost {
 
     pub fn is_shadow_root(&self, handle: DomHandle) -> bool {
         self.shadow_hosts_by_root.borrow().contains_key(&handle)
+    }
+
+    pub fn declarative_shadow_roots_with_document_registry(&self) -> Vec<DomHandle> {
+        self.shadow_roots_by_host
+            .borrow()
+            .values()
+            .filter(|state| state.declarative && !state.init.null_custom_element_registry())
+            .map(|state| state.handle)
+            .collect()
     }
 
     pub fn snapshot_shadow_root_bindings(&self) -> Vec<ShadowRootBindingSnapshot> {

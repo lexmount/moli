@@ -677,14 +677,25 @@ pub(crate) fn css_condition_rule_read_from_object<'s>(
     if let Some(read) = css_rule_attached_native_condition_read(scope, object) {
         return Some(read);
     }
+    if css_rule_current_stylo_rule_type_from_object(scope, object) == Some(CssRuleType::Container) {
+        let (condition_text, container_conditions) = css_rule_detached_snapshot_typed_view(
+            scope,
+            object,
+            moli_css_parse::parse_container_rule_condition_snapshot_with_stylo,
+        )?;
+        return Some(crate::live_stylesheet::LiveStylesheetConditionRuleRead {
+            rule_type: CssRuleType::Container,
+            condition_text,
+            container_conditions,
+            scope_start: None,
+            scope_end: None,
+        });
+    }
     css_rule_detached_snapshot_typed_view(scope, object, parse_condition_rule_view_with_stylo).map(
         |view| crate::live_stylesheet::LiveStylesheetConditionRuleRead {
             rule_type: view.rule_type,
             condition_text: view.condition_text,
-            container_conditions: moli_css_parse::parse_container_conditions_with_stylo(
-                &view.css_text,
-            )
-            .unwrap_or_default(),
+            container_conditions: Vec::new(),
             scope_start: view.scope_start,
             scope_end: view.scope_end,
         },

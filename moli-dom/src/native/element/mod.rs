@@ -5,13 +5,14 @@ mod rare_data;
 #[cfg(test)]
 mod tests;
 
-pub use attribute::Attribute;
+pub use attribute::{Attribute, InlineStyleAttribute};
 pub use control_state::{ElementControlState, SelectedFile};
 pub use interface_names::{
     html_element_interface_name, is_mathml_namespace, mathml_element_interface_name,
     svg_element_interface_name,
 };
 
+use super::inline_style::CssomStyleAttribute;
 use attribute::{normalized_option_text_content, split_class_names};
 use html5ever::{LocalName, Namespace, Prefix};
 use indexmap::IndexSet;
@@ -212,28 +213,77 @@ impl Element {
         &self.attributes
     }
 
-    pub fn attribute(&self, name: &str) -> Option<&str> {
+    pub fn find_attribute(&self, name: &str) -> Option<&Attribute> {
         self.attributes
             .iter()
             .find(|attribute| attribute.name_matches(name))
-            .map(Attribute::value)
+    }
+
+    pub fn find_attribute_ns(&self, namespace: &str, local_name: &str) -> Option<&Attribute> {
+        self.attributes.iter().find(|attribute| {
+            attribute.namespace() == namespace && attribute.local_name() == local_name
+        })
+    }
+
+    pub(super) fn set_cssom_style_attribute(&mut self, source: Box<CssomStyleAttribute>) {
+        if let Some(attribute) = self.style_attribute_mut() {
+            attribute.set_cssom_style(source);
+        } else {
+            self.attributes.push(Attribute::new_cssom_style(source));
+        }
+    }
+
+    pub(super) fn replace_style_attribute_source(&mut self, source: Box<CssomStyleAttribute>) {
+        if let Some(attribute) = self.style_attribute_mut() {
+            attribute.set_cssom_style(source);
+        }
+    }
+
+    pub(super) fn style_attribute_mut(&mut self) -> Option<&mut Attribute> {
+        self.attributes
+            .iter_mut()
+            .find(|attribute| attribute.name_matches("style"))
+    }
+
+    pub fn attribute(&self, name: &str) -> Option<&str> {
+        self.find_attribute(name).map(Attribute::value)
     }
 
     pub fn attribute_ns(&self, namespace: &str, local_name: &str) -> Option<&str> {
-        self.attributes
-            .iter()
-            .find(|attribute| {
-                attribute.namespace() == namespace && attribute.local_name() == local_name
-            })
+        self.find_attribute_ns(namespace, local_name)
             .map(Attribute::value)
     }
 
+    /// The element's own language, with XML language taking precedence.
+    pub fn language_attribute(&self) -> Option<&str> {
+        self.attribute_ns(Attribute::XML_NAMESPACE, "lang")
+            .or_else(|| {
+                if self.supports_language_attribute(None) {
+                    self.attribute_ns("", "lang")
+                } else {
+                    None
+                }
+            })
+    }
+
+    /// Whether a `lang` attribute in this namespace participates in language matching.
+    pub fn supports_language_attribute(&self, namespace: Option<&str>) -> bool {
+        match namespace {
+            Some(Attribute::XML_NAMESPACE) => true,
+            None => matches!(
+                self.namespace(),
+                "http://www.w3.org/1999/xhtml" | "http://www.w3.org/2000/svg"
+            ),
+            Some(_) => false,
+        }
+    }
+
     pub fn has_attribute(&self, name: &str) -> bool {
-        self.attribute(name).is_some()
+        self.find_attribute(name).is_some()
     }
 
     pub fn has_attribute_ns(&self, namespace: &str, local_name: &str) -> bool {
-        self.attribute_ns(namespace, local_name).is_some()
+        self.find_attribute_ns(namespace, local_name).is_some()
     }
 
     pub fn custom_element_state(&self) -> CustomElementState {
@@ -1283,7 +1333,7 @@ impl Element {
             if self.attributes[index].value() == value {
                 return false;
             }
-            self.attributes[index].value = value.into_boxed_str();
+            self.attributes[index].set_value(value);
             let attribute_local_name = self.attributes[index].local_name.clone();
             self.sync_control_state_from_attribute(
                 attribute_local_name.as_ref(),
@@ -1292,13 +1342,9 @@ impl Element {
             return true;
         }
 
-        let attribute_local_name = LocalName::from(local_name);
-        self.attributes.push(Attribute {
-            local_name: attribute_local_name.clone(),
-            namespace: Namespace::from(namespace),
-            prefix: prefix.map(Prefix::from),
-            value: value.into_boxed_str(),
-        });
+        let attribute = Attribute::new(local_name, namespace, prefix, value);
+        let attribute_local_name = attribute.local_name.clone();
+        self.attributes.push(attribute);
         self.sync_control_state_from_attribute(attribute_local_name.as_ref(), Some(&next_value));
         true
     }
@@ -1318,18 +1364,14 @@ impl Element {
             if self.attributes[index].value() == value {
                 return false;
             }
-            self.attributes[index].value = value.into_boxed_str();
+            self.attributes[index].set_value(value);
             self.sync_control_state_from_attribute(&local_name, Some(&next_value));
             return true;
         }
 
-        let attribute_local_name = LocalName::from(local_name);
-        self.attributes.push(Attribute {
-            local_name: attribute_local_name.clone(),
-            namespace: Namespace::from(namespace),
-            prefix: prefix.map(Prefix::from),
-            value: value.into_boxed_str(),
-        });
+        let attribute = Attribute::new(local_name, namespace, prefix, value);
+        let attribute_local_name = attribute.local_name.clone();
+        self.attributes.push(attribute);
         self.sync_control_state_from_attribute(attribute_local_name.as_ref(), Some(&next_value));
         true
     }

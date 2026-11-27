@@ -36,6 +36,20 @@ pub enum RendererDevToolsPageCommand {
         /// `Input.setInterceptDrags` state of the issuing DevTools session.
         intercept_drags: bool,
     },
+    ValidateSyntheticWheelAnchor {
+        x: f64,
+        y: f64,
+        gesture: crate::runtime::RendererSyntheticWheelGesture,
+    },
+    DispatchSyntheticWheel {
+        gesture: crate::runtime::RendererSyntheticWheelGesture,
+        x: f64,
+        y: f64,
+        delta_x: f64,
+        delta_y: f64,
+        end: bool,
+        intercept_drags: bool,
+    },
     DispatchTouchEvent {
         points: Vec<RendererTouchPoint>,
         event_name: String,

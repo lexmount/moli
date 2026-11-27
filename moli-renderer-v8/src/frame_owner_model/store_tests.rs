@@ -777,7 +777,7 @@ fn stopping_a_document_invalidates_resource_delays_by_exact_identity() {
         .accept_current_main_style_load_event(owner, handle(2))
         .unwrap();
     let image = store
-        .accept_current_main_image_load_delay(owner, handle(3))
+        .accept_current_main_image_load_delay(owner, handle(3), true)
         .unwrap();
     let media = store
         .accept_current_main_media_load_delay(owner, handle(4))
@@ -1028,8 +1028,13 @@ fn main_image_request_delay_is_element_owned_and_replacement_safe() {
         snapshot.local_window_id,
         snapshot.document_id,
     );
+    let lazy = store
+        .accept_current_main_image_load_delay(owner, handle(7), false)
+        .expect("lazy main image request should bind");
+    assert!(store.main_image_load_delay_is_current(lazy));
+    assert_eq!(lazy.load_delay_token(), None);
     let event = store
-        .accept_current_main_image_load_delay(owner, handle(8))
+        .accept_current_main_image_load_delay(owner, handle(8), true)
         .expect("main image request should bind");
     assert_eq!(event.owner(), owner);
     assert_eq!(event.element(), handle(8));
@@ -1056,7 +1061,7 @@ fn main_image_request_delay_is_element_owned_and_replacement_safe() {
     );
 
     let stale = store
-        .accept_current_main_image_load_delay(owner, handle(9))
+        .accept_current_main_image_load_delay(owner, handle(9), true)
         .expect("current document should accept another image event");
     let replacement = store
         .replace_main_document(
@@ -3575,7 +3580,7 @@ fn child_document_open_during_pageshow_resumes_after_pageshow() {
 }
 
 #[test]
-fn child_load_delivery_waits_for_descendant_started_during_window_load() {
+fn child_load_delivery_delays_only_frame_finish_for_reentrant_descendants() {
     let mut store = FrameOwnerStore::default();
     let parent_handle = handle(373);
     let parent_owner = commit_test_child_document(
@@ -3606,44 +3611,20 @@ fn child_load_delivery_waits_for_descendant_started_during_window_load() {
         store
             .begin_child_frame_parent_document_load(descendant_handle)
             .is_none(),
-        "new descendant load should acquire the current parent without releasing an old binding"
+        "new descendant load must keep its exact parent binding"
     );
     assert_eq!(
         store.finish_current_child_document_load_delivery(parent_window),
-        Some(FrameDocumentLoadDeliveryProgress::AwaitingDescendantCompletion(parent_task)),
-        "Window load completion must preserve its phase while frame finish waits for the descendant"
+        Some(FrameDocumentLoadDeliveryProgress::Continue(parent_task)),
+        "a child created by Window load must not delay the owner-element load callback"
     );
-    assert!(
-        !store.current_child_document_load_delivery_is_ready(parent_handle, parent_owner),
-        "complete readiness alone must not make the next phase runnable"
-    );
-    assert!(
-        store
-            .begin_current_child_document_load_delivery(parent_task)
-            .is_none(),
-        "a blocked delivery must not claim owner-element load"
-    );
-
-    let descendant_task =
-        prepare_test_child_load_delivery(&mut store, descendant_handle, descendant_owner);
-    let descendant_finish = finish_test_child_load_delivery(&mut store, descendant_task);
-    let parent_completion = descendant_finish
-        .parent_descendant_completion
-        .expect("descendant FrameFinish should release the exact parent blocker");
-    assert_eq!(
-        parent_completion.parent,
-        FrameDocumentDescendantLoadParent::ChildDocument(parent_handle)
-    );
-    assert_eq!(parent_completion.parent_owner, parent_owner);
     assert!(store.current_child_document_load_delivery_is_ready(parent_handle, parent_owner));
-
     let owner_element = store
         .begin_current_child_document_load_delivery(parent_task)
-        .expect("descendant completion should resume the next parent phase");
+        .expect("Window load should continue to owner-element load");
     assert_eq!(
         owner_element.phase(),
-        FrameDocumentLoadDeliveryPhase::OwnerElementLoad,
-        "resumption must not dispatch Window load twice"
+        FrameDocumentLoadDeliveryPhase::OwnerElementLoad
     );
     assert_eq!(
         store.finish_current_child_document_load_delivery(owner_element),
@@ -3651,23 +3632,54 @@ fn child_load_delivery_waits_for_descendant_started_during_window_load() {
     );
     let pageshow = store
         .begin_current_child_document_load_delivery(parent_task)
-        .expect("owner-element load should resume pageshow");
+        .expect("owner-element load should continue to pageshow");
     assert_eq!(pageshow.phase(), FrameDocumentLoadDeliveryPhase::PageShow);
     assert_eq!(
         store.finish_current_child_document_load_delivery(pageshow),
-        Some(FrameDocumentLoadDeliveryProgress::Continue(parent_task))
+        Some(FrameDocumentLoadDeliveryProgress::AwaitingDescendantCompletion(parent_task)),
+        "the final frame completion must still wait for the new descendant"
     );
+    assert_eq!(
+        store.current_child_document_has_incomplete_descendants(parent_handle, parent_owner),
+        Some(true)
+    );
+    assert!(!store.current_child_document_load_delivery_is_ready(parent_handle, parent_owner));
+    assert!(
+        store
+            .begin_current_child_document_load_delivery(parent_task)
+            .is_none(),
+        "callbacks finishing must not claim FrameFinish before its descendants finish"
+    );
+
+    let descendant_task =
+        prepare_test_child_load_delivery(&mut store, descendant_handle, descendant_owner);
+    let descendant_finish = finish_test_child_load_delivery(&mut store, descendant_task);
+    let parent_completion = descendant_finish
+        .parent_descendant_completion
+        .expect("descendant FrameFinish must release the exact parent blocker");
+    assert_eq!(
+        parent_completion.parent,
+        FrameDocumentDescendantLoadParent::ChildDocument(parent_handle)
+    );
+    assert_eq!(parent_completion.parent_owner, parent_owner);
+    assert!(store.current_child_document_load_delivery_is_ready(parent_handle, parent_owner));
     let frame_finish = store
         .begin_current_child_document_load_delivery(parent_task)
-        .expect("pageshow should resume FrameFinish");
+        .expect("descendant completion should resume FrameFinish directly");
     assert_eq!(
         frame_finish.phase(),
-        FrameDocumentLoadDeliveryPhase::FrameFinish
+        FrameDocumentLoadDeliveryPhase::FrameFinish,
+        "resumption must not redispatch Window load, owner-element load or pageshow"
     );
     assert!(matches!(
         store.finish_current_child_document_load_delivery(frame_finish),
         Some(FrameDocumentLoadDeliveryProgress::Finished(_))
     ));
+    assert!(
+        store
+            .begin_current_child_document_load_delivery(parent_task)
+            .is_none()
+    );
 }
 
 #[test]
@@ -4675,8 +4687,13 @@ fn child_image_load_event_binding_delays_complete_and_retires_with_document() {
     let owner = store
         .current_child_document_task_owner(child_handle)
         .expect("child document should expose an owner");
+    let lazy = store
+        .accept_current_child_image_load_event(child_handle, owner, handle(367), false)
+        .expect("lazy child image request should bind");
+    assert!(store.child_image_load_event_binding_is_current(lazy));
+    assert_eq!(lazy.load_delay_token(), None);
     let image = store
-        .accept_current_child_image_load_event(child_handle, owner, handle(368))
+        .accept_current_child_image_load_event(child_handle, owner, handle(368), true)
         .expect("image acceptance should bind the current document");
     assert_eq!(image.element(), handle(368));
     assert!(
@@ -4709,7 +4726,7 @@ fn child_image_load_event_binding_delays_complete_and_retires_with_document() {
         .expect("image terminal should unblock complete");
     assert!(store.apply_current_child_document_complete_transition(complete));
     let post_complete_image = store
-        .accept_current_child_image_load_event(child_handle, owner, handle(369))
+        .accept_current_child_image_load_event(child_handle, owner, handle(369), true)
         .expect("a post-complete image still needs an exact event owner");
     assert_eq!(
         post_complete_image.load_delay_token(),

@@ -75,7 +75,7 @@ use crate::{
     },
     module_runtime::ModuleMapKey,
     network::ResourceRequestClient,
-    parser::{HtmlParser, ParserInputContext, ParserInputSession},
+    parser::{DocumentStream, HtmlParser, ParserInputContext, ParserInputSession},
     selector::{QueryEngine, SelectorError},
     service_worker_runtime::ServiceWorkerClientId,
     types::SubresourceResourceType,
@@ -115,8 +115,7 @@ pub(crate) use stylesheet_runtime::{
     ConnectedStyleEventElementKind, ConnectedStyleLoadEventAdmission, ConnectedStyleLoadEventPlan,
     ConnectedStyleLoadPrimeResult, InstallLinkedStylesheet, NativeModulepreloadLinkFetchOutcome,
     OwnerlessStylesheetAdmissionError, PendingNativeModulepreloadLinkEvent,
-    PreparedConnectedStyleLoad, PreparedLinkedStylesheetResource, ReadyConnectedStyleLoad,
-    StylesheetLinkClientTerminal,
+    PreparedLinkedStylesheetResource, ReadyConnectedStyleLoad, StylesheetLinkClientTerminal,
 };
 
 pub(super) type DomHandle = NativeNodeId;
@@ -761,6 +760,7 @@ pub(super) struct DocumentRuntime {
     resource_loader_binding: Option<DocumentResourceLoaderBinding>,
     script_context_stack: Vec<CurrentScriptContext>,
     root_document_parser: Option<DocumentParserSession>,
+    detached_document_write_streams: HashMap<DomHandle, DocumentStream>,
     post_parse_schedule_invalidated: bool,
     stylesheet_lifecycle: StylesheetLifecycleState,
     main_parser_continuation: main_parser_continuation::MainParserContinuationState,
@@ -3242,6 +3242,7 @@ mod tests {
 
         let results = timeout(Duration::from_secs(2), async {
             loop {
+                runtime.drain_blocking_stylesheet_completions();
                 let results = runtime.take_ready_stylesheet_network_results();
                 if !results.is_empty() {
                     break results;
@@ -3328,6 +3329,7 @@ mod tests {
 
         let results = timeout(Duration::from_secs(2), async {
             loop {
+                runtime.drain_blocking_stylesheet_completions();
                 let results = runtime.take_ready_stylesheet_network_results();
                 if !results.is_empty() {
                     break results;
@@ -3939,6 +3941,7 @@ mod tests {
                 .ready_connected_load_network_results
                 .is_empty()
         );
+        assert!(runtime.apply_next_stylesheet_networking_task_for_test());
         let stale_results = runtime.take_ready_stylesheet_network_results();
         assert_eq!(
             stale_results.len(),

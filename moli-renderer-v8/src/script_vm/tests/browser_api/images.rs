@@ -6,6 +6,62 @@ use tokio::{
 
 const ONE_BY_ONE_GIF: &[u8] = b"GIF89a\x01\0\x01\0\x80\0\0\0\0\0\xff\xff\xff!\xf9\x04\x01\0\0\0\0,\0\0\0\0\x01\0\x01\0\0\x02\x02D\x01\0;";
 
+#[tokio::test]
+async fn canvas_draw_image_reads_same_origin_http_pixels() {
+    const RED_PIXEL_GIF: &[u8] =
+        b"GIF89a\x01\0\x01\0\x80\0\0\xff\0\0\0\0\0,\0\0\0\0\x01\0\x01\0\0\x02\x02D\x01\0;";
+    for same_origin in [true, false] {
+        let (url, _, server) =
+            spawn_image_response_server("200 OK", "image/gif", RED_PIXEL_GIF).await;
+        let document_url = if same_origin {
+            url::Url::parse(&url).unwrap().join("/page.html").unwrap()
+        } else {
+            url::Url::parse("http://canvas.test/page.html").unwrap()
+        };
+        let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
+        loader.set_image_fetch_enabled(true);
+        let mut vm =
+            new_storage_page_task_executor_test_vm_with_loader(document_url.as_str(), &loader);
+        vm.set_layout_policy(moli_page_types::LayoutPolicy::Realtime);
+        vm.eval(&format!(
+            r#"
+            globalThis.__canvasImageResult = null;
+            const image = new Image();
+            image.onload = () => {{
+                const strip = new OffscreenCanvas(1, 1);
+                strip.getContext('2d').drawImage(image, 0, 0);
+                const canvas = document.createElement('canvas').getContext('2d');
+                canvas.drawImage(strip, 0, 0);
+                globalThis.__canvasImageResult = JSON.stringify([
+                    image.naturalWidth,
+                    ...canvas.getImageData(0, 0, 1, 1).data,
+                ]);
+            }};
+            image.onerror = () => {{ globalThis.__canvasImageResult = "image load failed"; }};
+            image.src = {url:?};
+            "#,
+        ))
+        .unwrap();
+        advance_page_task_executor_until_eval_equals(
+            &mut vm,
+            &loader,
+            "String(__canvasImageResult !== null)",
+            "true",
+            "network image should finish loading",
+        )
+        .await;
+        assert_eq!(
+            vm.eval("__canvasImageResult").unwrap(),
+            if same_origin {
+                "[1,255,0,0,255]"
+            } else {
+                "[1,0,0,0,0]"
+            },
+        );
+        server.await.unwrap();
+    }
+}
+
 fn one_by_one_gif_response_body() -> crate::runtime::RendererSyntheticResponseBody {
     crate::runtime::RendererSyntheticResponseBody::from_bytes(ONE_BY_ONE_GIF.to_vec())
 }
@@ -114,8 +170,8 @@ async fn wait_for_image_event_task(
 #[tokio::test]
 async fn render_image_decode_requires_both_real_layout_and_image_fetch() {
     let cases = [
-        (moli_page_types::LayoutPolicy::OnDemand, true, true),
-        (moli_page_types::LayoutPolicy::OnDemand, false, false),
+        (moli_page_types::LayoutPolicy::Lazy, true, true),
+        (moli_page_types::LayoutPolicy::Lazy, false, false),
         (moli_page_types::LayoutPolicy::Realtime, true, true),
         (moli_page_types::LayoutPolicy::Realtime, false, false),
         (moli_page_types::LayoutPolicy::Mock, true, false),
@@ -176,7 +232,7 @@ async fn render_image_decode_requires_both_real_layout_and_image_fetch() {
 async fn realtime_layout_image_decode_commits_dimensions_before_load_callback() {
     use moli_page_types::LayoutPolicy;
 
-    for policy in [LayoutPolicy::OnDemand, LayoutPolicy::Realtime] {
+    for policy in [LayoutPolicy::Lazy, LayoutPolicy::Realtime] {
         let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
         loader.set_image_fetch_enabled(true);
         let mut vm = new_storage_page_task_executor_test_vm_with_loader(
@@ -1659,7 +1715,7 @@ async fn image_decode_cross_realm_loads_settle_in_the_receiver_realm() {
 async fn available_image_reuse_does_not_start_another_fetch_or_timing_entry() {
     for policy in [
         moli_page_types::LayoutPolicy::Mock,
-        moli_page_types::LayoutPolicy::OnDemand,
+        moli_page_types::LayoutPolicy::Lazy,
     ] {
         let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
         loader.set_image_fetch_enabled(true);
@@ -1741,7 +1797,7 @@ async fn decoded_scanned_image_publishes_its_original_resource_timing_before_loa
         "https://scanned-image-timing.test/page.html",
         &loader,
     );
-    vm.set_layout_policy(moli_page_types::LayoutPolicy::OnDemand);
+    vm.set_layout_policy(moli_page_types::LayoutPolicy::Lazy);
     let image_url = Url::parse("https://scanned-image-timing.test/preloaded.gif").unwrap();
     let request = crate::types::ImageRequestKey::with_density(
         image_url.as_str().to_owned(),

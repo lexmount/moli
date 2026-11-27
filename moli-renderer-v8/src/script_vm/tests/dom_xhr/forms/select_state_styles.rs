@@ -7,7 +7,7 @@ use moli_page_types::LayoutPolicy;
 
 #[test]
 fn select_value_refreshes_selected_peer_and_has_styles_in_every_layout_policy() {
-    for policy in [LayoutPolicy::Mock, LayoutPolicy::OnDemand] {
+    for policy in [LayoutPolicy::Mock, LayoutPolicy::Lazy] {
         for (case, change, same_before, same_after) in [
             (
                 "selectedIndex",
@@ -98,7 +98,7 @@ fn selection_changes_refresh_required_select_and_container_validity_styles() {
     let mut observed = Vec::new();
     for policy in [
         LayoutPolicy::Mock,
-        LayoutPolicy::OnDemand,
+        LayoutPolicy::Lazy,
         LayoutPolicy::Realtime,
     ] {
         for (case, change) in [
@@ -209,7 +209,7 @@ fn selection_changes_refresh_required_select_and_container_validity_styles() {
 #[cfg(feature = "devtools")]
 #[test]
 fn select_autofill_refreshes_selected_peer_and_has_styles_before_callbacks() {
-    for policy in [LayoutPolicy::Mock, LayoutPolicy::OnDemand] {
+    for policy in [LayoutPolicy::Mock, LayoutPolicy::Lazy] {
         let mut vm = new_parsed_test_vm(
             "https://select-autofill-state-style.test/",
             r#"<!doctype html><style>

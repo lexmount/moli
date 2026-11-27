@@ -11,6 +11,12 @@ use std::{
     time::Instant,
 };
 
+#[cfg(feature = "devtools")]
+mod synthetic_wheel;
+pub use page_surface::RendererWheelDispatchOutcome;
+#[cfg(feature = "devtools")]
+pub use synthetic_wheel::RendererSyntheticWheelGesture;
+
 use super::native_bridge::element::ClientRect;
 use crate::DocumentStartScript;
 #[cfg(test)]

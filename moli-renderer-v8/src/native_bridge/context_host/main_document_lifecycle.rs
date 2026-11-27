@@ -242,10 +242,11 @@ impl PageScriptHost {
     pub(crate) fn accept_current_main_image_load_delay(
         &mut self,
         element: crate::document_runtime::DomHandle,
+        delays_load: bool,
     ) -> Option<MainDocumentImageLoadDelayBinding> {
         let owner = self.current_main_document_task_owner()?;
         self.frame_owner_store
-            .accept_current_main_image_load_delay(owner, element)
+            .accept_current_main_image_load_delay(owner, element, delays_load)
     }
 
     pub(crate) fn main_image_load_delay_is_current(

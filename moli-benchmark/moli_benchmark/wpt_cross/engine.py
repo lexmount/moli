@@ -14,6 +14,7 @@ from __future__ import annotations
 import os
 import shutil
 import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -25,6 +26,15 @@ from ..config import REPO_ROOT, ReservedPort, clear_proxy_env, reserve_port
 from ..sampling import ResourceSampler
 from ..serve import _join_log_drain_threads, _start_log_drain_threads, probe_url
 from ..versions import sha256_file
+
+
+def fixture_browser_environment() -> dict[str, str]:
+    env = clear_proxy_env(os.environ)
+    if sys.platform == "linux":
+        # Fixture hosts resolve locally. Bound DNS waits for cases that
+        # exercise a deliberately unavailable hostname.
+        env.setdefault("RES_OPTIONS", "attempts:1 timeout:1")
+    return env
 
 
 @dataclass
@@ -100,6 +110,15 @@ class EngineDriver:
     # leave this as None and fall back to CDP.
     cli_fetch_command: Callable[[Path, str, float], list[str]] | None = None
 
+    def with_ephemeral_http_cache(self) -> "EngineDriver":
+        original_command = self.build_command
+
+        def command(binary: Path, port: int, profile: Path | None) -> list[str]:
+            assert profile is not None
+            return [*original_command(binary, port, profile), "--http-cache-dir", str(profile / "http-cache")]
+
+        return replace(self, build_command=command, needs_profile_dir=True)
+
     def with_fixture_tls(self, authority: Any) -> "EngineDriver":
         """Trust only this run's local fixture authority/public key.
 
@@ -128,12 +147,37 @@ class EngineDriver:
 
     def with_http_host_resolutions(self, entries: tuple[str, ...]) -> "EngineDriver":
         original_command = self.build_command
+        if self.name == "chrome":
+            mappings = {}
+            for entry in entries:
+                hostname, _, address = entry.split(":", 2)
+                if hostname != "localhost" and not hostname.endswith(".localhost"):
+                    mappings[hostname] = address
+            if not mappings:
+                return self
+            rules = ", ".join(f"MAP {hostname} {address}" for hostname, address in mappings.items())
+
+            def command(binary: Path, port: int, profile: Path | None) -> list[str]:
+                argv = original_command(binary, port, profile)
+                argv.insert(1, "--host-resolver-rules=" + rules)
+                return argv
+
+            return replace(self, build_command=command)
+
+        original_fetch = self.cli_fetch_command
         args = [arg for entry in entries for arg in ("--http-host-resolve", entry)]
 
         def command(binary: Path, port: int, profile: Path | None) -> list[str]:
             return [*original_command(binary, port, profile), *args]
 
-        return replace(self, build_command=command)
+        def fetch(binary: Path, url: str, timeout: float) -> list[str]:
+            assert original_fetch is not None
+            return [*original_fetch(binary, url, timeout), *args]
+
+        return replace(
+            self, build_command=command,
+            cli_fetch_command=fetch if original_fetch is not None else None,
+        )
 
     def resolve_binary(self, override: str | None = None) -> Path:
         raw = override or os.environ.get(self.binary_env_var)
@@ -161,7 +205,7 @@ class EngineDriver:
             try:
                 port = reserved.port
                 command = self.build_command(binary, port, temp_dir)
-                env = clear_proxy_env(os.environ)
+                env = fixture_browser_environment()
                 env.update(self.extra_env)
                 reserved.release_socket()
                 process = subprocess.Popen(
@@ -251,7 +295,7 @@ def _moli_command(binary: Path, port: int, _tmp: Path | None) -> list[str]:
     return [
         str(binary),
         "serve",
-        "--layout",
+        "--realtime",
         "--resource",
         "--host",
         "127.0.0.1",
@@ -263,7 +307,7 @@ def _moli_command(binary: Path, port: int, _tmp: Path | None) -> list[str]:
 def _moli_fetch(binary: Path, url: str, timeout_seconds: float) -> list[str]:
     timeout_ms = max(1000, int(timeout_seconds * 1000))
     return [
-        str(binary), "fetch", "--layout", "--resource", url,
+        str(binary), "fetch", "--realtime", "--resource", url,
         "--wait-until", "done",
         "--wait-script",
         "globalThis.__bench_wpt__ && globalThis.__bench_wpt__.source !== 'incremental'",

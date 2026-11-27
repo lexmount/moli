@@ -141,6 +141,171 @@ fn realtime_environment_respects_media_listener_lifetime_and_live_event_matches(
 }
 
 #[test]
+fn realtime_environment_delivers_media_changes_in_query_creation_order() {
+    run_page_vm_large_stack_async_test("realtime-media-creation-order", || async move {
+        let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default()).unwrap();
+        let (mut page, _, _) = page_vm_with_bound_task_sources_and_owner_wake(
+            &loader,
+            Url::parse("https://example.com/media-order").unwrap(),
+        );
+        page.vm_mut().set_layout_policy(LayoutPolicy::Realtime);
+        page.vm_mut()
+            .eval(
+                r#"
+                document.body.innerHTML='<iframe id=frame style="width:320px;height:100px;border:0"></iframe>';
+                const child = frame.contentWindow;
+                const first = child.matchMedia('(min-width:400px)');
+                const second = child.matchMedia('(min-width:400px)');
+                globalThis.events = [];
+                second.onchange = () => events.push('second');
+                first.onchange = () => events.push('first');
+                frame.style.width = '480px';
+                void child.innerWidth;
+            "#,
+            )
+            .unwrap();
+        run_opportunity(&mut page, &loader).await.unwrap();
+        assert_eq!(
+            page.vm_mut().eval("events.join(',')").unwrap(),
+            "first,second"
+        );
+    });
+}
+
+fn check_realtime_media_resubscription(during_resize: bool) {
+    run_page_vm_large_stack_async_test("realtime-media-resubscription", move || async move {
+        let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default()).unwrap();
+        let (mut page, _, _) = page_vm_with_bound_task_sources_and_owner_wake(
+            &loader,
+            Url::parse("https://example.com/media-resubscription").unwrap(),
+        );
+        page.vm_mut().set_layout_policy(LayoutPolicy::Realtime);
+        page.vm_mut()
+            .eval(
+                r#"
+                document.body.innerHTML='<iframe id=frame style="width:320px;height:100px;border:0"></iframe>';
+                globalThis.child = frame.contentWindow;
+                void child.innerWidth;
+            "#,
+            )
+            .unwrap();
+        run_opportunity(&mut page, &loader).await.unwrap();
+        page.vm_mut()
+            .eval(
+                r#"
+                globalThis.events = [];
+                const query = child.matchMedia('(min-width:400px)');
+                const handler = child.matchMedia('(min-width:400px)');
+                const discarded = child.matchMedia('(min-width:400px)');
+                const first = () => events.push(['old']);
+                const second = event => events.push(['listener', event.matches]);
+                query.addEventListener('change', first);
+                handler.onchange = first;
+                discarded.onchange = first;
+                globalThis.replaceListeners = () => {
+                    query.removeEventListener('change', first);
+                    query.addEventListener('change', second);
+                    handler.onchange = null;
+                    handler.onchange = event => events.push(['handler', event.matches]);
+                    discarded.onchange = null;
+                };
+            "#,
+            )
+            .unwrap();
+        if during_resize {
+            page.vm_mut()
+                .eval("child.addEventListener('resize', replaceListeners, {once:true})")
+                .unwrap();
+        }
+        page.vm_mut()
+            .eval("frame.style.width='480px';void child.innerWidth")
+            .unwrap();
+        if !during_resize {
+            page.vm_mut().eval("replaceListeners()").unwrap();
+        }
+        assert_eq!(page.vm_mut().eval("JSON.stringify(events)").unwrap(), "[]");
+        run_opportunity(&mut page, &loader).await.unwrap();
+        assert_eq!(
+            page.vm_mut().eval("JSON.stringify(events)").unwrap(),
+            "[[\"listener\",true],[\"handler\",true]]"
+        );
+        let host = page.vm().context_host_weak_for_test().upgrade().unwrap();
+        assert_eq!(host.borrow().media_query_count_for_test(), 2);
+        page.vm_mut()
+            .eval("query.removeEventListener('change', second);handler.onchange=null")
+            .unwrap();
+        assert_eq!(host.borrow().media_query_count_for_test(), 0);
+        assert!(
+            page.next_rendering_opportunity_deadline_for_test()
+                .is_none()
+        );
+    });
+}
+
+#[test]
+fn realtime_environment_preserves_queued_media_changes_across_listener_removal() {
+    check_realtime_media_resubscription(false);
+}
+
+#[test]
+fn realtime_environment_preserves_queued_media_changes_across_resize_listener_removal() {
+    check_realtime_media_resubscription(true);
+}
+
+#[test]
+fn realtime_environment_preserves_selected_media_events_across_listener_removal() {
+    run_page_vm_large_stack_async_test("realtime-media-selected-listeners", || async move {
+        let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default()).unwrap();
+        let (mut page, _, _) = page_vm_with_bound_task_sources_and_owner_wake(
+            &loader,
+            Url::parse("https://example.com/media-selected-listeners").unwrap(),
+        );
+        page.vm_mut().set_layout_policy(LayoutPolicy::Realtime);
+        page.vm_mut()
+            .eval(
+                r#"
+                document.body.innerHTML='<iframe id=frame style="width:320px;height:100px;border:0"></iframe>';
+                const child = frame.contentWindow;
+                const first = child.matchMedia('(min-width:400px)');
+                const second = child.matchMedia('(min-width:400px)');
+                globalThis.events = [];
+                first.addEventListener('change', () => {
+                    events.push('first');
+                    frame.style.width = '320px';
+                    void child.innerWidth;
+                    second.onchange = null;
+                    second.onchange = event => events.push('second:' + event.matches);
+                }, {once:true});
+                second.onchange = () => events.push('old');
+                frame.style.width = '480px';
+                void child.innerWidth;
+            "#,
+            )
+            .unwrap();
+        run_opportunity(&mut page, &loader).await.unwrap();
+        assert_eq!(
+            page.vm_mut().eval("events.join(',')").unwrap(),
+            "first,second:false"
+        );
+        let host = page.vm().context_host_weak_for_test().upgrade().unwrap();
+        assert_eq!(host.borrow().media_query_count_for_test(), 1);
+        // The first callback also queued a change for the next media phase.
+        // Replacing the second handler must preserve that notification too.
+        run_opportunity(&mut page, &loader).await.unwrap();
+        assert_eq!(
+            page.vm_mut().eval("events.join(',')").unwrap(),
+            "first,second:false,second:false"
+        );
+        page.vm_mut().eval("second.onchange=null").unwrap();
+        assert_eq!(host.borrow().media_query_count_for_test(), 0);
+        assert!(
+            page.next_rendering_opportunity_deadline_for_test()
+                .is_none()
+        );
+    });
+}
+
+#[test]
 fn realtime_environment_cache_reset_and_document_open_do_not_fabricate_resize() {
     run_page_vm_large_stack_async_test("realtime-environment-reset", || async move {
         let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default()).unwrap();

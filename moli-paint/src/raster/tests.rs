@@ -10,10 +10,10 @@
 //! Raster output and resource-budget regressions.
 
 use moli_layout::{
-    PaintBlendMode, PaintBorderColors, PaintBrush, PaintCaptureSurface, PaintColor,
-    PaintCompositeMode, PaintCornerRadii, PaintCornerRadius, PaintEdgeSizes, PaintFilter,
-    PaintFragment, PaintImage, PaintImageSampling, PaintRect, PaintShape, PaintSnapshot,
-    PaintSvgImage, PaintTransform2D, PaintViewport,
+    PaintBlendMode, PaintBorderColors, PaintBorderStyle, PaintBorderStyles, PaintBrush,
+    PaintCaptureSurface, PaintColor, PaintCompositeMode, PaintCornerRadii, PaintCornerRadius,
+    PaintEdgeSizes, PaintFilter, PaintFragment, PaintImage, PaintImageSampling, PaintRect,
+    PaintShape, PaintSnapshot, PaintSvgImage, PaintTransform2D, PaintViewport,
 };
 use peniko::Blob;
 use std::sync::Arc;
@@ -71,6 +71,161 @@ fn maximum_corner_radii_leave_pill_corners_unpainted() {
     }
     assert_eq!(pixel(&image, 60, 0), [0, 0, 255, 255]);
     assert_eq!(pixel(&image, 60, 20), [0, 0, 255, 255]);
+}
+
+#[test]
+fn rounded_border_keeps_top_arcs_when_the_bottom_edge_is_transparent() {
+    let radius = PaintCornerRadius::new(26.0, 26.0);
+    for bottom_width in [0.0, 1.0] {
+        let mut snapshot = snapshot(128, 60, 2.0);
+        snapshot.push_fragment(PaintFragment::Border {
+            rect: PaintRect::new(4.0, 4.0, 120.0, 52.0),
+            widths: PaintEdgeSizes::new(1.0, 1.0, bottom_width, 1.0),
+            colors: PaintBorderColors {
+                bottom: PaintColor::TRANSPARENT,
+                ..PaintBorderColors::all(PaintColor::new(0.0, 0.0, 0.0, 1.0))
+            },
+            styles: PaintBorderStyles::default(),
+            radii: PaintCornerRadii {
+                top_left: radius,
+                top_right: radius,
+                ..PaintCornerRadii::default()
+            },
+            transform: PaintTransform2D::IDENTITY,
+        });
+        let image = raster_snapshot(&snapshot).expect("rounded border should rasterize");
+        for (x, y) in [(23, 23), (232, 23)] {
+            assert!(
+                pixel(&image, x, y)[0] < 100,
+                "rounded join at ({x}, {y}) should be painted with bottom width {bottom_width}"
+            );
+        }
+        assert_eq!(pixel(&image, 8, 8), [255; 4]);
+        assert_eq!(pixel(&image, 128, 111), [255; 4]);
+    }
+}
+
+#[test]
+fn rounded_border_miter_preserves_adjacent_edge_colors() {
+    let mut snapshot = snapshot(128, 60, 2.0);
+    snapshot.push_fragment(PaintFragment::Border {
+        rect: PaintRect::new(4.0, 4.0, 120.0, 52.0),
+        widths: PaintEdgeSizes::new(1.0, 1.0, 1.0, 1.0),
+        colors: PaintBorderColors {
+            top: PaintColor::new(1.0, 0.0, 0.0, 1.0),
+            left: PaintColor::new(0.0, 0.0, 1.0, 1.0),
+            ..PaintBorderColors::all(PaintColor::TRANSPARENT)
+        },
+        styles: PaintBorderStyles::default(),
+        radii: PaintCornerRadii {
+            top_left: PaintCornerRadius::new(26.0, 26.0),
+            ..PaintCornerRadii::default()
+        },
+        transform: PaintTransform2D::IDENTITY,
+    });
+    let image = raster_snapshot(&snapshot).expect("two-color rounded border should rasterize");
+    let top_arc = pixel(&image, 34, 15);
+    let left_arc = pixel(&image, 15, 34);
+    assert!(top_arc[0] == 255 && top_arc[2] < 100, "{top_arc:?}");
+    assert!(left_arc[2] == 255 && left_arc[0] < 100, "{left_arc:?}");
+}
+
+#[test]
+fn rounded_border_miter_stays_clear_of_the_opposite_corner() {
+    let mut snapshot = snapshot(100, 100, 1.0);
+    let large_radius = PaintCornerRadius::new(90.0, 90.0);
+    snapshot.push_fragment(PaintFragment::Border {
+        rect: PaintRect::new(0.0, 0.0, 100.0, 100.0),
+        widths: PaintEdgeSizes::new(5.0, 5.0, 5.0, 5.0),
+        colors: PaintBorderColors {
+            top: PaintColor::new(1.0, 0.0, 0.0, 1.0),
+            ..PaintBorderColors::all(PaintColor::TRANSPARENT)
+        },
+        styles: PaintBorderStyles::default(),
+        radii: PaintCornerRadii {
+            top_left: large_radius,
+            bottom_right: large_radius,
+            ..PaintCornerRadii::default()
+        },
+        transform: PaintTransform2D::IDENTITY,
+    });
+    let image = raster_snapshot(&snapshot).expect("opposing rounded corners should rasterize");
+    assert_eq!(pixel(&image, 85, 2), [255, 0, 0, 255]);
+    assert_eq!(pixel(&image, 75, 68), [255; 4]);
+}
+
+#[test]
+fn asymmetric_rounded_border_stays_inside_the_outer_contour() {
+    for reflected in [false, true] {
+        let mut snapshot = snapshot(100, 100, 1.0);
+        let transform = if reflected {
+            PaintTransform2D::new([-1.0, 0.0, 0.0, 1.0, 100.0, 0.0])
+        } else {
+            PaintTransform2D::IDENTITY
+        };
+        snapshot.push_fragment(PaintFragment::Border {
+            rect: PaintRect::new(0.0, 0.0, 100.0, 100.0),
+            widths: PaintEdgeSizes::new(1.0, 50.0, 1.0, 1.0),
+            colors: PaintBorderColors::all(PaintColor::new(1.0, 0.0, 0.0, 1.0)),
+            styles: PaintBorderStyles::default(),
+            radii: PaintCornerRadii {
+                top_left: PaintCornerRadius::new(100.0, 100.0),
+                ..PaintCornerRadii::default()
+            },
+            transform,
+        });
+        let image = raster_snapshot(&snapshot).expect("asymmetric rounded border should rasterize");
+        let sample = |x, y| pixel(&image, if reflected { 99 - x } else { x }, y);
+        assert_eq!(sample(80, 35), [255, 0, 0, 255]);
+        assert_eq!(sample(30, 20), [255; 4]);
+        assert_eq!(sample(15, 50), [255; 4]);
+    }
+}
+
+#[test]
+fn rounded_border_patterns_stay_inside_the_outer_contour() {
+    let red = PaintColor::new(1.0, 0.0, 0.0, 1.0);
+    let transparent = PaintBorderColors::all(PaintColor::TRANSPARENT);
+    for (style, widths, colors, outside_pixel) in [
+        (
+            PaintBorderStyle::Dashed,
+            PaintEdgeSizes::new(12.0, 1.0, 1.0, 1.0),
+            PaintBorderColors {
+                top: red,
+                ..transparent
+            },
+            (300, 58),
+        ),
+        (
+            PaintBorderStyle::Dotted,
+            PaintEdgeSizes::new(1.0, 1.0, 1.0, 12.0),
+            PaintBorderColors {
+                left: red,
+                ..transparent
+            },
+            (64, 30),
+        ),
+    ] {
+        let mut snapshot = snapshot(168, 116, 2.0);
+        snapshot.push_fragment(PaintFragment::Border {
+            rect: PaintRect::new(12.0, 12.0, 144.0, 92.0),
+            widths,
+            colors,
+            styles: PaintBorderStyles::all(style),
+            radii: PaintCornerRadii::all(PaintCornerRadius::new(48.0, 48.0)),
+            transform: PaintTransform2D::IDENTITY,
+        });
+        let image = raster_snapshot(&snapshot).expect("rounded pattern should rasterize");
+        assert!(
+            image
+                .rgba
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .any(|pixel| pixel[1] < 100)
+        );
+        assert_eq!(pixel(&image, outside_pixel.0, outside_pixel.1), [255; 4]);
+    }
 }
 
 #[test]
@@ -210,7 +365,6 @@ fn snapshot_image_resource_rasterizes_without_copying_the_owned_pixels() {
     snapshot.push_fragment(PaintFragment::Image(PaintImage {
         image,
         destination: PaintRect::new(0.0, 0.0, 4.0, 2.0),
-        repeat_bounds: None,
         sampling: PaintImageSampling::Nearest,
         transform: PaintTransform2D::IDENTITY,
     }));
@@ -235,13 +389,17 @@ fn repeated_snapshot_image_preserves_fractional_period_and_finite_bounds() {
     let image = snapshot.add_image(Arc::new(
         moli_image::RgbaImage::try_new(2, 1, vec![255, 0, 0, 255, 0, 255, 0, 255]).unwrap(),
     ));
-    snapshot.push_fragment(PaintFragment::Image(PaintImage {
-        image,
-        destination: PaintRect::new(-0.5, 0.0, 3.5, 2.0),
-        repeat_bounds: Some(PaintRect::new(0.0, 0.0, 21.0, 6.0)),
-        sampling: PaintImageSampling::Nearest,
+    snapshot.push_fragment(PaintFragment::Tiles(Box::new(moli_layout::PaintTiles {
+        source: moli_layout::PaintTileSource::Image(image, PaintImageSampling::Nearest),
+        source_rect: PaintRect::new(0.0, 0.0, 2.0, 1.0),
+        grid: moli_layout::PaintTileGrid {
+            x: moli_layout::PaintTileAxis::new(-0.5, 3.5, 3.5, 7),
+            y: moli_layout::PaintTileAxis::new(0.0, 2.0, 2.0, 3),
+            coverage: PaintRect::new(0.0, 0.0, 21.0, 6.0),
+            snap_tiles: false,
+        },
         transform: PaintTransform2D::IDENTITY,
-    }));
+    })));
     let rendered = raster_snapshot(&snapshot).expect("fractional repeated image");
     for x in [0, 3, 7, 10, 14, 17] {
         assert_eq!(pixel(&rendered, x, 1), [255, 0, 0, 255], "red at {x}");
@@ -252,6 +410,87 @@ fn repeated_snapshot_image_preserves_fractional_period_and_finite_bounds() {
     assert_eq!(pixel(&rendered, 21, 1), [255; 4]);
     assert_eq!(pixel(&rendered, 1, 6), [255; 4]);
     assert_eq!(snapshot.fragments.len(), 1);
+}
+
+#[test]
+fn source_rectangle_clamps_linear_sampling_across_a_spaced_tile_grid() {
+    use moli_layout::{PaintTileAxis, PaintTileGrid, PaintTileSource, PaintTiles};
+
+    let mut snapshot = snapshot(28, 9, 1.0);
+    let image = snapshot.add_image(Arc::new(
+        moli_image::RgbaImage::try_new(
+            4,
+            1,
+            vec![
+                255, 0, 0, 255, 0, 255, 0, 255, 0, 0, 255, 255, 255, 0, 0, 255,
+            ],
+        )
+        .unwrap(),
+    ));
+    snapshot.push_fragment(PaintFragment::Tiles(Box::new(PaintTiles {
+        source: PaintTileSource::Image(image, PaintImageSampling::Linear),
+        source_rect: PaintRect::new(1.25, 0.0, 1.5, 1.0),
+        grid: PaintTileGrid {
+            x: PaintTileAxis::new(0.0, 8.0, 11.0, 3),
+            y: PaintTileAxis::new(2.0, 4.0, 0.0, 1),
+            coverage: PaintRect::new(1.0, 1.0, 24.0, 7.0),
+            snap_tiles: true,
+        },
+        transform: PaintTransform2D::translation(1.0, 1.0),
+    })));
+    let result = raster_snapshot(&snapshot).unwrap();
+    assert_eq!(pixel(&result, 2, 3), [0, 247, 8, 255]);
+    for x in [12, 23] {
+        assert_eq!(pixel(&result, x, 3), [0, 255, 0, 255]);
+    }
+    for x in [8, 19] {
+        assert_eq!(pixel(&result, x, 6), [0, 0, 255, 255]);
+    }
+    for (x, y) in [(1, 3), (9, 3), (11, 3), (20, 6), (26, 3), (3, 7)] {
+        assert_eq!(pixel(&result, x, y), [255; 4], "gap or clip at ({x}, {y})");
+    }
+    for x in 2..=8 {
+        assert_eq!(pixel(&result, x, 3)[0], 0, "neighbor texel at {x}");
+    }
+    assert_eq!(snapshot.images.len(), 1);
+}
+
+#[test]
+fn spaced_image_tiles_share_the_fractional_device_grid() {
+    use moli_layout::{PaintTileAxis, PaintTileGrid, PaintTileSource, PaintTiles};
+
+    let mut snapshot = snapshot(32, 16, 1.25);
+    let image = snapshot.add_image(Arc::new(
+        moli_image::RgbaImage::try_new(1, 1, vec![0, 0, 255, 255]).unwrap(),
+    ));
+    snapshot.push_fragment(PaintFragment::Tiles(Box::new(PaintTiles {
+        source: PaintTileSource::Image(image, PaintImageSampling::Nearest),
+        source_rect: PaintRect::new(0.0, 0.0, 1.0, 1.0),
+        grid: PaintTileGrid {
+            x: PaintTileAxis::new(0.9375, 4.0, 5.625, 3),
+            y: PaintTileAxis::new(3.25, 4.0, 0.0, 1),
+            coverage: PaintRect::new(0.0, 0.0, 32.0, 16.0),
+            snap_tiles: true,
+        },
+        transform: PaintTransform2D::IDENTITY,
+    })));
+    let rendered = raster_snapshot(&snapshot).unwrap();
+    for y in 0..rendered.height {
+        for x in 0..rendered.width {
+            let expected = if (4..9).contains(&y)
+                && ((1..6).contains(&x) || (8..13).contains(&x) || (15..20).contains(&x))
+            {
+                [0, 0, 255, 255]
+            } else {
+                [255; 4]
+            };
+            assert_eq!(
+                pixel(&rendered, x, y),
+                expected,
+                "tile or gap at ({x}, {y})"
+            );
+        }
+    }
 }
 
 #[test]
@@ -361,7 +600,6 @@ fn missing_snapshot_image_resource_is_rejected_before_backend_creation() {
     snapshot.push_fragment(PaintFragment::Image(PaintImage {
         image: moli_layout::PaintImageId::from_index(0),
         destination: PaintRect::new(0.0, 0.0, 1.0, 1.0),
-        repeat_bounds: None,
         sampling: PaintImageSampling::Linear,
         transform: PaintTransform2D::IDENTITY,
     }));
@@ -964,4 +1202,69 @@ fn html_text_shadow_uses_fill_ink_in_both_paint_orders() {
             reference = Some(shadow_pixels);
         }
     }
+}
+
+#[cfg(feature = "molio")]
+#[test]
+fn raster_damage_repaints_changed_image_rows_with_exact_pixels() {
+    use moli_layout::{PaintTileAxis, PaintTileGrid, PaintTileSource, PaintTiles};
+
+    let mut first = snapshot(96, 120, 1.25);
+    first.surface.device_scale = 2.0;
+    first.push_fragment(PaintFragment::solid_rect(
+        PaintRect::new(0.0, 0.0, 96.0, 120.0),
+        PaintColor::new(0.1, 0.3, 0.5, 1.0),
+    ));
+    let image = first.add_image(Arc::new(
+        moli_image::RgbaImage::try_new(1, 1, vec![255, 0, 0, 170]).unwrap(),
+    ));
+    first.push_fragment(PaintFragment::Image(PaintImage {
+        image,
+        destination: PaintRect::new(3.0, 30.5, 80.0, 30.0),
+        sampling: PaintImageSampling::Linear,
+        transform: PaintTransform2D::IDENTITY,
+    }));
+    first.push_fragment(PaintFragment::Tiles(Box::new(PaintTiles {
+        source: PaintTileSource::Image(image, PaintImageSampling::Linear),
+        source_rect: PaintRect::new(0.0, 0.0, 1.0, 1.0),
+        grid: PaintTileGrid {
+            x: PaintTileAxis::new(5.25, 18.5, 25.0, 3),
+            y: PaintTileAxis::new(81.5, 6.9375, 0.0, 1),
+            coverage: PaintRect::new(0.0, 81.0, 96.0, 10.0),
+            snap_tiles: true,
+        },
+        transform: PaintTransform2D::IDENTITY,
+    })));
+    first.push_fragment(PaintFragment::solid_rect(
+        PaintRect::new(7.0, 45.0, 6.5, 40.0),
+        PaintColor::new(1.0, 1.0, 0.0, 0.3),
+    ));
+    let mut second = first.clone();
+    second.images[image.index()].image =
+        Arc::new(moli_image::RgbaImage::try_new(1, 1, vec![0, 255, 0, 180]).unwrap());
+    let layout = raster_buffer_layout(96.0, 120.0, 2.0).unwrap();
+    let mut different_dpr = first.clone();
+    different_dpr.viewport.device_pixel_ratio = 2.0;
+    assert_eq!(
+        raster_damage_rows(&first, &different_dpr, layout),
+        0..layout.height
+    );
+    let rows = raster_damage_rows(&first, &second, layout);
+    assert_eq!(rows, 58..180);
+    let mut actual = vec![0; layout.byte_len];
+    raster_snapshot_into(&first, &mut actual, RasterPixelFormat::Bgra8).unwrap();
+    let mut expected = vec![0; layout.byte_len];
+    raster_snapshot_into(&second, &mut expected, RasterPixelFormat::Bgra8).unwrap();
+    assert!(
+        actual != expected,
+        "the replacement image must change pixels"
+    );
+    raster_snapshot_rows_into(&second, &mut actual, RasterPixelFormat::Bgra8, rows).unwrap();
+    let first_difference = actual
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .zip(expected.as_chunks::<4>().0)
+        .position(|(actual, expected)| actual != expected);
+    assert_eq!(first_difference, None, "first mismatched BGRA pixel");
 }

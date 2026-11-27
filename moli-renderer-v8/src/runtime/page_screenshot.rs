@@ -59,6 +59,11 @@ impl PaintFragmentProfile {
                 }
                 moli_layout::PaintFragment::Image(_) => profile.image += 1,
                 moli_layout::PaintFragment::SvgImage(_) => profile.svg_image += 1,
+                moli_layout::PaintFragment::Tiles(tiles) => match tiles.source {
+                    moli_layout::PaintTileSource::Image(..) => profile.image += 1,
+                    moli_layout::PaintTileSource::Svg(..) => profile.svg_image += 1,
+                    moli_layout::PaintTileSource::Brush(_) => profile.fill += 1,
+                },
             }
         }
         profile
@@ -143,7 +148,7 @@ pub enum RendererScreenshotFormat {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RendererScreenshotPurpose {
     Screenshot,
-    /// Pixel capture under print media, independent of native PDF output.
+    /// Capture or export using the print style environment.
     Print {
         print_background: bool,
     },
@@ -249,8 +254,8 @@ impl RendererCaptureScreenshotRequest {
 }
 
 impl PageVm {
-    /// Captures an explicit screenshot. These demands always execute a fresh
-    /// paint pass and never carry screencast state.
+    /// Captures an explicit screenshot, borrowing screen paint when it is
+    /// already retained by a continuous consumer.
     pub(super) fn capture_screenshot(
         &mut self,
         request: RendererCaptureScreenshotRequest,
@@ -453,12 +458,19 @@ impl PageVm {
         };
         let layout_started = profile_enabled.then(Instant::now);
         #[cfg(feature = "devtools")]
-        let reusable = match paint_session {
-            Some(session) => {
-                self.vm_mut()
-                    .paint_current_screencast_layout(session, viewport, paint_capture)?
-            }
-            None => None,
+        let reusable = if paint_session.is_some()
+            || (reason == LayoutFlushReason::Screenshot
+                && self.layout_configuration.policy.is_realtime()
+                && !self.vm().is_debugger_paused())
+        {
+            self.vm_mut().paint_current_screen_layout(
+                paint_session,
+                viewport,
+                paint_capture,
+                reason,
+            )?
+        } else {
+            None
         };
         #[cfg(not(feature = "devtools"))]
         let reusable = None;

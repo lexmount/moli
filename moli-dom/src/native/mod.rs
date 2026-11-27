@@ -5,6 +5,7 @@ mod document;
 mod element;
 mod host;
 mod html_serialization;
+pub mod inline_style;
 mod interaction;
 mod markdown;
 mod node;
@@ -21,8 +22,8 @@ pub use document::{
     Document, DocumentFragment, DocumentReadyState, DocumentTitleSetterTarget, DocumentType,
 };
 pub use element::{
-    Attribute, CustomElementState, Element, SelectedFile, html_element_interface_name,
-    svg_element_interface_name,
+    Attribute, CustomElementState, Element, InlineStyleAttribute, SelectedFile,
+    html_element_interface_name, svg_element_interface_name,
 };
 use host::StylesheetCandidateRegistries;
 pub use host::{
@@ -1104,6 +1105,7 @@ mod tests {
             "Attribute common record grew to {} bytes",
             size_of::<Attribute>()
         );
+        assert!(size_of::<InlineStyleAttribute>() <= 24);
         assert!(
             size_of::<Element>() <= 40,
             "Element common record grew to {} bytes",
@@ -2366,6 +2368,33 @@ mod tests {
             1,
             "a parent-document binding must not invalidate the child Document"
         );
+    }
+
+    #[test]
+    fn layout_versions_follow_connected_nodes_across_document_moves() {
+        let mut host = DomHost::from_dom(NativeDom::new_html(test_url()));
+        let document = host.document_node_id();
+        let parent = host.create_element("main");
+        let child = host.create_element("div");
+        assert!(host.append_child(document, parent));
+        assert!(host.append_child(parent, child));
+
+        let frame_document = host.create_detached_html_document();
+        let frame_parent = host.create_element("main");
+        assert!(host.append_child(frame_document, frame_parent));
+        host.mark_subtree_connected_preserving_owner_document(frame_document);
+
+        let document_version = host.document_layout_version(document);
+        let frame_version = host.document_layout_version(frame_document);
+        assert!(host.set_attribute(frame_parent, "style", "width:120px"));
+        assert_eq!(host.document_layout_version(document), document_version);
+        assert!(host.document_layout_version(frame_document) > frame_version);
+
+        let frame_version = host.document_layout_version(frame_document);
+        assert!(host.append_child(frame_parent, child));
+        assert_eq!(host.owner_document_handle(child), Some(frame_document));
+        assert!(host.document_layout_version(document) > document_version);
+        assert!(host.document_layout_version(frame_document) > frame_version);
     }
 
     #[test]

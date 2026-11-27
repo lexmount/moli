@@ -18,7 +18,7 @@ use style::{
 use super::{
     PaintSpace,
     background::{
-        CssImageLayerKind, ImageLayerStyles, background_tiles, get_cyclic, project_url_image_layer,
+        CssImageLayerKind, ImageLayerStyles, get_cyclic, gradient_tiles, project_url_image_layer,
     },
     geometry::BoxAreas,
     push_diagnostic_once,
@@ -68,11 +68,14 @@ pub(super) fn project_css_mask<N>(
     layout_box: &LayoutBox<N>,
     areas: BoxAreas,
     paint_space: PaintSpace,
+    css_images: &crate::source::CssImageLookup<'_>,
     snapshot: &mut PaintSnapshot,
 ) where
     N: Copy + Debug + Eq + Hash,
 {
-    let transform = paint_space.local_transform();
+    let grid = snapshot.pixel_grid();
+    let clip_transform = paint_space.property_transform();
+    let tile_transform = paint_space.local_transform();
     let Some(computed) = layout_box.style.stylo_computed_values() else {
         return;
     };
@@ -95,19 +98,26 @@ pub(super) fn project_css_mask<N>(
                 StyloMaskComposite::Exclude => PaintCompositeMode::Xor,
             }
         };
+        let clip = paint_space.pixel_snapped_box_clip(areas.shape(layer.clip), grid);
         snapshot.push_fragment(PaintFragment::PushLayer {
             opacity: 1.0,
             blend_mode: PaintBlendMode::Normal,
             composite,
-            clip: areas.shape(layer.clip),
-            transform,
+            clip: clip.clone(),
+            transform: clip_transform,
             filter: None,
         });
 
         match layer.image {
             GenericImage::None => {}
             GenericImage::Gradient(gradient) => {
-                let Some(tiles) = background_tiles(areas, &layer) else {
+                let Some(tiles) = gradient_tiles(
+                    areas.rect(layer.origin),
+                    clip.bounds(),
+                    &layer,
+                    paint_space,
+                    grid,
+                ) else {
                     push_diagnostic_once(
                         snapshot,
                         "mask-repeat-budget-exceeded",
@@ -125,25 +135,25 @@ pub(super) fn project_css_mask<N>(
                             fill_rule: crate::PaintFillRule::NonZero,
                             shape: PaintShape::Rect(tile),
                             brush,
-                            transform,
+                            transform: tile_transform,
                         });
                     }
                 }
             }
-            GenericImage::Url(_) => project_url_image_layer(
-                layout_box,
-                &layer,
-                layout_box
-                    .css_images
-                    .mask
-                    .get(index)
-                    .and_then(Option::as_ref),
-                areas,
-                paint_space,
-                snapshot,
-                CssImageLayerKind::Mask,
-                false,
-            ),
+            GenericImage::Url(_) => {
+                let resource = crate::source::css_image_url(layer.image)
+                    .map_or_else(crate::LayoutCssImageState::default, css_images);
+                project_url_image_layer(
+                    layout_box,
+                    &layer,
+                    resource.ready(),
+                    areas.rect(layer.origin),
+                    clip,
+                    paint_space,
+                    snapshot,
+                    CssImageLayerKind::Mask,
+                );
+            }
             GenericImage::LightDark(_)
             | GenericImage::PaintWorklet(_)
             | GenericImage::CrossFade(_)

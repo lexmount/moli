@@ -105,6 +105,10 @@ impl PageScriptHost {
         retired_owner: crate::frame_owner_model::FrameDocumentTaskOwner,
         document_handle: DomHandle,
     ) {
+        #[cfg(feature = "devtools")]
+        self.retire_wheel_scroll_targets(crate::native_bridge::WindowDocumentOwner::Frame(
+            retired_owner,
+        ));
         self.retire_embedded_document_fonts(document_handle);
         self.retire_realtime_rendering_document(crate::native_bridge::WindowDocumentOwner::Frame(
             retired_owner,
@@ -493,6 +497,10 @@ impl PageScriptHost {
                             },
                         ),
                         performance_time_origin,
+                        pending_stylesheet_resource_timing: existing
+                            .as_ref()
+                            .map(|entry| entry.pending_stylesheet_resource_timing.clone())
+                            .unwrap_or_default(),
                         pending_document_load_id: existing.as_ref().and_then(|entry| {
                             entry.pending_document_load_id_for_refresh(attribute_bootstrap_changed)
                         }),

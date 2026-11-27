@@ -6,8 +6,8 @@ use super::{
     sticky::StickyConstraints,
 };
 use crate::{
-    LayoutBoxId, LayoutCoordinateSpaceId, LayoutError, LayoutOutputBoxId, LayoutPoint,
-    LayoutTransform2D, layout_tree::LayoutCoordinateSpace, style::ResolvedLayoutTransform,
+    LayoutCoordinateSpaceId, LayoutError, LayoutOutputBoxId, LayoutPoint, LayoutTransform2D,
+    PaintPixelGrid, layout_tree::LayoutCoordinateSpace, style::ResolvedLayoutTransform,
 };
 
 #[derive(Clone, Copy)]
@@ -63,7 +63,16 @@ pub(super) fn compose_layout_space(
     };
     let location = placement.positioned_location();
     let scroll = placement.parent_scroll.unwrap_or(LayoutPoint::ZERO);
-    let translation = LayoutTransform2D::translation(location.x - scroll.x, location.y - scroll.y);
+    // Keep the subtraction in matrix precision. Local scroll translations
+    // can then be composed separately from the published box location.
+    let translation = LayoutTransform2D::new([
+        1.0,
+        0.0,
+        0.0,
+        1.0,
+        f64::from(location.x) - f64::from(scroll.x),
+        f64::from(location.y) - f64::from(scroll.y),
+    ]);
     let local_to_parent = translation.concatenate(placement.transform.transform);
     let local_to_document = parent_transform.concatenate(local_to_parent);
     let local_to_document_ignoring_css_transforms = parent_without_css.concatenate(translation);
@@ -84,7 +93,7 @@ pub(super) fn compose_layout_space(
 
 #[derive(Clone, Copy)]
 pub(super) struct BoxPlacement {
-    pub(super) parent: Option<LayoutBoxId>,
+    pub(super) parent: Option<LayoutOutputBoxId>,
     pub(super) location: LayoutPoint,
     pub(super) transform: ResolvedLayoutTransform,
     pub(super) fixed: bool,
@@ -96,17 +105,17 @@ pub(super) struct ResolvedCoordinates {
 }
 
 pub(super) fn resolve_coordinate_spaces(
-    root: LayoutBoxId,
+    root: LayoutOutputBoxId,
     viewport_scroll: LayoutPoint,
     box_count: usize,
-    paint: bool,
+    paint_grid: Option<PaintPixelGrid>,
     placements: impl Fn(usize) -> Result<(BoxPlacement, Option<StickyConstraints>), LayoutError>,
-    scroll_offset: impl Fn(LayoutBoxId) -> Option<LayoutPoint>,
+    scroll_offset: impl Fn(LayoutOutputBoxId) -> Option<LayoutPoint>,
 ) -> Result<ResolvedCoordinates, LayoutError> {
     let mut resolver = CoordinateSpaceResolver {
         root,
         viewport_scroll,
-        paint,
+        paint_grid,
         placements,
         scroll_offset,
         spaces: vec![None; box_count + 1],
@@ -148,9 +157,9 @@ pub(super) fn resolve_coordinate_spaces(
 // Resolve dependencies before projecting a box. Sticky scroll ancestry can
 // differ from numeric parentage, so both dependencies need the same cycle check.
 struct CoordinateSpaceResolver<Placement, Offset> {
-    root: LayoutBoxId,
+    root: LayoutOutputBoxId,
     viewport_scroll: LayoutPoint,
-    paint: bool,
+    paint_grid: Option<PaintPixelGrid>,
     placements: Placement,
     scroll_offset: Offset,
     spaces: Vec<Option<ProjectedCoordinateSpace>>,
@@ -161,7 +170,7 @@ struct CoordinateSpaceResolver<Placement, Offset> {
 impl<Placement, Offset> CoordinateSpaceResolver<Placement, Offset>
 where
     Placement: Fn(usize) -> Result<(BoxPlacement, Option<StickyConstraints>), LayoutError>,
-    Offset: Fn(LayoutBoxId) -> Option<LayoutPoint>,
+    Offset: Fn(LayoutOutputBoxId) -> Option<LayoutPoint>,
 {
     fn resolve(&mut self, index: usize) -> Result<(), LayoutError> {
         let Some(state) = self.state.get_mut(index) else {
@@ -221,11 +230,9 @@ where
         };
         let projected = ProjectedCoordinateSpace {
             layout: compose_layout_space(index, placement, self.viewport_scroll),
-            paint: if self.paint {
-                derive_paint_space(placement, self.viewport_scroll)
-            } else {
-                PaintSpace::ROOT
-            },
+            paint: self.paint_grid.map_or(PaintSpace::ROOT, |grid| {
+                derive_paint_space(placement, self.viewport_scroll, grid)
+            }),
         };
         let inherited = base
             .parent
@@ -238,7 +245,7 @@ where
         Ok(())
     }
 
-    fn space(&self, id: LayoutBoxId) -> Result<&ProjectedCoordinateSpace, LayoutError> {
+    fn space(&self, id: LayoutOutputBoxId) -> Result<&ProjectedCoordinateSpace, LayoutError> {
         self.spaces
             .get(id.index() + 1)
             .and_then(Option::as_ref)
@@ -268,7 +275,7 @@ mod tests {
     ) -> ProjectedCoordinateSpace {
         ProjectedCoordinateSpace {
             layout: compose_layout_space(index, placement, scroll),
-            paint: derive_paint_space(placement, scroll),
+            paint: derive_paint_space(placement, scroll, PaintPixelGrid::new(1.0)),
         }
     }
 

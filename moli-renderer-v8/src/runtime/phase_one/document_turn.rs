@@ -72,7 +72,7 @@ impl<'driver> DocumentTurnContext<'driver> {
             } = &mut *page_vm;
             vm.as_mut()
                 .expect("PageVm must retain a live ScriptVm until drop")
-                .prime_document_lifecycle_processing_and_record_stylesheet_network_results();
+                .prime_document_lifecycle_and_publish_stylesheets();
             self.parser_session
                 .with_stylesheet_blocking_read_view(|document| {
                     vm.as_mut()

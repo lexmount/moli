@@ -138,6 +138,67 @@ document.body.innerHTML = `<table id=precedence><colgroup><col><col></colgroup><
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn identity_color_filters_preserve_containing_block_and_blend_isolation() {
+    run_page_vm_async_test(async move {
+        let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default())?;
+        let mut page = test_page_vm_with_loader_and_document_url(
+            &loader,
+            Vec::new(),
+            Url::parse("https://example.com/identity-filters.html")?,
+        );
+        page.vm_mut().eval(
+            r#"
+document.head.innerHTML = `<style>
+html,body { margin:0; background:red }
+#identity { margin:24px 40px; width:32px; height:32px;
+            filter:contrast(100%) saturate(100%) brightness(1) opacity(1)
+                   grayscale(0) invert(0) sepia(0) hue-rotate(0deg) }
+#child { position:fixed; left:4px; top:12px; width:12px; height:12px;
+         mix-blend-mode:multiply; background:lime }
+#mixed { position:absolute; left:80px; top:24px; width:16px; height:16px;
+         filter:contrast(1) brightness(0) saturate(1); background:lime }
+</style>`;
+document.body.innerHTML = '<div id=identity><div id=child></div></div><div id=mixed></div>';
+"#,
+        )?;
+
+        let snapshot = page
+            .vm_mut()
+            .screenshot_layout_snapshot(moli_layout::PaintViewport::new(120, 80, 1.0))?
+            .expect("identity filter paint");
+        let filters: Vec<_> = snapshot
+            .fragments
+            .iter()
+            .filter_map(|fragment| match fragment {
+                moli_layout::PaintFragment::PushLayer { filter, .. } => *filter,
+                _ => None,
+            })
+            .collect();
+        assert_eq!(filters, [moli_layout::PaintFilter::Brightness(0.0)]);
+        assert_eq!(
+            page.vm_mut().eval(
+                r#"JSON.stringify([
+            child.getBoundingClientRect().x, child.getBoundingClientRect().y,
+            getComputedStyle(identity).filter.startsWith('contrast(1) saturate(1)')
+        ])"#
+            )?,
+            "[44,36,true]"
+        );
+
+        let image = moli_paint::raster_snapshot(&snapshot)?;
+        let pixel = |x, y| {
+            let index = (y * image.width as usize + x) * 4;
+            &image.rgba[index..index + 4]
+        };
+        assert_eq!(pixel(48, 40), [0, 255, 0, 255]);
+        assert_eq!(pixel(84, 28), [0, 0, 0, 255]);
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .expect("identity filter fixture should run");
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn screenshot_paint_executes_clip_filter_and_gradient_mask_layers() {
     run_page_vm_async_test(async move {
         let loader =
@@ -639,10 +700,12 @@ html,body{{margin:0;padding:0;background:white}}
             assert_eq!(snapshot.images.len(), 1);
             assert_eq!(snapshot.svg_images.len(), 4);
             assert!(snapshot.fragments.iter().any(|fragment| {
-                matches!(fragment, moli_layout::PaintFragment::Image(_))
+                matches!(fragment, moli_layout::PaintFragment::Tiles(tiles)
+                    if matches!(tiles.source, moli_layout::PaintTileSource::Image(..)))
             }));
             assert!(snapshot.fragments.iter().any(|fragment| {
-                matches!(fragment, moli_layout::PaintFragment::SvgImage(_))
+                matches!(fragment, moli_layout::PaintFragment::Tiles(tiles)
+                    if matches!(tiles.source, moli_layout::PaintTileSource::Svg(..)))
             }));
             assert!(snapshot.diagnostics.iter().all(|diagnostic| {
                 diagnostic.code != "background-image-resource-unavailable"
@@ -702,14 +765,14 @@ async fn screenshot_preserves_table_cell_dimension_hints_and_avatar_columns() {
             Url::parse("https://example.com/table-cell-dimensions.html")?,
         );
         page.vm_mut()
-            .set_layout_policy(moli_page_types::LayoutPolicy::OnDemand);
+            .set_layout_policy(moli_page_types::LayoutPolicy::Lazy);
         let fixture = include_str!("../../../../../tests/fixtures/table-cell-dimensions.html");
         page.vm_mut().eval(&format!(
             "document.open();document.write({});document.close()",
             serde_json::to_string(fixture)?,
         ))?;
         page.vm_mut()
-            .prime_document_lifecycle_processing_and_record_stylesheet_network_results();
+            .prime_document_lifecycle_and_publish_stylesheets();
 
         for phase in 0..3 {
             page.vm_mut()
@@ -762,7 +825,7 @@ async fn table_cell_absolute_descendants_use_final_geometry() {
             Vec::new(),
             Url::parse("https://example.com/table-cell-absolute.html")?,
         );
-        page.vm_mut().set_layout_policy(moli_page_types::LayoutPolicy::OnDemand);
+        page.vm_mut().set_layout_policy(moli_page_types::LayoutPolicy::Lazy);
         page.vm_mut().eval(r#"
 document.head.innerHTML = `<style>
 body { margin:0 } table { width:200px;border-spacing:0;table-layout:fixed }
@@ -800,7 +863,7 @@ async fn table_cell_nested_percentage_baseline_reaches_parent_measurement() {
             Vec::new(),
             Url::parse("https://example.com/table-cell-nested-baseline.html")?,
         );
-        page.vm_mut().set_layout_policy(moli_page_types::LayoutPolicy::OnDemand);
+        page.vm_mut().set_layout_policy(moli_page_types::LayoutPolicy::Lazy);
         page.vm_mut().eval(r#"
 document.head.innerHTML = `<style>
 body { margin:0 } table { width:200px;border-spacing:0;table-layout:fixed }
@@ -840,7 +903,7 @@ async fn table_cell_synthetic_baselines_ignore_positioned_overflow() {
             Vec::new(),
             Url::parse("https://example.com/table-cell-flow-baseline.html")?,
         );
-        page.vm_mut().set_layout_policy(moli_page_types::LayoutPolicy::OnDemand);
+        page.vm_mut().set_layout_policy(moli_page_types::LayoutPolicy::Lazy);
         page.vm_mut().eval(r#"
 document.head.innerHTML = `<style>
 body { margin:0 } table { width:200px;border-spacing:0;table-layout:fixed }
@@ -887,7 +950,7 @@ async fn table_cell_vertical_alignment_includes_floats() {
             Vec::new(),
             Url::parse("https://example.com/table-cell-float-alignment.html")?,
         );
-        page.vm_mut().set_layout_policy(moli_page_types::LayoutPolicy::OnDemand);
+        page.vm_mut().set_layout_policy(moli_page_types::LayoutPolicy::Lazy);
         page.vm_mut().eval(r#"
 document.head.innerHTML = `<style>
 body { margin:0 } table { width:200px;border-spacing:0;table-layout:fixed }
@@ -937,10 +1000,10 @@ async fn screenshot_table_row_heights_match_chromium() {
         let mut page = test_page_vm_with_loader_and_document_url(
             &loader, Vec::new(), Url::parse("https://example.com/table-row-heights.html")?,
         );
-        page.vm_mut().set_layout_policy(moli_page_types::LayoutPolicy::OnDemand);
+        page.vm_mut().set_layout_policy(moli_page_types::LayoutPolicy::Lazy);
         let fixture = include_str!("../../../../../tests/fixtures/table-row-heights.html");
         page.vm_mut().eval(&format!("document.open();document.write({});document.close()", serde_json::to_string(fixture)?))?;
-        page.vm_mut().prime_document_lifecycle_processing_and_record_stylesheet_network_results();
+        page.vm_mut().prime_document_lifecycle_and_publish_stylesheets();
         page.vm_mut().eval("if (!cases.length) buildTableRowHeightCases()")?;
         let expected: serde_json::Value = serde_json::from_str(include_str!("../../../../../tests/fixtures/table-row-heights.chromium.json"))?;
         let mut failures = Vec::new();
@@ -1012,14 +1075,14 @@ async fn screenshot_recascades_table_part_dimension_hints() {
             Url::parse("https://example.com/table-part-dimensions.html")?,
         );
         page.vm_mut()
-            .set_layout_policy(moli_page_types::LayoutPolicy::OnDemand);
+            .set_layout_policy(moli_page_types::LayoutPolicy::Lazy);
         let fixture = include_str!("../../../../../tests/fixtures/table-part-dimensions.html");
         page.vm_mut().eval(&format!(
             "document.open();document.write({});document.close()",
             serde_json::to_string(fixture)?,
         ))?;
         page.vm_mut()
-            .prime_document_lifecycle_processing_and_record_stylesheet_network_results();
+            .prime_document_lifecycle_and_publish_stylesheets();
 
         for phase in 0..4 {
             page.vm_mut()
