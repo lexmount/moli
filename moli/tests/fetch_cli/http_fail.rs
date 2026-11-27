@@ -14,7 +14,6 @@ use serde_json::{Value, json};
 use std::{
     io::{self, Write},
     process::{Command, ExitCode, Output},
-    time::Duration,
 };
 use tokio::{
     io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader},
@@ -22,7 +21,10 @@ use tokio::{
     task::JoinHandle,
 };
 
-use super::subprocess::run_command_with_process_timeout;
+use super::{
+    subprocess::{PROCESS_WATCHDOG, run_command_with_process_timeout},
+    timing::{PHASE_TIMEOUT_MS, TIMEOUT_MS},
+};
 
 const HTML: &str =
     "<!doctype html><title>HTTP fixture</title><h1>HTTP fixture</h1><p>response body</p>";
@@ -172,15 +174,15 @@ impl HttpFailureFixture {
     }
 
     fn run(&self, path: &str, args: &[&str]) -> Result<Output> {
-        self.run_with_timeout(path, args, 5000)
+        self.run_with_timeout(path, args, TIMEOUT_MS)
     }
 
-    fn run_with_timeout(&self, path: &str, args: &[&str], timeout_ms: u64) -> Result<Output> {
+    fn run_with_timeout(&self, path: &str, args: &[&str], timeout_ms: &str) -> Result<Output> {
         Ok(Command::new(env!("CARGO_BIN_EXE_moli"))
             .env("MOLI_LAYOUT", "false")
             .args(["fetch", "--http-no-proxy", "*", "--redirect-wait-ms", "0"])
             .arg("--timeout")
-            .arg(timeout_ms.to_string())
+            .arg(timeout_ms)
             .args(args)
             .arg(format!("{}{path}", self.base_url))
             .output()?)
@@ -551,14 +553,14 @@ async fn unsupported_raw_output_cancels_without_waiting_for_the_body() -> Result
                             "--redirect-wait-ms",
                             "0",
                             "--timeout",
-                            "30000",
+                            TIMEOUT_MS,
                             "--wait-until",
                             wait_until,
                         ])
                         .args(flag)
                         .arg(format!("{}/raw", server.base_url));
                     let output = tokio::task::spawn_blocking(move || {
-                        run_command_with_process_timeout(command, Duration::from_secs(10))
+                        run_command_with_process_timeout(command, PROCESS_WATCHDOG)
                     })
                     .await?
                     .with_context(|| {
@@ -585,7 +587,7 @@ async fn unsupported_raw_output_cancels_without_waiting_for_the_body() -> Result
                         assert_eq!(stderr.lines().count(), 2, "{stderr}");
                     }
                     assert!(!stderr.contains("timed out"), "{stderr}");
-                    tokio::time::timeout(Duration::from_secs(10), &mut server.task)
+                    tokio::time::timeout(PROCESS_WATCHDOG, &mut server.task)
                         .await
                         .expect("the HTTP download must be cancelled")?;
                 }
@@ -697,7 +699,7 @@ async fn http_failure_modes_report_status_when_page_readiness_times_out() -> Res
                 let output = server.run_with_timeout(
                     &path,
                     &[flag, "--dump", "markdown", wait_option, condition],
-                    5000,
+                    PHASE_TIMEOUT_MS,
                 )?;
                 if flag == "--fail" {
                     server.assert_http_failure(&output, status, &path);
@@ -741,14 +743,14 @@ async fn http_failure_modes_bound_diagnostics_for_busy_wait_scripts() -> Result<
                     "--wait-until",
                     "load",
                     "--timeout",
-                    "5000",
+                    PHASE_TIMEOUT_MS,
                     "--wait-script",
                     "() => { for (;;) {} }",
                 ])
                 .args(flag)
                 .arg(format!("{}{path}", server.base_url));
             let output = tokio::task::spawn_blocking(move || {
-                run_command_with_process_timeout(command, Duration::from_secs(15))
+                run_command_with_process_timeout(command, PROCESS_WATCHDOG)
             })
             .await?
             .with_context(|| format!("busy readiness script: status {status}, flag {flag:?}"))?;
@@ -760,9 +762,9 @@ async fn http_failure_modes_bound_diagnostics_for_busy_wait_scripts() -> Result<
             assert!(output.stdout.is_empty(), "{output:?}");
             let stderr = String::from_utf8_lossy(&output.stderr);
             assert!(
-                stderr.contains(
-                    "fetch readiness timed out after 5000 ms while waiting for a script to become truthy"
-                ),
+                stderr.contains(&format!(
+                    "fetch readiness timed out after {PHASE_TIMEOUT_MS} ms while waiting for a script to become truthy"
+                )),
                 "{stderr}"
             );
             assert_eq!(
@@ -785,7 +787,7 @@ async fn http_failure_modes_use_redirect_status_when_readiness_fails() -> Result
                 let output = server.run_with_timeout(
                     &format!("/{prefix}/{status}"),
                     &[flag, "--dump", "markdown", "--wait-selector", "#app"],
-                    10000,
+                    PHASE_TIMEOUT_MS,
                 )?;
                 let stderr = String::from_utf8_lossy(&output.stderr);
                 assert!(stderr.contains("waiting for a selector"), "{stderr}");

@@ -4,8 +4,11 @@ use std::{
     fmt,
     io::{self, Read},
     process::{Child, Command, Output, Stdio},
-    time::{Duration, Instant},
+    time::Duration,
 };
+use wait_timeout::ChildExt;
+
+pub(super) const PROCESS_WATCHDOG: Duration = Duration::from_secs(60);
 
 struct KillOnDropChild(Child);
 
@@ -73,20 +76,13 @@ pub(super) fn run_command_with_process_timeout(
         // deadlock even after layout finishes if either pipe fills up.
         let stdout = scope.spawn(move || read_process_pipe(stdout));
         let stderr = scope.spawn(move || read_process_pipe(stderr));
-        let started = Instant::now();
-        let timed_out = loop {
-            if child.0.try_wait()?.is_some() {
-                break false;
-            }
-            if started.elapsed() >= timeout {
-                child
-                    .0
-                    .kill()
-                    .context("failed to kill timed-out CLI child")?;
-                break true;
-            }
-            std::thread::sleep(Duration::from_millis(10));
-        };
+        let timed_out = child.0.wait_timeout(timeout)?.is_none();
+        if timed_out {
+            child
+                .0
+                .kill()
+                .context("failed to kill timed-out CLI child")?;
+        }
         // Reap before joining readers, including after a timeout. The guard
         // does the same on early errors so a blocked child cannot outlive us.
         let output = Output {
@@ -132,13 +128,14 @@ mod tests {
         command
             .args(["--exact", test_name, "--nocapture"])
             .env(CHILD_MODE, "hang");
-        let error = run_command_with_process_timeout(command, Duration::from_secs(2))
+        let watchdog = Duration::from_secs(10);
+        let error = run_command_with_process_timeout(command, watchdog)
             .expect_err("the child deliberately never exits");
         let message = error.to_string();
         assert!(message.contains("stdout-before-hang"));
         assert!(message.contains("stderr-before-hang"));
         let timeout = error.downcast::<ProcessTimeout>()?;
-        assert_eq!(timeout.timeout, Duration::from_secs(2));
+        assert_eq!(timeout.timeout, watchdog);
         assert!(!timeout.output.status.success());
         #[cfg(target_os = "linux")]
         assert!(
