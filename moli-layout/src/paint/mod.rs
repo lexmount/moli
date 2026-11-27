@@ -495,17 +495,14 @@ where
                 });
             }
             PaintOrderEvent::BoxBackground(id) => {
+                let index = projection.world.boxes.index_of(id);
                 active_clips.transition_to(
                     projection,
-                    projection
-                        .geometry(projection.world.boxes.index_of(id))
-                        .clip_chain,
+                    projection.geometry(index).clip_chain,
                     &mut snapshot,
                 );
                 if let Some(links) = &links
-                    && let Some(fragment) = projection.metadata.boxes
-                        [projection.world.boxes.index_of(id)]
-                    .direct_fragment
+                    && let Some(fragment) = projection.metadata.boxes[index].direct_fragment
                 {
                     links.append(projection, fragment, &mut snapshot);
                 }

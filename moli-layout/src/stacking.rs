@@ -113,7 +113,7 @@ impl InlineOrder {
             entries: vec![Vec::new(); world.boxes.len()],
             atomic_lines: vec![None; world.boxes.len()],
         };
-        for (owner_index, layout_box) in world.boxes.iter().enumerate() {
+        for (owner_index, layout_box) in world.boxes.ordered().enumerate() {
             let Some(context) = &layout_box.inline_layout else {
                 continue;
             };

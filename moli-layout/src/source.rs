@@ -804,6 +804,15 @@ where
         Ok(None)
     }
 
+    /// Whether a retained marker still has the resolved style for this pass.
+    fn can_reuse_marker_style(
+        &self,
+        _previous: &ResolvedLayoutStyle,
+        _current: &ResolvedLayoutStyle,
+    ) -> bool {
+        false
+    }
+
     fn placeholder_style(
         &mut self,
         _node: N,

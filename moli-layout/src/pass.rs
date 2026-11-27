@@ -534,7 +534,7 @@ where
         let world = &self.prepared.world;
         world
             .boxes
-            .iter()
+            .ordered()
             .enumerate()
             .filter_map(|(index, layout_box)| {
                 let source = layout_box.source()?;
@@ -626,7 +626,7 @@ where
         "viewport policy must retain only a live pass-local body box identity"
     );
     let phase_started = Instant::now();
-    prepare_list_markers(&mut world)?;
+    let changed_retained_marker_text = prepare_list_markers(&mut world)?;
     let list_marker_elapsed = phase_started.elapsed();
     let phase_started = Instant::now();
     prepare_form_controls(&mut world, styles)?;
@@ -640,7 +640,7 @@ where
         form_control_elapsed,
         retained_box_count,
         pruned_source_count,
-        reuse_numeric_layout,
+        reuse_numeric_layout: reuse_numeric_layout && !changed_retained_marker_text,
     })
 }
 
@@ -685,7 +685,7 @@ where
     if retain_inline {
         let fonts = services.font_inputs();
         if world.retained_inline_fonts.as_deref() != Some(&fonts) {
-            for layout_box in world.boxes.iter_mut() {
+            for layout_box in world.boxes.values_mut() {
                 layout_box.inline_layout = None;
             }
             world.inline_numeric_reuse = None;
@@ -785,7 +785,7 @@ where
     let mut embedded_viewports = HashMap::new();
     let mut svg_viewports = HashMap::new();
     let mut frozen_inline_svg = None;
-    for (index, layout_box) in world.boxes.iter().enumerate() {
+    for (index, layout_box) in world.boxes.ordered().enumerate() {
         let Some(kind) = layout_box
             .element_semantics()
             .and_then(|element| element.replaced)

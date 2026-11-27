@@ -774,7 +774,7 @@ where
         for cache in &mut self.box_caches {
             cache.clear();
         }
-        for layout_box in self.boxes.iter_mut() {
+        for layout_box in self.boxes.values_mut() {
             if let Some(cache) = &mut layout_box.table_measure_cache {
                 cache.clear();
             }
@@ -816,7 +816,7 @@ where
         self.numeric_tree = None;
         self.retained_inline_fonts = None;
         self.box_caches = Vec::new();
-        for layout_box in self.boxes.iter_mut() {
+        for layout_box in self.boxes.values_mut() {
             layout_box.cache_slot = None;
         }
     }
@@ -1120,7 +1120,7 @@ where
         self.boxes.retain_in_order(order);
         if self.boxes.len() != previous_len {
             let live = self.boxes.order_snapshot();
-            for layout_box in self.boxes.iter_mut() {
+            for layout_box in self.boxes.values_mut() {
                 layout_box.structural_parent =
                     layout_box.structural_parent.filter(|id| live.contains(*id));
                 layout_box.parent = layout_box.parent.filter(|id| live.contains(*id));
@@ -1310,7 +1310,7 @@ where
                 ));
             }
         }
-        for (index, layout_box) in self.boxes.iter().enumerate() {
+        for (index, layout_box) in self.boxes.ordered().enumerate() {
             let id = self.boxes.id_at(index);
             self.validate_box_provenance(id, layout_box)?;
             self.validate_table_parentage(id, layout_box)?;

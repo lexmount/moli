@@ -491,7 +491,7 @@ where
     ) -> Result<Vec<LayoutBoxId>, LayoutError> {
         let mut children = Vec::new();
         if style.display().is_list_item() {
-            children.extend(self.build_list_marker(world, source_node)?);
+            children.extend(self.build_list_marker(world, source_node, None)?);
         }
         children.extend(self.build_pseudo(world, source_node, LayoutPseudo::Before, before)?);
         for child in self.checked_flat_children(source_node)? {
@@ -505,16 +505,33 @@ where
         &mut self,
         world: &mut LayoutWorld<S::NodeId>,
         source_node: S::NodeId,
+        retained_item: Option<LayoutBoxId>,
     ) -> Result<Vec<LayoutBoxId>, LayoutError> {
         let Some(marker) = self.styles.marker_style(source_node)? else {
             return Ok(Vec::new());
         };
-        self.build_generated_pseudo(
-            world,
-            source_node,
-            LayoutPseudo::Marker,
-            marker.into_style(),
-        )
+        let style = marker.into_style();
+        if let Some(item) = retained_item
+            && let Some(id) = world.boxes[item].children.iter().copied().find(|id| {
+                let child = &world.boxes[id];
+                child.kind == LayoutBoxKind::PseudoMarker && child.owner == Some(source_node)
+            })
+        {
+            let previous = &world.boxes[id];
+            let item_style = &world.boxes[item].style;
+            let outside =
+                item_style.list_marker_position() == crate::LayoutListMarkerPosition::Outside;
+            let default_text = item_style.list_marker_type() != &crate::LayoutListMarkerType::None;
+            if previous.outside_list_marker == outside
+                && (!style.has_normal_generated_content()
+                    || previous.children.len() == usize::from(default_text))
+                && self.styles.can_reuse_marker_style(&previous.style, &style)
+            {
+                self.collect_css_images(source_node, &style);
+                return Ok(vec![id]);
+            }
+        }
+        self.build_generated_pseudo(world, source_node, LayoutPseudo::Marker, style)
     }
 
     fn build_pseudo(

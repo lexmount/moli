@@ -87,7 +87,7 @@ impl PreparedWorldLayout {
         );
         for (layout_box, layout) in world
             .boxes
-            .iter_mut()
+            .values_mut()
             .zip(self.numeric_unrounded_layouts.iter().copied())
         {
             layout_box.unrounded_layout = layout;
@@ -929,7 +929,7 @@ where
 {
     let contents = world
         .boxes
-        .iter()
+        .values()
         .flat_map(|layout_box| layout_box.children.iter().copied().enumerate())
         .filter(|(_, id)| {
             world.boxes[id].anonymous_reason
@@ -1239,7 +1239,7 @@ where
     let mut processed = vec![false; world.boxes.len()];
     while let Some(index) = world
         .boxes
-        .iter()
+        .ordered()
         .enumerate()
         .find_map(|(index, layout_box)| {
             (!processed[index] && layout_box.inline_static_position.is_some()).then_some(index)
