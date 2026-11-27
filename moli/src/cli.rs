@@ -711,10 +711,11 @@ pub struct CommonArgs {
     /// Set the default `Accept-Language` header and Navigator languages.
     ///
     /// Accepts language tags with optional weights, such as
-    /// `zh-CN,zh;q=0.9,en;q=0.8`. Navigator reflects descending weight and
-    /// skips zero-weight entries and wildcards. The default comes from the
-    /// macOS or Windows display language, then `LANGUAGE`, `LC_ALL`,
-    /// `LC_MESSAGES`, or `LANG`, with `en-US,en;q=0.9` as the fallback.
+    /// `zh-CN,zh;q=0.9,en;q=0.8`. Requires a language tag with positive weight.
+    /// Navigator reflects descending weight and skips zero-weight entries and
+    /// wildcards. The default comes from the macOS or Windows display language,
+    /// then `LANGUAGE`, `LC_ALL`, `LC_MESSAGES`, or `LANG`, with `en-US,en;q=0.9`
+    /// as the fallback.
     #[arg(
         long,
         value_name = "LANGUAGES",
