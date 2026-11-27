@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use moli_layout::{
     DocumentLayoutServices, FrozenLayoutTree, LayoutError, LayoutPoint, LayoutViewport,
@@ -12,6 +12,7 @@ use super::layout_snapshot::PublishedFrameGeometry;
 use crate::{
     css_resource_urls::{CompletedStylesheetWebFont, StylesheetLoadBlockingResource},
     document_runtime::DomHandle,
+    layout_renderer::FrameOwnerStyles,
     script_vm::web_fonts::{
         DocumentWebFontCompletion, DocumentWebFontState, PreparedStylesheetResourceLoad,
     },
@@ -34,9 +35,14 @@ struct CachedInferredFrameStyleViewport {
 
 #[derive(Default)]
 pub(super) struct OnDemandFrameLayout {
-    /// The iframe owner's style before its first attribute change in this batch.
-    pub(super) previous_styles: HashMap<DomHandle, Option<ServoArc<ComputedValues>>>,
+    pub(super) changed_owners: HashSet<DomHandle>,
     pub(super) needs_layout: bool,
+}
+
+struct PublishedFrameViewport {
+    viewport: LayoutViewport,
+    /// The iframe owner's style used to measure this viewport.
+    owner_style: Option<ServoArc<ComputedValues>>,
 }
 
 /// Layout-facing state whose lifetime is bounded by exactly one main Document.
@@ -70,7 +76,7 @@ pub(super) struct DocumentLayoutState {
     /// parent layout. Blink keeps the equivalent size on LocalFrameView; it is
     /// separate from the single latest-tree slot because a later fresh layout
     /// may replace that slot while the frame view remains live.
-    frame_viewports: HashMap<DomHandle, LayoutViewport>,
+    frame_viewports: HashMap<DomHandle, PublishedFrameViewport>,
     pub(super) on_demand_frames: OnDemandFrameLayout,
     /// Authored-size fallback used before parent layout publishes an exact
     /// iframe content viewport. The dependency key makes clean style reads
@@ -365,7 +371,11 @@ impl DocumentLayoutState {
     }
 
     pub(super) fn frame_viewport(&self, frame: DomHandle) -> Option<LayoutViewport> {
-        self.frame_viewports.get(&frame).copied()
+        self.frame_viewports.get(&frame).map(|frame| frame.viewport)
+    }
+
+    pub(super) fn frame_owner_style(&self, frame: DomHandle) -> Option<ServoArc<ComputedValues>> {
+        self.frame_viewports.get(&frame)?.owner_style.clone()
     }
 
     pub(super) fn inferred_frame_style_viewport(
@@ -404,15 +414,20 @@ impl DocumentLayoutState {
     pub(super) fn update_frame_viewports(
         &mut self,
         updates: impl IntoIterator<Item = (DomHandle, Option<LayoutViewport>)>,
+        mut owner_styles: FrameOwnerStyles,
     ) -> bool {
         let mut changed = false;
         for (frame, viewport) in updates {
             match viewport {
                 Some(viewport) => {
-                    if self.frame_viewports.get(&frame) != Some(&viewport) {
-                        self.frame_viewports.insert(frame, viewport);
-                        changed = true;
-                    }
+                    let previous = self.frame_viewports.insert(
+                        frame,
+                        PublishedFrameViewport {
+                            viewport,
+                            owner_style: owner_styles.remove(&frame),
+                        },
+                    );
+                    changed |= previous.is_none_or(|previous| previous.viewport != viewport);
                 }
                 None => {
                     changed |= self.frame_viewports.remove(&frame).is_some();

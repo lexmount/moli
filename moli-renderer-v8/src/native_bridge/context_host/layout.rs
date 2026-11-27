@@ -12,16 +12,16 @@ use moli_page_types::LayoutPolicy;
 use moli_selector::QueryContainerSizes;
 use style::servo::restyle_damage::ServoRestyleDamage;
 
-use super::PageScriptHost;
 #[cfg(feature = "devtools")]
 use super::layout_snapshot::PublishedFrameGeometry;
 use super::layout_state::InferredFrameStyleViewportCacheKey;
+use super::{LayoutPublicationRequest, PageScriptHost};
 use crate::{
     css_resource_urls::{
         CompletedStylesheetWebFont, StylesheetLoadBlockingResource, StylesheetSubresourceRequest,
     },
     document_runtime::DomHandle,
-    layout_renderer::{LayoutPassFeedback, layout_viewport_for_surface},
+    layout_renderer::{FrameOwnerStyles, LayoutPassFeedback, layout_viewport_for_surface},
     native_bridge::element::{ComputedStyleRead, iframe_handle_viewport},
     script_vm::web_fonts::DocumentWebFontCompletion,
     style_engine::{StyleViewport, StyloStyleEnvironment},
@@ -301,7 +301,7 @@ impl PageScriptHost {
             let changes = &state.on_demand_frames;
             (
                 state.frame_viewport(frame)?,
-                changes.needs_layout || !changes.previous_styles.is_empty(),
+                changes.needs_layout || !changes.changed_owners.is_empty(),
             )
         };
         if needs_validation && !self.layout_pass_active.get() {
@@ -321,9 +321,6 @@ impl PageScriptHost {
         {
             return;
         }
-        let Some(document) = host.owner_document_handle(frame) else {
-            return;
-        };
         let mut state = self.document_layout_state.borrow_mut();
         if state.on_demand_frames.needs_layout
             || (state.frame_viewport(frame).is_none()
@@ -331,29 +328,26 @@ impl PageScriptHost {
         {
             return;
         }
-        state
-            .on_demand_frames
-            .previous_styles
-            .entry(frame)
-            .or_insert_with(|| self.style_engine.retained_element_style(document, frame));
+        state.on_demand_frames.changed_owners.insert(frame);
     }
 
     fn validate_on_demand_frame_layout(&self) {
         if self.layout_policy != LayoutPolicy::OnDemand || self.layout_pass_active.get() {
             return;
         }
-        let previous_styles = std::mem::take(
+        let changed_owners = std::mem::take(
             &mut self
                 .document_layout_state
                 .borrow_mut()
                 .on_demand_frames
-                .previous_styles,
+                .changed_owners,
         );
         let host = self.dom_host();
-        if previous_styles.into_iter().any(|(frame, previous)| {
+        if changed_owners.into_iter().any(|frame| {
             if !host.is_connected(frame) {
                 return true;
             }
+            let previous = self.document_layout_state.borrow().frame_owner_style(frame);
             let current = ComputedStyleRead::new(self, frame).computed_values();
             previous.zip(current).is_none_or(|(previous, current)| {
                 let damage = ServoRestyleDamage::compute_style_difference::<
@@ -387,8 +381,10 @@ impl PageScriptHost {
         }
         let changed = {
             let mut state = self.document_layout_state.borrow_mut();
-            let changed =
-                state.update_frame_viewports(frames.into_iter().map(|frame| (frame, None)));
+            let changed = state.update_frame_viewports(
+                frames.into_iter().map(|frame| (frame, None)),
+                FrameOwnerStyles::new(),
+            );
             state.clear_latest_layout();
             changed
         };
@@ -496,11 +492,20 @@ impl PageScriptHost {
             self.layout_viewport_for_document(document),
             moli_layout::LayoutFlushReason::SynchronousGeometry,
         );
-        let pass = self
-            .build_layout_pass_for_document(document, request)?
+        let publication = self.prepare_layout_publication(
+            document,
+            request.viewport,
+            LayoutPublicationRequest::Screen,
+        )?;
+        let (pass, feedback) = self
+            .build_layout_pass_for_document_in_environment(
+                document,
+                publication.layout_request(request),
+                None,
+                publication.input_retention(self.layout_policy),
+            )?
             .ok_or(LayoutError::NoLayoutRoot)?;
-        self.publish_layout_pass_for_document(document, pass, false);
-        Ok(())
+        self.finish_layout_publication(publication, pass, feedback)
     }
 
     /// FontFace and Canvas use the document's font service without requesting a
@@ -545,6 +550,7 @@ impl PageScriptHost {
             .replace_layout_container_sizes(self.dom_host(), document, sizes)
     }
 
+    #[cfg(test)]
     pub(crate) fn build_layout_pass_for_document(
         &self,
         document: DomHandle,
@@ -670,11 +676,12 @@ impl PageScriptHost {
         Ok(Some((pass, feedback)))
     }
 
-    pub(crate) fn publish_layout_pass_for_document(
+    pub(super) fn publish_layout_pass_for_document(
         &self,
         document: DomHandle,
         mut pass: LayoutPassResult<DomHandle>,
         retain_paint: bool,
+        frame_owner_styles: FrameOwnerStyles,
     ) {
         if let Some(state) = &self.realtime_layout_state {
             state.clear_publication();
@@ -741,7 +748,7 @@ impl PageScriptHost {
                 state.on_demand_frames = Default::default();
             }
             state.retain_live_frame_viewports(|frame| self.child_browsing_context_is_live(frame));
-            state.update_frame_viewports(frame_viewports)
+            state.update_frame_viewports(frame_viewports, frame_owner_styles)
         };
         if frame_viewports_changed {
             self.style_viewport_generation

@@ -218,11 +218,16 @@ impl PageScriptHost {
         &self,
         publication: PreparedLayoutPublication,
         mut pass: LayoutPassResult<DomHandle>,
-        feedback: LayoutPassFeedback<'_>,
+        mut feedback: LayoutPassFeedback<'_>,
     ) -> Result<(), LayoutError> {
         match publication.0 {
             LayoutPublication::LegacyLatest(document) => {
-                self.publish_layout_pass_for_document(document, pass, false);
+                self.publish_layout_pass_for_document(
+                    document,
+                    pass,
+                    false,
+                    feedback.take_frame_owner_styles(),
+                );
             }
             LayoutPublication::CurrentScreen {
                 document,
@@ -250,6 +255,7 @@ impl PageScriptHost {
                     document,
                     pass,
                     retain_paint && state.has_screen_paint_consumers(),
+                    Default::default(),
                 );
                 state.css_images_need_preparation.set(!images.is_empty());
                 *state.css_images.borrow_mut() = images.into();

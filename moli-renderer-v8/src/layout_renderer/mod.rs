@@ -25,6 +25,7 @@ use moli_layout::{
 };
 use moli_page_types::ViewportSurface;
 use moli_selector::QueryContainerSizes;
+use style::{properties::ComputedValues, servo_arc::Arc as ServoArc};
 
 use crate::{
     document_runtime::DomHandle,
@@ -49,12 +50,19 @@ pub(crate) struct LayoutPassFeedback<'a> {
     host: &'a PageScriptHost,
     previous: HashMap<DomHandle, QueryContainerSizes>,
     screen_style_coverage: Option<HashMap<DomHandle, ScreenStyleCoverage>>,
+    frame_owner_styles: Option<FrameOwnerStyles>,
 }
+
+pub(crate) type FrameOwnerStyles = HashMap<DomHandle, ServoArc<ComputedValues>>;
 
 impl LayoutPassFeedback<'_> {
     pub(crate) fn commit(mut self) -> HashMap<DomHandle, ScreenStyleCoverage> {
         self.previous.clear();
         self.screen_style_coverage.take().unwrap_or_default()
+    }
+
+    pub(crate) fn take_frame_owner_styles(&mut self) -> FrameOwnerStyles {
+        self.frame_owner_styles.take().unwrap_or_default()
     }
 }
 
@@ -88,6 +96,7 @@ pub(crate) fn build_native_layout_pass<'a>(
         host: runtime,
         previous: HashMap::new(),
         screen_style_coverage: (inputs == LayoutInputRetention::Realtime).then(HashMap::new),
+        frame_owner_styles: (inputs == LayoutInputRetention::Frozen).then(HashMap::new),
     };
     let css_images = request
         .requests_paint()
@@ -103,6 +112,7 @@ pub(crate) fn build_native_layout_pass<'a>(
         &mut Vec::new(),
         &mut feedback.previous,
         &mut feedback.screen_style_coverage,
+        &mut feedback.frame_owner_styles,
         inputs == LayoutInputRetention::Frozen,
         retained,
     )?;
@@ -120,6 +130,7 @@ fn build_native_layout_pass_recursive(
     document_stack: &mut Vec<DomHandle>,
     original_container_sizes: &mut HashMap<DomHandle, QueryContainerSizes>,
     screen_style_coverage: &mut Option<HashMap<DomHandle, ScreenStyleCoverage>>,
+    frame_owner_styles: &mut Option<FrameOwnerStyles>,
     freeze_svg_inputs: bool,
     mut retained: Option<Box<RetainedLayoutWorld<DomHandle>>>,
 ) -> Result<LayoutPassResult<DomHandle>, moli_layout::LayoutError> {
@@ -197,6 +208,7 @@ fn build_native_layout_pass_recursive(
             embedded_document_services,
             original_container_sizes,
             screen_style_coverage,
+            frame_owner_styles,
         };
         let finish = |services: &mut DocumentLayoutServices| {
             let mut measured = measure_prepared_layout_pass(prepared, services)?;
@@ -352,9 +364,22 @@ struct NativeEmbeddedFrameRenderer<'a> {
     embedded_document_services: &'a mut HashMap<DomHandle, DocumentLayoutServices>,
     original_container_sizes: &'a mut HashMap<DomHandle, QueryContainerSizes>,
     screen_style_coverage: &'a mut Option<HashMap<DomHandle, ScreenStyleCoverage>>,
+    frame_owner_styles: &'a mut Option<FrameOwnerStyles>,
 }
 
 impl EmbeddedFrameRenderer<DomHandle> for NativeEmbeddedFrameRenderer<'_> {
+    fn record_frame_owner_style(
+        &mut self,
+        source: DomHandle,
+        style: &moli_layout::ResolvedLayoutStyle,
+    ) {
+        if let Some(styles) = self.frame_owner_styles.as_mut()
+            && let Some(computed) = style.stylo_computed_values()
+        {
+            styles.insert(source, computed.clone());
+        }
+    }
+
     fn render_embedded_frame(
         &mut self,
         frame: DomHandle,
@@ -431,6 +456,7 @@ impl EmbeddedFrameRenderer<DomHandle> for NativeEmbeddedFrameRenderer<'_> {
             self.document_stack,
             self.original_container_sizes,
             self.screen_style_coverage,
+            self.frame_owner_styles,
             self.freeze_svg_inputs,
             retained,
         );

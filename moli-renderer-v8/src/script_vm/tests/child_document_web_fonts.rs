@@ -39,18 +39,29 @@ fn font_response(resource: &StylesheetSubresourceRequest) -> CompletedStylesheet
 pub(super) fn refresh_child_geometry_without_paint(vm: &StandaloneScriptVmHarness) {
     let host = vm._context_host.borrow();
     let document = host.document_handle();
-    let pass = host
-        .build_layout_pass_for_document(
+    let request = moli_layout::LayoutPassRequest::new(
+        host.layout_viewport_for_document(document),
+        moli_layout::LayoutFlushReason::Explicit,
+    );
+    let publication = host
+        .prepare_layout_publication(
             document,
-            moli_layout::LayoutPassRequest::new(
-                host.layout_viewport_for_document(document),
-                moli_layout::LayoutFlushReason::Explicit,
-            ),
+            request.viewport,
+            crate::native_bridge::LayoutPublicationRequest::Screen,
+        )
+        .unwrap();
+    let (pass, feedback) = host
+        .build_layout_pass_for_document_in_environment(
+            document,
+            publication.layout_request(request),
+            None,
+            publication.input_retention(host.layout_policy()),
         )
         .unwrap()
         .unwrap();
     assert_eq!(pass.metrics.paint_operation_count, 0);
-    host.publish_layout_pass_for_document(document, pass, false);
+    host.finish_layout_publication(publication, pass, feedback)
+        .unwrap();
 }
 
 #[test]
