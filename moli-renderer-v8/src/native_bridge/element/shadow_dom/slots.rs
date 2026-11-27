@@ -203,7 +203,7 @@ pub(in crate::native_bridge) fn slot_assign_callback<'s>(
         if !unsafe { &*runtime_ptr }
             .dom_host()
             .node(handle)
-            .is_some_and(|node| node.is_element() || node.is_text())
+            .is_some_and(Node::is_slottable)
         {
             throw_type_error(
                 scope,

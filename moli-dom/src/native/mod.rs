@@ -2003,6 +2003,40 @@ mod tests {
     }
 
     #[test]
+    fn flattened_slots_filter_comments_and_include_cdata_text() {
+        let mut host = DomHost::from_dom(NativeDom::new_html(test_url()));
+        let shadow_host = host.create_element("section");
+        let shadow_root = host.attach_shadow_root(shadow_host, "open").unwrap();
+        let slot = host.create_element("slot");
+        let fallback_comment = host.create_comment("fallback comment");
+        let fallback_text = host.create_cdata_section("fallback text");
+        let light_comment = host.create_comment("light comment");
+        let light_text = host.create_cdata_section("light text");
+        assert!(host.append_child(host.document_node_id(), shadow_host));
+        assert!(host.append_child(shadow_root, slot));
+        assert!(host.append_child(slot, fallback_comment));
+        assert!(host.append_child(slot, fallback_text));
+        assert!(host.append_child(shadow_host, light_comment));
+
+        assert_eq!(host.assigned_slot_for_node(light_comment), None);
+        assert!(
+            host.assigned_nodes_for_slot_with_options(slot, false)
+                .is_empty()
+        );
+        assert_eq!(
+            host.assigned_nodes_for_slot_with_options(slot, true),
+            [fallback_text]
+        );
+
+        assert!(host.append_child(shadow_host, light_text));
+        assert_eq!(host.assigned_slot_for_node(light_text), Some(slot));
+        assert_eq!(
+            host.assigned_nodes_for_slot_with_options(slot, true),
+            [light_text]
+        );
+    }
+
+    #[test]
     fn host_child_mutations_report_slot_assignment_snapshots() {
         let mut host = DomHost::from_dom(NativeDom::new_html(test_url()));
         let shadow_host = host.create_element("section");

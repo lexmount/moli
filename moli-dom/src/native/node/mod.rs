@@ -258,6 +258,10 @@ impl Node {
         matches!(self.data, NodeData::CDataSection(_))
     }
 
+    pub fn is_slottable(&self) -> bool {
+        self.is_element() || self.is_text() || self.is_cdata_section()
+    }
+
     pub fn is_document_fragment(&self) -> bool {
         matches!(self.data, NodeData::DocumentFragment(_))
     }
