@@ -1090,28 +1090,23 @@ where
     pub(crate) fn boxes_in_tree_order(
         &self,
     ) -> impl Iterator<Item = (LayoutBoxId, &LayoutBox<N>, usize)> + '_ {
-        let mut pending = vec![(self.root, 1)];
+        // Keep one iterator per level so a wide container doesn't copy all
+        // of its children into a temporary stack.
+        let mut levels = vec![std::slice::from_ref(&self.root).iter()];
         std::iter::from_fn(move || {
-            let (id, depth) = pending.pop()?;
-            let layout_box = &self.boxes[id];
-            pending.extend(
-                layout_box
-                    .children
-                    .iter()
-                    .rev()
-                    .map(|&child| (child, depth + 1)),
-            );
-            Some((id, layout_box, depth))
+            loop {
+                let depth = levels.len();
+                let Some(&id) = levels.last_mut()?.next() else {
+                    levels.pop();
+                    continue;
+                };
+                let layout_box = &self.boxes[id];
+                if !layout_box.children.is_empty() {
+                    levels.push(layout_box.children.iter());
+                }
+                return Some((id, layout_box, depth));
+            }
         })
-    }
-
-    pub(crate) fn preorder(&self) -> Result<Vec<LayoutBoxId>, LayoutError> {
-        let mut order = Vec::with_capacity(self.boxes.len());
-        for (id, _, depth) in self.boxes_in_tree_order() {
-            crate::error::check_layout_depth(depth)?;
-            order.push(id);
-        }
-        Ok(order)
     }
 
     /// Retires unreachable boxes and keeps the stable handles of survivors.

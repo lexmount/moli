@@ -248,19 +248,27 @@ where
         &mut retained,
         &mut Vec::new(),
     )?;
-    let order = world.preorder()?;
-    let mut pruned_source_count = 0;
-    if retained.pruned_sources {
-        // Recreate the live source index during the existing dense box pass.
+    let mut source_mapping = std::mem::take(&mut world.source_mapping);
+    let already_mapped = source_mapping.len();
+    let mut live_count = 0;
+    let mut retained_count = 0;
+    let mut has_floats = false;
+    for (id, layout_box, depth) in world.boxes_in_tree_order() {
+        crate::error::check_layout_depth(depth)?;
+        live_count += 1;
+        retained_count += usize::from(
+            world.boxes.index_of(id) < original_count && !retained.rebuilt_in_place.contains(&id),
+        );
+        has_floats = has_floats || layout_box.style.is_floated();
         // Clean branches never return to the DOM or style resolver.
-        let already_mapped = world.source_mapping.len();
-        for &id in &order {
-            if let Some(node) = world.boxes[id].source {
-                world.map_source(node, id);
-            }
+        if retained.pruned_sources
+            && let Some(node) = layout_box.source
+        {
+            source_mapping.entry(node).or_insert(id);
         }
-        pruned_source_count = world.source_mapping.len() - already_mapped;
     }
+    let pruned_source_count = source_mapping.len() - already_mapped;
+    world.source_mapping = source_mapping;
     // The reused root still needs the policy derived from the current body.
     builder.finalize_viewport_scroll_policy(world);
     world.css_image_references = builder.css_image_references;
@@ -271,24 +279,15 @@ where
         }
     }
 
-    // Taffy's cache key does not include its shared block float context.
-    // Preserve box construction work even when that context forces a cold
-    // numeric pass.
-    let retained_count = order
-        .iter()
-        .filter(|id| {
-            world.boxes.index_of(*id) < original_count && !retained.rebuilt_in_place.contains(id)
-        })
-        .count();
-    if order.len() != world.boxes.len() {
-        let live = order.into_iter().map(|id| (id, ())).collect();
+    if live_count != world.boxes.len() {
+        let live = world
+            .boxes_in_tree_order()
+            .map(|(id, _, _)| (id, ()))
+            .collect();
         world.retain_reachable(&live);
     }
-    let reuse_numeric_layout = !had_floats
-        && !world
-            .boxes
-            .values()
-            .any(|layout_box| layout_box.style.is_floated());
+    // Taffy's cache key does not include its shared block float context.
+    let reuse_numeric_layout = !had_floats && !has_floats;
     Ok(Some((
         retained_count,
         pruned_source_count,
