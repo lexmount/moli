@@ -1,6 +1,6 @@
 use anyhow::{Context, Result, bail};
 use cidr::AnyIpCidr;
-use moli_browser_profile::BrowserProfilePaths;
+use moli_browser_profile::{BrowserProfilePaths, DEFAULT_ACCEPT_LANGUAGE};
 use moli_core::{
     LayoutPolicy, OptionalResourceFetchMask,
     page::{SubresourceJsonPathEquals, SubresourceJsonPathRegex, SubresourceResponseWaitCriteria},
@@ -9,6 +9,7 @@ use moli_core::{
 use moli_fetch::{
     FetchConfig, WebBotAuthProfile, WebBotAuthSigner, validate_http_host_resolve_entries,
 };
+use moli_system_locale::system_accept_language;
 use std::path::PathBuf;
 use std::str::FromStr;
 
@@ -16,8 +17,6 @@ use crate::cli::{Cli, Commands, CommonArgs, DumpFormat, StripOptions, WebBotAuth
 use crate::network_trace::NetworkTraceConfigSummary;
 
 pub use moli_protocol_server::ServerConfig;
-
-mod language;
 
 #[derive(Debug, Clone)]
 pub struct AppConfig {
@@ -141,7 +140,8 @@ fn apply_common_args(config: &mut AppConfig, common: &CommonArgs) -> Result<()> 
     let accept_language = common
         .accept_language
         .clone()
-        .unwrap_or_else(language::system_accept_language);
+        .or_else(system_accept_language)
+        .unwrap_or_else(|| DEFAULT_ACCEPT_LANGUAGE.to_owned());
     config
         .browser
         .fetch_mut()

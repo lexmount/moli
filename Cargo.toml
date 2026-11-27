@@ -67,6 +67,7 @@ members = [
     "moli-stylesheet-blocking",
     "moli-svg",
     "moli-system-fonts",
+    "moli-system-locale",
     "moli-test-support",
     "moli-url",
     "moli-url-policy",

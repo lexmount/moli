@@ -1,13 +1,12 @@
 use icu_locale_core::{Locale, subtags::script};
-use moli_browser_profile::DEFAULT_ACCEPT_LANGUAGE;
 
-pub(super) fn system_accept_language() -> String {
+/// Detects the host language preference and formats it for `Accept-Language`.
+pub fn system_accept_language() -> Option<String> {
     #[cfg(any(target_os = "macos", target_os = "windows"))]
     if let Some(language) = display_accept_language() {
-        return language;
+        return Some(language);
     }
     environment_accept_language(|name| std::env::var(name).ok())
-        .unwrap_or_else(|| DEFAULT_ACCEPT_LANGUAGE.to_owned())
 }
 
 fn environment_accept_language(mut get: impl FnMut(&str) -> Option<String>) -> Option<String> {
