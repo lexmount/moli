@@ -1681,6 +1681,46 @@ fn ondemand_iframe_refresh_compares_against_the_published_owner_style() {
 }
 
 #[test]
+fn ondemand_iframe_refresh_follows_relative_selector_layout_damage() {
+    for read_style in [false, true] {
+        let mut vm = new_parsed_test_vm(
+            "https://iframe-relative-selector-layout.test/",
+            r#"<!doctype html>
+               <style>
+                 body { margin:0; width:200px }
+                 body:has(> iframe[style]) { width:400px; background-color:blue }
+                 iframe { display:block; width:50%; height:100px; border:0 }
+               </style>
+               <iframe id="frame"></iframe>"#,
+        );
+        vm.set_layout_policy(moli_page_types::LayoutPolicy::OnDemand);
+        let read_widths = "JSON.stringify([frame.offsetWidth, frame.contentWindow.innerWidth])";
+        assert_eq!(vm.eval(read_widths).unwrap(), "[100,100]");
+        let builds = vm.layout_pass_observability_for_test().1;
+
+        vm.eval("frame.style.backgroundColor = 'red'").unwrap();
+        if read_style {
+            assert_eq!(
+                vm.eval("getComputedStyle(document.body).backgroundColor")
+                    .unwrap(),
+                "rgb(0, 0, 255)"
+            );
+        }
+        assert_eq!(vm.layout_pass_observability_for_test().1, builds);
+        assert_eq!(
+            vm.eval(read_widths).unwrap(),
+            "[200,200]",
+            "read_style={read_style}"
+        );
+        assert_eq!(vm.layout_pass_observability_for_test().1, builds + 1);
+
+        vm.eval("frame.style.backgroundColor = 'blue'").unwrap();
+        assert_eq!(vm.eval(read_widths).unwrap(), "[200,200]");
+        assert_eq!(vm.layout_pass_observability_for_test().1, builds + 1);
+    }
+}
+
+#[test]
 fn nested_iframe_cached_viewport_units_follow_recursive_frame_resizes() {
     let mut vm = new_storage_test_vm("https://nested-cached-viewport-units.test/");
 

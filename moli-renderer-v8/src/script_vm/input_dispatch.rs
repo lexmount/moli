@@ -2549,8 +2549,15 @@ impl ScriptVm {
         let mut compatibility_hover = None;
         let document = self.document_runtime.document_handle();
         let mut pointer_handles = std::mem::take(&mut self.active_touch_pointer_handles);
-        let sampled = self._context_host.borrow().published_frame_geometry();
         let result = self.with_default_context_scope(|scope, runtime_ptr| {
+            let runtime = move || unsafe { &*runtime_ptr };
+            // Continuing touches may route directly through capture without a hit test.
+            if event_name != "touchstart"
+                && runtime().layout_policy() == moli_page_types::LayoutPolicy::OnDemand
+            {
+                runtime().ensure_observable_layout()?;
+            }
+            let sampled = runtime().published_frame_geometry();
             for (index, (point, target, previous)) in changed_points.iter().enumerate() {
                 let Some(event_name_for_pointer) = pointer_event_name else {
                     break;
@@ -2559,7 +2566,6 @@ impl ScriptVm {
                 let pointer_id = touch_pointer_id(point.id);
                 let is_primary = previous.map_or(was_empty && index == 0, |p| p.is_primary);
                 let pointer = touch_pointer_properties(event_name, pointer_id, is_primary);
-                let runtime = move || unsafe { &*runtime_ptr };
                 if runtime().layout_policy().is_realtime() {
                     runtime().ensure_observable_layout()?;
                 }
@@ -2645,8 +2651,8 @@ impl ScriptVm {
                     unsafe { &mut *runtime_ptr }.remove_touch_pointer_input(pointer_id);
                 }
             }
-            if unsafe { &*runtime_ptr }.layout_policy().is_realtime() {
-                unsafe { &*runtime_ptr }.ensure_observable_layout()?;
+            if runtime().layout_policy().is_realtime() {
+                runtime().ensure_observable_layout()?;
             }
             let mut active_event_points = Vec::with_capacity(active_snapshot.len());
             for (id, point) in &active_snapshot {

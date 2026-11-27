@@ -295,14 +295,20 @@ fn standalone_drag_cancel_restores_frame_coordinates_after_layout_invalidation()
     )
     .unwrap();
     let data = start_native_drag(&mut vm, "a", scale);
-    dispatch_drag(&mut vm, "dragenter", "parent", scale, &data);
-    assert!(
-        vm._context_host
-            .borrow()
-            .published_frame_geometry()
-            .is_none()
-    );
+    let original_geometry = vm
+        ._context_host
+        .borrow()
+        .published_frame_geometry()
+        .unwrap();
     let builds = vm.layout_pass_observability_for_test().1;
+    dispatch_drag(&mut vm, "dragenter", "parent", scale, &data);
+    let sampled_geometry = vm
+        ._context_host
+        .borrow()
+        .published_frame_geometry()
+        .unwrap();
+    assert!(std::rc::Rc::ptr_eq(&sampled_geometry, &original_geometry));
+    assert_eq!(vm.layout_pass_observability_for_test().1, builds);
 
     vm.cancel_dragging().unwrap();
 
@@ -317,15 +323,24 @@ fn standalone_drag_cancel_restores_frame_coordinates_after_layout_invalidation()
     assert_eq!(log["viewsDisabled"], true);
     assert_eq!(log["sourceDisabled"], true);
     assert_eq!(vm.layout_pass_observability_for_test().1, builds + 1);
+    let refreshed_geometry = vm
+        ._context_host
+        .borrow()
+        .published_frame_geometry()
+        .unwrap();
+    assert!(!std::rc::Rc::ptr_eq(
+        &refreshed_geometry,
+        &original_geometry
+    ));
 
     vm.eval("document.getElementById('frame-b').style.left='530px'")
         .unwrap();
-    assert!(
-        vm._context_host
-            .borrow()
-            .published_frame_geometry()
-            .is_none()
-    );
+    let sampled_geometry = vm
+        ._context_host
+        .borrow()
+        .published_frame_geometry()
+        .unwrap();
+    assert!(std::rc::Rc::ptr_eq(&sampled_geometry, &refreshed_geometry));
     vm.cancel_dragging().unwrap();
     assert_eq!(vm.layout_pass_observability_for_test().1, builds + 1);
 }

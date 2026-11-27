@@ -228,6 +228,11 @@ impl PageScriptHost {
                     false,
                     feedback.take_frame_owner_styles(),
                 );
+                let coverage = feedback.take_screen_style_coverage();
+                drop(feedback);
+                for (document, styles) in coverage {
+                    self.style_engine.publish_screen_styles(document, styles);
+                }
             }
             LayoutPublication::CurrentScreen {
                 document,
