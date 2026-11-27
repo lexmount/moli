@@ -85,20 +85,25 @@ pub enum TabCommand {
     Key(KeyInput),
     InsertText(String),
     Edit(RendererViewportEdit),
-    Copy {
-        document: RendererDocumentLifecycleIdentity,
-        reply: oneshot::Sender<Option<String>>,
-    },
-    Cut {
+    Clipboard {
         document: RendererDocumentLifecycleIdentity,
         key: KeyInput,
-        reply: oneshot::Sender<Option<String>>,
+        action: ClipboardAction,
     },
     DropFiles {
         document: RendererDocumentLifecycleIdentity,
         position: (f64, f64),
         paths: Vec<PathBuf>,
         modifiers: u8,
+    },
+}
+
+pub enum ClipboardAction {
+    Copy(oneshot::Sender<Option<String>>),
+    Cut(oneshot::Sender<Option<String>>),
+    Paste {
+        text: Option<String>,
+        sequence: Option<u64>,
     },
 }
 
@@ -578,48 +583,54 @@ async fn run_tab(browser: Browser, downloads: Rc<Downloads>, mut tab: OpenTab) {
                     }
                     TabCommand::Edit(edit) => {
                         let sequence = edit.sequence;
-                        match page.edit_viewport(edit).await {
-                            Ok(reply) => {
-                                tab.state.send_modify(|state| {
-                                    state.editor_ack = Some(sequence);
-                                    state.editor = reply.editor;
-                                });
-                                Ok(())
-                            }
-                            Err(error) => {
-                                tab.state.send_modify(|state| {
-                                    state.editor_ack = Some(sequence);
-                                    state.editor = None;
-                                });
-                                Err(error)
-                            }
-                        }
+                        let editor = page.edit_viewport(edit).await.map(|reply| reply.editor);
+                        publish_editor_ack(&tab.state, sequence, editor)
                     }
-                    TabCommand::Copy { document, reply } => {
-                        match page.viewport_selected_text(document).await {
-                            Ok(text) => { let _ = reply.send(text); Ok(()) }
-                            Err(error) => Err(error),
-                        }
-                    }
-                    TabCommand::Cut { document, key, reply } if activity.focused => {
-                        let result = match page.dispatch_key_event_with_outcome_async(
-                            key.event, &key.key, &key.code, "", key.modifiers, key.repeat, false,
-                        ).await {
-                            Ok(outcome) => {
+                    TabCommand::Clipboard { document, key, action } => {
+                        let allowed = if activity.focused && tab.state.borrow().document == Some(document) {
+                            page.dispatch_key_event_with_outcome_async(
+                                key.event, &key.key, &key.code, "", key.modifiers, key.repeat, false,
+                            ).await.map(|outcome| {
                                 if let Some(activation) = outcome.pending_download {
                                     downloads.start(activation);
                                 }
-                                if outcome.handled {
-                                    page.cut_viewport_selection(document).await.map(|text| {
-                                        let _ = reply.send(text);
-                                    })
-                                } else {
-                                    Ok(())
-                                }
-                            }
-                            Err(error) => Err(error),
+                                outcome.handled
+                            })
+                        } else {
+                            Ok(false)
                         };
-                        if result.is_ok() { refresh_editor(&mut page, &tab.state).await } else { result }
+                        let sequence = match &action {
+                            ClipboardAction::Paste { sequence, .. } => *sequence,
+                            _ => None,
+                        };
+                        let result = match (allowed, action) {
+                            (Ok(true), ClipboardAction::Copy(reply)) => {
+                                page.copy_viewport_selection(document).await.map(|text| {
+                                    let _ = reply.send(text);
+                                })
+                            }
+                            (Ok(true), ClipboardAction::Cut(reply)) => {
+                                page.cut_viewport_selection(document).await.map(|text| {
+                                    let _ = reply.send(text);
+                                })
+                            }
+                            (Ok(true), ClipboardAction::Paste { text, sequence }) => {
+                                page.paste_viewport_text(document, text, sequence).await.map(|_| ())
+                            }
+                            (Ok(false), _) => Ok(()),
+                            (Err(error), _) => Err(error),
+                        };
+                        if let Some(sequence) = sequence {
+                            let editor = match result {
+                                Ok(()) => page.viewport_editor().await,
+                                Err(error) => Err(error),
+                            };
+                            publish_editor_ack(&tab.state, sequence, editor)
+                        } else if result.is_ok() {
+                            refresh_editor(&mut page, &tab.state).await
+                        } else {
+                            result
+                        }
                     }
                     TabCommand::DropFiles { document, position, paths, modifiers } if activity.visible => {
                         drop_files(&mut page, document, position, paths, modifiers).await
@@ -688,6 +699,29 @@ async fn drop_files(
     page.drop_viewport_files(document, position, files, modifiers)
         .await?;
     Ok(())
+}
+
+fn publish_editor_ack(
+    state: &watch::Sender<TabState>,
+    sequence: u64,
+    editor: Result<Option<RendererViewportEditor>>,
+) -> Result<()> {
+    match editor {
+        Ok(editor) => {
+            state.send_modify(|state| {
+                state.editor_ack = Some(sequence);
+                state.editor = editor;
+            });
+            Ok(())
+        }
+        Err(error) => {
+            state.send_modify(|state| {
+                state.editor_ack = Some(sequence);
+                state.editor = None;
+            });
+            Err(error)
+        }
+    }
 }
 
 async fn refresh_editor(page: &mut Page, state: &watch::Sender<TabState>) -> Result<()> {
@@ -1245,6 +1279,46 @@ mod tests {
             show_tab(&mut red, "Red", 3, [0, 0, 255, 255]).await?,
             red_document
         );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn clipboard_shortcut_respects_canceled_keydown() -> Result<()> {
+        let (host, _events) = BrowserHost::start(None, None)?;
+        let mut tab = host.open_tab()?;
+        navigate(
+            &tab,
+            concat!(
+                "data:text/html,<title>Clipboard</title><script>",
+                "document.addEventListener('keydown', event => event.preventDefault(), {once:true});",
+                "document.addEventListener('copy', event => {",
+                "event.clipboardData.setData('text/plain','from copy');event.preventDefault()",
+                "})</script>",
+            ),
+        )?;
+        let document = show_tab(&mut tab, "Clipboard", 1, [255; 4]).await?;
+        for allowed in [false, true] {
+            let (reply, result) = oneshot::channel();
+            tab.commands
+                .send(TabCommand::Clipboard {
+                    document,
+                    key: KeyInput {
+                        event: "keydown",
+                        key: "c".into(),
+                        code: "KeyC".into(),
+                        modifiers: if cfg!(target_os = "macos") { 4 } else { 2 },
+                        repeat: false,
+                    },
+                    action: ClipboardAction::Copy(reply),
+                })
+                .map_err(|_| anyhow::anyhow!("dispatch copy shortcut"))?;
+            let text = tokio::time::timeout(Duration::from_secs(5), result).await?;
+            if allowed {
+                assert_eq!(text?.as_deref(), Some("from copy"));
+            } else {
+                assert!(text.is_err());
+            }
+        }
         Ok(())
     }
 

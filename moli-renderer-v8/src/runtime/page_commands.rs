@@ -385,9 +385,17 @@ impl PageVm {
                 .read_viewport_selection(document)
                 .map(RendererPageReply::OptionalString),
             #[cfg(feature = "molio")]
-            RendererPageCommand::CutViewportSelection(document) => self
-                .cut_viewport_selection(document)
+            RendererPageCommand::CopyViewportSelection(document) => self
+                .copy_or_cut_viewport_selection(document, false)
                 .map(RendererPageReply::OptionalString),
+            #[cfg(feature = "molio")]
+            RendererPageCommand::CutViewportSelection(document) => self
+                .copy_or_cut_viewport_selection(document, true)
+                .map(RendererPageReply::OptionalString),
+            #[cfg(feature = "molio")]
+            RendererPageCommand::PasteViewportText { document, text, sequence } => self
+                .paste_viewport_text(document, text.as_deref(), sequence)
+                .map(RendererPageReply::Bool),
             #[cfg(feature = "molio")]
             RendererPageCommand::ApplyViewportEdit(edit) => self.apply_viewport_edit(edit).map(RendererPageReply::ViewportEdit),
             #[cfg(feature = "molio")]

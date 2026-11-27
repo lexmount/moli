@@ -467,18 +467,38 @@ impl PageVm {
         self.vm_mut().viewport_selected_text()
     }
 
-    pub(super) fn cut_viewport_selection(
+    pub(super) fn copy_or_cut_viewport_selection(
         &mut self,
         document: RendererDocumentLifecycleIdentity,
+        cut: bool,
     ) -> anyhow::Result<Option<String>> {
         if document != self.document_lifecycle.identity()
             || !self.document_settings.document_activity.focused
         {
             return Ok(None);
         }
-        let text = self.vm_mut().cut_viewport_selection()?;
+        let text = self.vm_mut().copy_or_cut_viewport_selection(cut)?;
         self.wake_viewport_frames();
         Ok(text)
+    }
+
+    pub(super) fn paste_viewport_text(
+        &mut self,
+        document: RendererDocumentLifecycleIdentity,
+        text: Option<&str>,
+        sequence: Option<u64>,
+    ) -> anyhow::Result<bool> {
+        if document != self.document_lifecycle.identity()
+            || !self.document_settings.document_activity.focused
+        {
+            return Ok(false);
+        }
+        let (Some(state), Some(vm)) = (self.viewport_frames.as_mut(), self.vm.as_mut()) else {
+            return Ok(false);
+        };
+        let applied = vm.paste_viewport_text(&mut state.editing, text, sequence)?;
+        self.wake_viewport_frames();
+        Ok(applied)
     }
 
     pub(super) fn drop_viewport_files(

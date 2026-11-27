@@ -951,9 +951,27 @@ impl ScriptVm {
         })
     }
 
-    pub(crate) fn cut_viewport_selection(&mut self) -> Result<Option<String>> {
+    pub(crate) fn copy_or_cut_viewport_selection(&mut self, cut: bool) -> Result<Option<String>> {
         let result = self.with_default_context_scope(|scope, host| {
-            Ok(crate::context_bootstrap::viewport_edit::cut_viewport_selection(scope, host))
+            Ok(
+                crate::context_bootstrap::viewport_edit::copy_or_cut_viewport_selection(
+                    scope, host, cut,
+                ),
+            )
+        });
+        self.finish_input_event_dispatch_turn(result)
+    }
+
+    pub(crate) fn paste_viewport_text(
+        &mut self,
+        editing: &mut crate::context_bootstrap::viewport_edit::ViewportEditing,
+        text: Option<&str>,
+        sequence: Option<u64>,
+    ) -> Result<bool> {
+        let result = self.with_default_context_scope(|scope, host| {
+            Ok(editing
+                .paste_from_clipboard(scope, host, text, sequence)
+                .is_some())
         });
         self.finish_input_event_dispatch_turn(result)
     }

@@ -2014,6 +2014,10 @@ async fn viewport_ime_replaces_composition_and_reports_utf16_offsets() -> Result
         Some("😀你")
     );
     let selected = page.viewport_editor().await?.context("selected editor")?;
+    page.evaluate_runtime_expression_async(
+        "editor.addEventListener('paste', e => window.pastedText=e.clipboardData.getData('text/plain'))",
+    )
+    .await?;
     let pasted = page
         .edit_viewport(edit(
             5,
@@ -2026,6 +2030,196 @@ async fn viewport_ime_replaces_composition_and_reports_utf16_offsets() -> Result
         .await?;
     assert!(pasted.applied);
     assert_eq!(pasted.editor.context("pasted editor")?.text, "A日本語");
+    let captured = page.evaluate_runtime_expression_async("pastedText").await?;
+    assert_eq!(captured["value"], "日本語");
+    Ok(())
+}
+
+#[tokio::test]
+async fn viewport_copy_dispatches_to_the_selection_and_supports_custom_text() -> Result<()> {
+    let browser =
+        Browser::new(BrowserConfig::default().with_layout_policy(LayoutPolicy::Realtime))?;
+    let mut page = browser
+        .fetch(&html_url(
+            "<div id=editor contenteditable><span id=part contenteditable>abcde</span></div>\
+             <input id=secret type=password value=hidden>",
+        ))
+        .await?;
+    let mut frames = page
+        .subscribe_viewport_frames(ViewportSurface::default(), 1)
+        .await?;
+    let document = frame(&mut frames, |frame| frame.snapshot.is_some())
+        .await?
+        .document;
+
+    page.evaluate_runtime_expression_async(
+        r#"
+        window.copyEvents = [];
+        window.customCopy = false;
+        part.addEventListener('copy', event => {
+          copyEvents.push([event.target.id, event.isTrusted, event instanceof ClipboardEvent]);
+          window.copyData = event.clipboardData;
+          if (customCopy) {
+            copyData.setData('text/plain', 'custom');
+            event.preventDefault();
+          } else {
+            getSelection().setBaseAndExtent(part.firstChild, 2, part.firstChild, 4);
+          }
+        });
+        secret.addEventListener('copy', () => copyEvents.push('password'));
+        editor.focus();
+        getSelection().setBaseAndExtent(part.firstChild, 0, part.firstChild, 2);
+        "#,
+    )
+    .await?;
+    assert_eq!(
+        page.copy_viewport_selection(document).await?.as_deref(),
+        Some("cd")
+    );
+    page.evaluate_runtime_expression_async("customCopy = true")
+        .await?;
+    assert_eq!(
+        page.copy_viewport_selection(document).await?.as_deref(),
+        Some("custom")
+    );
+    page.evaluate_runtime_expression_async("secret.focus(); secret.select()")
+        .await?;
+    assert_eq!(page.copy_viewport_selection(document).await?, None);
+    let state = page
+        .evaluate_runtime_expression_async(
+            "JSON.stringify([part.textContent, copyData.getData('text/plain'), copyEvents])",
+        )
+        .await?;
+    assert_eq!(
+        state["value"],
+        r#"["abcde","",[["part",true,true],["part",true,true]]]"#
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn viewport_paste_dispatches_readonly_data_before_editing() -> Result<()> {
+    use moli_core::{RendererViewportEdit, RendererViewportEditAction};
+
+    let browser =
+        Browser::new(BrowserConfig::default().with_layout_policy(LayoutPolicy::Realtime))?;
+    let mut page = browser
+        .fetch(&html_url(
+            "<div id=wrapper contenteditable><input id=editor value=ABC></div>\
+             <button id=outside>outside</button>",
+        ))
+        .await?;
+    let mut frames = page
+        .subscribe_viewport_frames(ViewportSurface::default(), 1)
+        .await?;
+    let document = frame(&mut frames, |frame| frame.snapshot.is_some())
+        .await?
+        .document;
+
+    page.evaluate_runtime_expression_async(
+        r#"
+        window.pasteEvents = [];
+        window.cancelPaste = true;
+        editor.focus();
+        editor.setSelectionRange(1, 2);
+        editor.addEventListener('paste', event => {
+          window.pasteData = event.clipboardData;
+          pasteData.setData('text/plain', 'ignored');
+          pasteEvents.push([event.type, event.isTrusted, pasteData.getData('text/plain')]);
+          if (cancelPaste) {
+            event.preventDefault();
+          } else {
+            editor.setSelectionRange(2, 3);
+          }
+        });
+        for (const name of ['beforeinput', 'input']) {
+          editor.addEventListener(name, event => {
+            pasteEvents.push([name, event.inputType, event.data]);
+          });
+        }
+        "#,
+    )
+    .await?;
+    assert!(
+        !page
+            .paste_viewport_text(document, Some("X".into()), None)
+            .await?
+    );
+    let state = page
+        .evaluate_runtime_expression_async(
+            "JSON.stringify([editor.value, pasteData.getData('text/plain'), pasteEvents])",
+        )
+        .await?;
+    assert_eq!(state["value"], r#"["ABC","",[["paste",true,"X"]]]"#);
+
+    page.evaluate_runtime_expression_async("cancelPaste = false; pasteEvents = []")
+        .await?;
+    let editor_before = page
+        .viewport_editor()
+        .await?
+        .context("editor before paste")?;
+    assert!(
+        page.paste_viewport_text(document, Some("😀".into()), Some(1))
+            .await?
+    );
+    let state = page.evaluate_runtime_expression_async(
+        "JSON.stringify([editor.value, editor.selectionStart, editor.selectionEnd, pasteEvents])",
+    ).await?;
+    assert_eq!(
+        state["value"],
+        r#"["AB😀",4,4,[["paste",true,"😀"],["beforeinput","insertFromPaste","😀"],["input","insertFromPaste","😀"]]]"#
+    );
+    let next_edit = page
+        .edit_viewport(RendererViewportEdit {
+            document,
+            target: editor_before.target,
+            revision: editor_before.revision,
+            sequence: 2,
+            previous: Some(1),
+            action: RendererViewportEditAction::Commit {
+                range: None,
+                text: "!".into(),
+            },
+        })
+        .await?;
+    assert!(next_edit.applied);
+    assert_eq!(
+        next_edit
+            .editor
+            .context("editor after follow-up input")?
+            .text,
+        "AB😀!"
+    );
+
+    page.evaluate_runtime_expression_async("editor.readOnly = true; pasteEvents = []")
+        .await?;
+    assert!(
+        !page
+            .paste_viewport_text(document, Some("readonly".into()), None)
+            .await?
+    );
+    let state = page
+        .evaluate_runtime_expression_async(
+            "JSON.stringify([editor.value, wrapper.textContent, pasteEvents])",
+        )
+        .await?;
+    assert_eq!(
+        state["value"],
+        r#"["AB😀!","",[["paste",true,"readonly"]]]"#
+    );
+
+    page.evaluate_runtime_expression_async(
+        r#"
+        outside.focus();
+        outside.addEventListener('paste', event => {
+          window.emptyPaste = JSON.stringify([event.target.id, event.clipboardData.types]);
+        }, {once:true});
+        "#,
+    )
+    .await?;
+    assert!(!page.paste_viewport_text(document, None, None).await?);
+    let state = page.evaluate_runtime_expression_async("emptyPaste").await?;
+    assert_eq!(state["value"], r#"["outside",[]]"#);
     Ok(())
 }
 
