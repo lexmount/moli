@@ -8,7 +8,9 @@ use moli_layout::{
     LayoutPassResult, LayoutQuery, LayoutQueryAnswer, LayoutQueryBatch, LayoutRect, LayoutViewport,
     ScrollProjectionRefresh,
 };
+use moli_page_types::LayoutPolicy;
 use moli_selector::QueryContainerSizes;
+use style::servo::restyle_damage::ServoRestyleDamage;
 
 use super::PageScriptHost;
 #[cfg(feature = "devtools")]
@@ -20,7 +22,7 @@ use crate::{
     },
     document_runtime::DomHandle,
     layout_renderer::{LayoutPassFeedback, layout_viewport_for_surface},
-    native_bridge::element::iframe_handle_viewport,
+    native_bridge::element::{ComputedStyleRead, iframe_handle_viewport},
     script_vm::web_fonts::DocumentWebFontCompletion,
     style_engine::{StyleViewport, StyloStyleEnvironment},
 };
@@ -172,11 +174,9 @@ impl PageScriptHost {
                 .clear_latest_layout();
         }
         if self.layout_policy != policy {
-            drop(
-                self.document_layout_state
-                    .borrow_mut()
-                    .take_retained_layout(),
-            );
+            let mut state = self.document_layout_state.borrow_mut();
+            drop(state.take_retained_layout());
+            state.on_demand_frames = Default::default();
             self.dom_host().track_layout_changes(None);
             self.realtime_layout_state = policy.is_realtime().then(Box::default);
         }
@@ -295,14 +295,90 @@ impl PageScriptHost {
             .frame_viewport(frame)
     }
 
-    pub(crate) fn invalidate_published_frame_viewports(
+    pub(crate) fn observed_frame_viewport(&self, frame: DomHandle) -> Option<LayoutViewport> {
+        let (viewport, needs_validation) = {
+            let state = self.document_layout_state.try_borrow().ok()?;
+            let changes = &state.on_demand_frames;
+            (
+                state.frame_viewport(frame)?,
+                changes.needs_layout || !changes.previous_styles.is_empty(),
+            )
+        };
+        if needs_validation && !self.layout_pass_active.get() {
+            // Keep the last exact viewport until a new screen pass publishes
+            // the frame's used content box.
+            let _ = self.ensure_initial_layout();
+            return self.frame_viewport(frame);
+        }
+        Some(viewport)
+    }
+
+    pub(super) fn note_on_demand_frame_style_change(&self, frame: DomHandle) {
+        let host = self.dom_host();
+        if self.layout_policy != LayoutPolicy::OnDemand
+            || !host.is_html_element_named(frame, "iframe")
+            || !host.is_connected(frame)
+        {
+            return;
+        }
+        let Some(document) = host.owner_document_handle(frame) else {
+            return;
+        };
+        let mut state = self.document_layout_state.borrow_mut();
+        if state.on_demand_frames.needs_layout
+            || (state.frame_viewport(frame).is_none()
+                && state.latest_layout(self.document_handle()).is_none())
+        {
+            return;
+        }
+        state
+            .on_demand_frames
+            .previous_styles
+            .entry(frame)
+            .or_insert_with(|| self.style_engine.retained_element_style(document, frame));
+    }
+
+    fn validate_on_demand_frame_layout(&self) {
+        if self.layout_policy != LayoutPolicy::OnDemand || self.layout_pass_active.get() {
+            return;
+        }
+        let previous_styles = std::mem::take(
+            &mut self
+                .document_layout_state
+                .borrow_mut()
+                .on_demand_frames
+                .previous_styles,
+        );
+        let host = self.dom_host();
+        if previous_styles.into_iter().any(|(frame, previous)| {
+            if !host.is_connected(frame) {
+                return true;
+            }
+            let current = ComputedStyleRead::new(self, frame).computed_values();
+            previous.zip(current).is_none_or(|(previous, current)| {
+                let damage = ServoRestyleDamage::compute_style_difference::<
+                    moli_selector::StyloElement<'_>,
+                >(&previous, &current)
+                .damage;
+                !ServoRestyleDamage::REPAINT.contains(damage)
+                    || previous.effective_zoom != current.effective_zoom
+                    || previous.writing_mode != current.writing_mode
+                    // The frozen hit-test tree also samples these properties.
+                    || previous.clone_pointer_events() != current.clone_pointer_events()
+                    || previous.clone_visibility() != current.clone_visibility()
+            })
+        }) {
+            let mut state = self.document_layout_state.borrow_mut();
+            state.clear_latest_layout();
+            state.on_demand_frames.needs_layout = true;
+        }
+    }
+
+    pub(crate) fn invalidate_mock_frame_viewports(
         &self,
         frames: impl IntoIterator<Item = DomHandle>,
     ) {
-        // Realtime source invalidation already makes the screen layout stale.
-        // Preserve the last used viewport for a connected, hidden child until
-        // its next layout publishes a replacement.
-        if self.layout_policy().is_realtime() {
+        if self.layout_policy != LayoutPolicy::Mock {
             return;
         }
         let frames = frames.into_iter().collect::<Vec<_>>();
@@ -395,7 +471,7 @@ impl PageScriptHost {
             .inferred_frame_style_viewport_cache_observability()
     }
 
-    /// Lazily publishes the first screen layout for this main Document.
+    /// Lazily publishes a missing screen layout for this main Document.
     ///
     /// Every consumer shares the same recursive tree. Missing nodes or newly
     /// navigated frames in an existing tree must not refresh the whole page.
@@ -406,6 +482,7 @@ impl PageScriptHost {
         if self.layout_pass_active.get() {
             return Err(LayoutError::ReentrantLayoutPass);
         }
+        self.validate_on_demand_frame_layout();
         let document = self.document_handle();
         if self
             .document_layout_state
@@ -660,6 +737,9 @@ impl PageScriptHost {
         self.note_wheel_scroll_target_layout(document, &tree);
         let frame_viewports_changed = {
             let mut state = self.document_layout_state.borrow_mut();
+            if document == self.document_handle() {
+                state.on_demand_frames = Default::default();
+            }
             state.retain_live_frame_viewports(|frame| self.child_browsing_context_is_live(frame));
             state.update_frame_viewports(frame_viewports)
         };
@@ -738,6 +818,7 @@ impl PageScriptHost {
 
     #[cfg(feature = "devtools")]
     pub(crate) fn published_frame_geometry(&self) -> Option<std::rc::Rc<PublishedFrameGeometry>> {
+        self.validate_on_demand_frame_layout();
         self.document_layout_state
             .borrow()
             .frame_geometry()

@@ -72,7 +72,7 @@ fn realtime_frame_viewport_reads_share_current_layout_and_propagate_failures() {
 }
 
 #[test]
-fn viewport_reads_do_not_add_layout_to_legacy_modes_or_top_level_queries() {
+fn viewport_reads_refresh_only_the_affected_frame_layout() {
     for policy in [
         LayoutPolicy::Mock,
         LayoutPolicy::Lazy,
@@ -94,13 +94,19 @@ fn viewport_reads_do_not_add_layout_to_legacy_modes_or_top_level_queries() {
             "{policy:?}"
         );
         if policy != LayoutPolicy::Realtime {
-            vm.eval("viewport.width;viewport.height;query.matches;child.matchMedia('(width:400px)').matches")
-                .unwrap();
-            assert_eq!(
-                vm.layout_pass_observability_for_test().1,
-                before,
-                "{policy:?}"
-            );
+            let read = "JSON.stringify([viewport.width, viewport.height, query.matches, child.matchMedia('(width:400px)').matches])";
+            let expected_builds = before + u64::from(policy == LayoutPolicy::OnDemand);
+            for _ in 0..2 {
+                let values = vm.eval(read).unwrap();
+                if policy == LayoutPolicy::OnDemand {
+                    assert_eq!(values, "[400,100,true,true]");
+                }
+                assert_eq!(
+                    vm.layout_pass_observability_for_test().1,
+                    expected_builds,
+                    "{policy:?}"
+                );
+            }
             assert!(
                 !vm._context_host
                     .borrow()
