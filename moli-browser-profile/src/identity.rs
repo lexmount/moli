@@ -1,3 +1,4 @@
+use crate::parse_accept_language;
 use crate::window_surface::{
     DEFAULT_ACCEPT_LANGUAGE, DEFAULT_NAVIGATOR_PLATFORM, DEFAULT_SEC_CH_UA_ARCH,
     DEFAULT_SEC_CH_UA_BITNESS, DEFAULT_SEC_CH_UA_FORM_FACTORS, DEFAULT_SEC_CH_UA_MODEL,
@@ -334,16 +335,6 @@ impl Default for BrowserIdentityProfile {
     fn default() -> Self {
         Self::new(DEFAULT_USER_AGENT, DEFAULT_ACCEPT_LANGUAGE)
     }
-}
-
-pub fn parse_accept_language(value: &str) -> Vec<String> {
-    value
-        .split(',')
-        .filter_map(|entry| {
-            let language = entry.split(';').next()?.trim();
-            (!language.is_empty()).then(|| language.to_owned())
-        })
-        .collect()
 }
 
 fn structured_header_string_value(value: &str) -> String {

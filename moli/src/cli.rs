@@ -436,69 +436,9 @@ fn parse_request_header_arg(raw: &str) -> Result<RequestHeaderArg, String> {
     })
 }
 
-/// Validates an `--accept-language` value without rewriting it.
-///
-/// Moli stores the value verbatim because a caller may pin quality weights, but
-/// a malformed value propagates into `navigator.language`, `navigator.languages`,
-/// and every outbound `Accept-Language` header, so reject it at the boundary.
 fn parse_accept_language_arg(raw: &str) -> Result<String, String> {
-    let value = raw.trim();
-    if value.is_empty() {
-        return Err("--accept-language must not be empty".to_owned());
-    }
-    if value.chars().any(|c| c.is_control()) {
-        return Err("--accept-language must not contain control characters".to_owned());
-    }
-    let mut tags = 0usize;
-    for entry in value.split(',') {
-        let mut segments = entry.split(';');
-        let tag = segments.next().unwrap_or("").trim();
-        if tag.is_empty() {
-            return Err(format!(
-                "--accept-language has an empty language range in {value:?}"
-            ));
-        }
-        let mut parts = tag.split('-');
-        let language = parts.next().unwrap_or("");
-        if language.is_empty() || !language.chars().all(|c| c.is_ascii_alphabetic()) {
-            return Err(format!(
-                "--accept-language has an invalid language subtag {tag:?}; use BCP 47 such as zh-CN"
-            ));
-        }
-        for subtag in parts {
-            if subtag.is_empty() || !subtag.chars().all(|c| c.is_ascii_alphanumeric()) {
-                return Err(format!(
-                    "--accept-language has an invalid language subtag {tag:?}; use BCP 47 such as zh-CN"
-                ));
-            }
-        }
-        for segment in segments {
-            let Some((name, weight)) = segment.split_once('=') else {
-                return Err(format!(
-                    "--accept-language has a malformed parameter {segment:?} in {value:?}; write q=0.9"
-                ));
-            };
-            if !name.trim().eq_ignore_ascii_case("q") {
-                return Err(format!(
-                    "--accept-language only supports the q parameter, found {:?}",
-                    name.trim()
-                ));
-            }
-            let weight = weight.trim();
-            if !weight
-                .parse::<f32>()
-                .is_ok_and(|value| (0.0..=1.0).contains(&value))
-            {
-                return Err(format!(
-                    "--accept-language requires q to be a number between 0 and 1, found {weight:?}"
-                ));
-            }
-        }
-        tags += 1;
-    }
-    if tags == 0 {
-        return Err("--accept-language must contain at least one language range".to_owned());
-    }
+    let value = raw.trim_matches([' ', '\t']);
+    moli_browser_profile::validate_accept_language(value)?;
     Ok(value.to_owned())
 }
 
@@ -768,15 +708,13 @@ pub struct CommonArgs {
     #[arg(long, conflicts_with = "user_agent")]
     pub user_agent_suffix: Option<String>,
 
-    /// Set the outgoing `Accept-Language` header and `navigator.language`.
+    /// Set the default `Accept-Language` header and Navigator languages.
     ///
-    /// Accepts a full Accept-Language value such as `zh-CN,zh;q=0.9,en;q=0.8`.
-    /// When omitted, Moli sends the operating system's display language (macOS
-    /// `AppleLanguages`, otherwise `LC_ALL`, `LC_MESSAGES`, then `LANG`), the
-    /// same value a real browser reports, and falls back to `en-US,en;q=0.9`
-    /// when the host defines no preference. Pass this only when a request names
-    /// a language, or when a baseline pins one, because a mismatch changes UI
-    /// copy, element text width, and therefore button geometry.
+    /// Accepts language tags with optional weights, such as
+    /// `zh-CN,zh;q=0.9,en;q=0.8`. Navigator reflects descending weight and
+    /// skips zero-weight entries and wildcards. The default comes from the
+    /// macOS or Windows display language, then `LANGUAGE`, `LC_ALL`,
+    /// `LC_MESSAGES`, or `LANG`, with `en-US,en;q=0.9` as the fallback.
     #[arg(
         long,
         value_name = "LANGUAGES",

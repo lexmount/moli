@@ -80,14 +80,10 @@ impl FetchConfig {
             BrowserIdentityProfile::new(user_agent, self.browser_identity.accept_language());
     }
 
-    /// Sets the value behind `navigator.language`, `navigator.languages`, and
-    /// every outbound `Accept-Language` header.
-    ///
-    /// One identity field feeds all three surfaces, so pages that localize
-    /// themselves from `navigator.language` change their UI copy, text width,
-    /// and auto-sized geometry when this value changes.
+    /// Sets the browser's language preferences and default `Accept-Language`.
+    /// A language change also updates any configured default language header.
     pub fn set_accept_language(&mut self, accept_language: impl Into<String>) {
-        self.browser_identity = self.browser_identity.with_accept_language(accept_language);
+        self.set_browser_identity(self.browser_identity.with_accept_language(accept_language));
     }
 
     pub fn accept_language(&self) -> &str {
@@ -95,6 +91,19 @@ impl FetchConfig {
     }
 
     pub fn set_browser_identity(&mut self, browser_identity: BrowserIdentityProfile) {
+        if browser_identity.accept_language() != self.accept_language() {
+            let mut language = Some(browser_identity.accept_language());
+            self.default_request_headers.retain_mut(|(name, value)| {
+                if !name.eq_ignore_ascii_case("accept-language") {
+                    return true;
+                }
+                let Some(language) = language.take() else {
+                    return false;
+                };
+                *value = language.to_owned();
+                true
+            });
+        }
         self.browser_identity = browser_identity;
     }
 
@@ -172,8 +181,12 @@ impl FetchConfig {
     }
 
     pub fn set_default_request_headers(&mut self, headers: Vec<(String, String)>) {
+        let replaces_language_header = self
+            .default_request_headers
+            .iter()
+            .any(|(name, _)| name.eq_ignore_ascii_case("accept-language"));
         self.default_request_headers = headers;
-        self.refresh_identity_accept_language();
+        self.refresh_identity_accept_language(replaces_language_header);
     }
 
     pub fn push_default_request_header(
@@ -181,9 +194,12 @@ impl FetchConfig {
         name: impl Into<String>,
         value: impl Into<String>,
     ) {
-        self.default_request_headers
-            .push((name.into(), value.into()));
-        self.refresh_identity_accept_language();
+        let name = name.into();
+        let supplies_language = name.eq_ignore_ascii_case("accept-language");
+        self.default_request_headers.push((name, value.into()));
+        if supplies_language {
+            self.refresh_identity_accept_language(false);
+        }
     }
 
     pub fn request_timeout_ms(&self) -> u64 {
@@ -443,14 +459,21 @@ impl Default for FetchConfig {
 }
 
 impl FetchConfig {
-    fn refresh_identity_accept_language(&mut self) {
-        let accept_language = self
+    fn refresh_identity_accept_language(&mut self, reset_if_absent: bool) {
+        let language_fields = self
             .default_request_headers
             .iter()
-            .find(|(name, _)| name.eq_ignore_ascii_case("accept-language"))
+            .filter(|(name, _)| name.eq_ignore_ascii_case("accept-language"))
             .map(|(_, value)| value.as_str())
-            .unwrap_or(DEFAULT_ACCEPT_LANGUAGE)
-            .to_owned();
-        self.browser_identity = self.browser_identity.with_accept_language(accept_language);
+            .collect::<Vec<_>>();
+        if !language_fields.is_empty() {
+            self.browser_identity = self
+                .browser_identity
+                .with_accept_language(language_fields.join(", "));
+        } else if reset_if_absent {
+            self.browser_identity = self
+                .browser_identity
+                .with_accept_language(DEFAULT_ACCEPT_LANGUAGE);
+        }
     }
 }
