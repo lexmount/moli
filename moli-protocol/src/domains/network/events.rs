@@ -10,6 +10,7 @@ use moli_core::page::{
 };
 use moli_protocol_cdp_defs::LocalCdpEvent;
 use moli_web_mime::response_header_value;
+use serde_json::map::Entry;
 use serde_json::{Value, json};
 use url::Url;
 
@@ -445,10 +446,28 @@ pub(crate) fn emit_response_received_extra_info(
     status: u16,
     cookie_set_reports: &[StoredCookieSetReport],
 ) {
+    // CDP represents repeated raw response fields under one key, with their
+    // values joined by newlines in the order they were received.
+    let mut headers = serde_json::Map::new();
+    for (name, value) in response_headers {
+        let value = moli_fetch::decode_header_value(value);
+        match headers.entry(name) {
+            Entry::Vacant(entry) => {
+                entry.insert(Value::String(value.into_owned()));
+            }
+            Entry::Occupied(mut entry) => {
+                let Value::String(values) = entry.get_mut() else {
+                    unreachable!("extra info header values are strings");
+                };
+                values.push('\n');
+                values.push_str(&value);
+            }
+        }
+    }
     out.push_response_received_extra_info(
         session_id,
         request_id,
-        headers_as_json_object(response_headers),
+        headers,
         status,
         cookie_set_reports
             .iter()
