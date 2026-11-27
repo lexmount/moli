@@ -33,11 +33,7 @@ Preserve the client's existing API where Moli supports it.
    `http://127.0.0.1:9222`.
 3. Add `--layout` when the workflow needs real element geometry, coordinate
    input, screenshots, PDFs, or screencasts. Add `--resource` only when all
-   optional visual/media resources are required. Add `--accept-lang` only when
-   the instructions name a language: the default is the operating system's
-   display language, which is what a real browser reports, so passing nothing
-   is usually correct and a pinned baseline is the exception. See "Language" in
-   [references/protocols.md](references/protocols.md) to confirm the value.
+   optional visual/media resources are required.
 4. Probe `/json/version` before connecting the client.
 5. Connect with the client's remote/attach API; do not launch a second bundled
    browser.
