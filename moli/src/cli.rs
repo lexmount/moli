@@ -436,12 +436,6 @@ fn parse_request_header_arg(raw: &str) -> Result<RequestHeaderArg, String> {
     })
 }
 
-fn parse_accept_language_arg(raw: &str) -> Result<String, String> {
-    let value = raw.trim_matches([' ', '\t']);
-    moli_browser_profile::validate_accept_language(value)?;
-    Ok(value.to_owned())
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, Args)]
 pub struct ServeArgs {
     /// Write final unpartitioned cookies on graceful shutdown to a Netscape file,
@@ -708,21 +702,19 @@ pub struct CommonArgs {
     #[arg(long, conflicts_with = "user_agent")]
     pub user_agent_suffix: Option<String>,
 
-    /// Set the default `Accept-Language` header and Navigator languages.
+    /// Set the browser's ordered language preferences, such as `zh-CN,en-US`.
     ///
-    /// Accepts language tags with optional weights, such as
-    /// `zh-CN,zh;q=0.9,en;q=0.8`. Requires a language tag with positive weight.
-    /// Navigator reflects descending weight and skips zero-weight entries and
-    /// wildcards. The default comes from the macOS or Windows display language,
-    /// then `LANGUAGE`, `LC_ALL`, `LC_MESSAGES`, or `LANG`, with `en-US,en;q=0.9`
-    /// as the fallback.
+    /// Navigator uses the list as given. HTTP requests add base languages and
+    /// preference weights. Defaults to the host display language or locale,
+    /// falling back to `en-US,en`.
     #[arg(
         long = "accept-lang",
         value_name = "LANGUAGES",
         env = "MOLI_ACCEPT_LANGUAGE",
-        value_parser = parse_accept_language_arg
+        value_delimiter = ',',
+        value_parser = clap::builder::NonEmptyStringValueParser::new()
     )]
-    pub accept_language: Option<String>,
+    pub accept_language: Vec<String>,
 
     /// Unencrypted PKCS#8 Ed25519 private key used for Web Bot Auth signatures.
     #[arg(long, value_name = "PATH", requires = "web_bot_auth_domain")]

@@ -3046,17 +3046,22 @@ fn fetch_client_cache_vary_user_agent_partitions_hits() {
 }
 
 #[test]
-fn fetch_client_cache_vary_accept_language_records_effective_header() {
+fn fetch_client_cache_varies_by_effective_accept_language() {
     let cache_dir = unique_test_cache_dir();
     let server = ScriptedHttpServer::spawn(vec![
         ScriptedResponse::ok("hit-1")
+            .with_header("Cache-Control", "max-age=60")
+            .with_header("Vary", "Accept-Language"),
+        ScriptedResponse::ok("hit-2")
             .with_header("Cache-Control", "max-age=60")
             .with_header("Vary", "Accept-Language"),
     ]);
 
     let mut config = FetchConfig::default();
     config.set_http_cache_dir(Some(cache_dir.display().to_string()));
-    config.set_accept_language("zh-CN,zh;q=0.9");
+    config
+        .set_languages(vec!["zh-CN".to_owned(), "en-US".to_owned()])
+        .unwrap();
 
     let response =
         fetch_with_config_for_test(&config, Request::get(&server.url()).unwrap()).unwrap();
@@ -3074,9 +3079,21 @@ fn fetch_client_cache_vary_accept_language_records_effective_header() {
         "metadata should record Accept-Language vary key: {metadata}"
     );
     assert!(
-        metadata.contains(config.accept_language()),
+        metadata.contains("zh-CN,zh;q=0.9,en-US;q=0.8,en;q=0.7"),
         "metadata should record effective Accept-Language value: {metadata}"
     );
+
+    let repeated =
+        fetch_with_config_for_test(&config, Request::get(&server.url()).unwrap()).unwrap();
+    assert_eq!(repeated.body_text(), "hit-1");
+
+    config
+        .set_languages(vec!["en-US".to_owned(), "zh-CN".to_owned()])
+        .unwrap();
+    let changed =
+        fetch_with_config_for_test(&config, Request::get(&server.url()).unwrap()).unwrap();
+    assert_eq!(changed.body_text(), "hit-2");
+    assert_eq!(server.hits(), 2);
 
     server.shutdown();
     let _ = std::fs::remove_dir_all(cache_dir);

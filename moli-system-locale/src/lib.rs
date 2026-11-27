@@ -1,19 +1,19 @@
 use icu_locale_core::{Locale, subtags::script};
 
-/// Detects the host language preference and formats it for `Accept-Language`.
-pub fn system_accept_language() -> Option<String> {
+/// Detects the host language preference and its base language fallback.
+pub fn system_languages() -> Option<Vec<String>> {
     #[cfg(any(target_os = "macos", target_os = "windows"))]
-    if let Some(language) = display_accept_language() {
-        return Some(language);
+    if let Some(languages) = display_languages() {
+        return Some(languages);
     }
-    environment_accept_language(|name| std::env::var(name).ok())
+    environment_languages(|name| std::env::var(name).ok())
 }
 
-fn environment_accept_language(mut get: impl FnMut(&str) -> Option<String>) -> Option<String> {
-    if let Some(language) =
-        get("LANGUAGE").and_then(|list| list.split(':').find_map(accept_language_from_locale))
+fn environment_languages(mut get: impl FnMut(&str) -> Option<String>) -> Option<Vec<String>> {
+    if let Some(languages) =
+        get("LANGUAGE").and_then(|list| list.split(':').find_map(languages_from_locale))
     {
-        return Some(language);
+        return Some(languages);
     }
 
     ["LC_ALL", "LC_MESSAGES", "LANG"]
@@ -21,21 +21,21 @@ fn environment_accept_language(mut get: impl FnMut(&str) -> Option<String>) -> O
         .filter_map(get)
         .find(|value| !value.trim().is_empty())
         .as_deref()
-        .and_then(accept_language_from_locale)
+        .and_then(languages_from_locale)
 }
 
 #[cfg(target_os = "macos")]
-fn display_accept_language() -> Option<String> {
+fn display_languages() -> Option<Vec<String>> {
     macos_default_value("AppleLanguages")
         .and_then(|value| {
             value.lines().find_map(|line| {
-                accept_language_from_locale(line.trim().trim_matches(['(', ')', ',', '"']))
+                languages_from_locale(line.trim().trim_matches(['(', ')', ',', '"']))
             })
         })
         .or_else(|| {
             macos_default_value("AppleLocale")
                 .as_deref()
-                .and_then(accept_language_from_locale)
+                .and_then(languages_from_locale)
         })
 }
 
@@ -52,7 +52,7 @@ fn macos_default_value(key: &str) -> Option<String> {
 }
 
 #[cfg(target_os = "windows")]
-fn display_accept_language() -> Option<String> {
+fn display_languages() -> Option<Vec<String>> {
     use windows_sys::Win32::Globalization::{GetUserPreferredUILanguages, MUI_LANGUAGE_NAME};
 
     let mut count = 0;
@@ -87,10 +87,10 @@ fn display_accept_language() -> Option<String> {
         .split(|unit| *unit == 0)
         .take(count as usize)
         .filter_map(|units| String::from_utf16(units).ok())
-        .find_map(|value| accept_language_from_locale(&value))
+        .find_map(|value| languages_from_locale(&value))
 }
 
-fn accept_language_from_locale(value: &str) -> Option<String> {
+fn languages_from_locale(value: &str) -> Option<Vec<String>> {
     let value = value.trim();
     let (name, modifier) = value.split_once('@').unwrap_or((value, ""));
     let tag = name.split_once('.').map_or(name, |(tag, _)| tag).trim();
@@ -112,9 +112,9 @@ fn accept_language_from_locale(value: &str) -> Option<String> {
         primary = "zh-CN".to_owned();
     }
     if primary == language {
-        Some(primary)
+        Some(vec![primary])
     } else {
-        Some(format!("{primary},{language};q=0.9"))
+        Some(vec![primary, language.to_owned()])
     }
 }
 
@@ -123,36 +123,34 @@ mod tests {
     use super::*;
 
     #[test]
-    fn locale_accept_language_preserves_scripts_and_regions() {
-        for (locale, expected) in [
-            ("zh_CN.UTF-8", "zh-CN,zh;q=0.9"),
-            ("en_US.UTF-8@euro", "en-US,en;q=0.9"),
-            ("es_419", "es-419,es;q=0.9"),
-            ("zh-Hans-CN", "zh-CN,zh;q=0.9"),
-            ("zh-Hans-HK", "zh-Hans-HK,zh;q=0.9"),
-            ("zh-Hant-CN", "zh-Hant-CN,zh;q=0.9"),
-            ("zh-Hans", "zh-Hans,zh;q=0.9"),
-            ("SR-latn-rs", "sr-Latn-RS,sr;q=0.9"),
-            ("sr_RS@latin", "sr-Latn-RS,sr;q=0.9"),
-            ("sr_RS.UTF-8@latin", "sr-Latn-RS,sr;q=0.9"),
-            ("sr_Cyrl_RS.UTF-8@latin", "sr-Cyrl-RS,sr;q=0.9"),
-            ("uz_UZ@cyrillic", "uz-Cyrl-UZ,uz;q=0.9"),
-            ("fr", "fr"),
-        ] {
-            assert_eq!(
-                accept_language_from_locale(locale).as_deref(),
-                Some(expected)
-            );
+    fn locale_languages_preserve_scripts_and_regions() {
+        let cases: &[(&str, &[&str])] = &[
+            ("zh_CN.UTF-8", &["zh-CN", "zh"]),
+            ("en_US.UTF-8@euro", &["en-US", "en"]),
+            ("es_419", &["es-419", "es"]),
+            ("zh-Hans-CN", &["zh-CN", "zh"]),
+            ("zh-Hans-HK", &["zh-Hans-HK", "zh"]),
+            ("zh-Hant-CN", &["zh-Hant-CN", "zh"]),
+            ("zh-Hans", &["zh-Hans", "zh"]),
+            ("SR-latn-rs", &["sr-Latn-RS", "sr"]),
+            ("sr_RS@latin", &["sr-Latn-RS", "sr"]),
+            ("sr_RS.UTF-8@latin", &["sr-Latn-RS", "sr"]),
+            ("sr_Cyrl_RS.UTF-8@latin", &["sr-Cyrl-RS", "sr"]),
+            ("uz_UZ@cyrillic", &["uz-Cyrl-UZ", "uz"]),
+            ("fr", &["fr"]),
+        ];
+        for &(locale, expected) in cases {
+            assert_eq!(languages_from_locale(locale).unwrap(), expected);
         }
         for locale in ["C", "C.UTF-8", "POSIX", "", "en-abcdefghi"] {
-            assert_eq!(accept_language_from_locale(locale), None);
+            assert_eq!(languages_from_locale(locale), None);
         }
     }
 
     #[test]
     fn locale_environment_prefers_the_display_language_list() {
-        let accept_language = |values: &[(&str, &str)]| {
-            environment_accept_language(|key| {
+        let languages = |values: &[(&str, &str)]| {
+            environment_languages(|key| {
                 values
                     .iter()
                     .find(|(name, _)| *name == key)
@@ -160,18 +158,18 @@ mod tests {
             })
         };
         assert_eq!(
-            accept_language(&[("LANGUAGE", "C:zh_CN:en"), ("LANG", "en_US.UTF-8")]).as_deref(),
-            Some("zh-CN,zh;q=0.9")
+            languages(&[("LANGUAGE", "C:zh_CN:en"), ("LANG", "en_US.UTF-8")]).unwrap(),
+            ["zh-CN", "zh"]
         );
         assert_eq!(
-            accept_language(&[
+            languages(&[
                 ("LANGUAGE", ":"),
                 ("LC_MESSAGES", "sr_Latn_RS"),
                 ("LANG", "en_US")
             ])
-            .as_deref(),
-            Some("sr-Latn-RS,sr;q=0.9")
+            .unwrap(),
+            ["sr-Latn-RS", "sr"]
         );
-        assert_eq!(accept_language(&[("LC_ALL", "C"), ("LANG", "zh_CN")]), None);
+        assert_eq!(languages(&[("LC_ALL", "C"), ("LANG", "zh_CN")]), None);
     }
 }

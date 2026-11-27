@@ -958,6 +958,22 @@ mod tests {
     }
 
     #[test]
+    fn ordered_language_preferences_survive_user_agent_changes() {
+        let mut config = FetchConfig::default();
+        config
+            .set_languages(vec!["zh-CN".to_owned(), "en-US".to_owned()])
+            .unwrap();
+        config.set_user_agent("Moli/Test-UA");
+        assert!(config.set_languages(Vec::new()).is_err());
+        assert!(config.default_request_headers().is_empty());
+        assert_eq!(config.browser_identity().languages(), ["zh-CN", "en-US"]);
+        assert_eq!(
+            config.accept_language(),
+            "zh-CN,zh;q=0.9,en-US;q=0.8,en;q=0.7"
+        );
+    }
+
+    #[test]
     fn language_setting_and_default_headers_keep_browser_requests_in_sync() {
         let request = Request::get("https://example.test/").unwrap();
         let assert_language = |config: &FetchConfig, expected: &str| {

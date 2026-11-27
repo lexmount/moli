@@ -1,9 +1,12 @@
-use crate::accept_language::navigator_languages;
+use crate::accept_language::{
+    accept_language_from_languages, default_languages, navigator_languages_from_header,
+    validate_languages,
+};
 use crate::window_surface::{
-    DEFAULT_ACCEPT_LANGUAGE, DEFAULT_NAVIGATOR_PLATFORM, DEFAULT_SEC_CH_UA_ARCH,
-    DEFAULT_SEC_CH_UA_BITNESS, DEFAULT_SEC_CH_UA_FORM_FACTORS, DEFAULT_SEC_CH_UA_MODEL,
-    DEFAULT_SEC_CH_UA_PLATFORM, DEFAULT_SEC_CH_UA_PLATFORM_VERSION, DEFAULT_SEC_CH_UA_WOW64,
-    DEFAULT_USER_AGENT, chromium_full_version, chromium_major_version, chromium_ua_brand_versions,
+    DEFAULT_NAVIGATOR_PLATFORM, DEFAULT_SEC_CH_UA_ARCH, DEFAULT_SEC_CH_UA_BITNESS,
+    DEFAULT_SEC_CH_UA_FORM_FACTORS, DEFAULT_SEC_CH_UA_MODEL, DEFAULT_SEC_CH_UA_PLATFORM,
+    DEFAULT_SEC_CH_UA_PLATFORM_VERSION, DEFAULT_SEC_CH_UA_WOW64, DEFAULT_USER_AGENT,
+    chromium_full_version, chromium_major_version, chromium_ua_brand_versions,
 };
 use serde::{Deserialize, Serialize};
 
@@ -63,8 +66,16 @@ pub struct BrowserIdentityProfile {
 
 impl BrowserIdentityProfile {
     pub fn new(user_agent: impl Into<String>, accept_language: impl Into<String>) -> Self {
-        let user_agent = user_agent.into();
         let accept_language = accept_language.into();
+        let languages = navigator_languages_from_header(&accept_language);
+        Self::from_language_values(user_agent.into(), accept_language, languages)
+    }
+
+    fn from_language_values(
+        user_agent: String,
+        accept_language: String,
+        languages: Vec<String>,
+    ) -> Self {
         let brands: Vec<BrowserBrandVersion> = chromium_ua_brand_versions(&user_agent, false)
             .unwrap_or_default()
             .into_iter()
@@ -111,7 +122,7 @@ impl BrowserIdentityProfile {
             model,
             wow64: has_user_agent_metadata && DEFAULT_SEC_CH_UA_WOW64 == "?1",
             form_factors,
-            languages: navigator_languages(&accept_language),
+            languages,
             user_agent,
             accept_language,
             navigator_platform: DEFAULT_NAVIGATOR_PLATFORM.to_owned(),
@@ -245,9 +256,27 @@ impl BrowserIdentityProfile {
     pub fn with_accept_language(&self, accept_language: impl Into<String>) -> Self {
         let accept_language = accept_language.into();
         let mut identity = self.clone();
-        identity.languages = navigator_languages(&accept_language);
+        identity.languages = navigator_languages_from_header(&accept_language);
         identity.accept_language = accept_language;
         identity
+    }
+
+    /// Sets ordered browser language preferences and derives the HTTP value.
+    pub fn with_languages(&self, languages: Vec<String>) -> Result<Self, String> {
+        let languages = validate_languages(languages)?;
+        let mut identity = self.clone();
+        identity.accept_language = accept_language_from_languages(&languages);
+        identity.languages = languages;
+        Ok(identity)
+    }
+
+    /// Rebuilds user-agent metadata while preserving the language configuration.
+    pub fn with_user_agent(&self, user_agent: impl Into<String>) -> Self {
+        Self::from_language_values(
+            user_agent.into(),
+            self.accept_language.clone(),
+            self.languages.clone(),
+        )
     }
 
     pub fn user_agent(&self) -> &str {
@@ -333,7 +362,9 @@ impl BrowserIdentityProfile {
 
 impl Default for BrowserIdentityProfile {
     fn default() -> Self {
-        Self::new(DEFAULT_USER_AGENT, DEFAULT_ACCEPT_LANGUAGE)
+        let languages = default_languages();
+        let accept_language = accept_language_from_languages(&languages);
+        Self::from_language_values(DEFAULT_USER_AGENT.to_owned(), accept_language, languages)
     }
 }
 
@@ -386,6 +417,7 @@ mod tests {
         assert_eq!(identity.platform(), "Windows");
         assert_eq!(identity.navigator_platform(), "Win32");
         assert_eq!(identity.languages(), ["en-US", "en"]);
+        assert_eq!(identity.accept_language(), crate::DEFAULT_ACCEPT_LANGUAGE);
         assert_eq!(
             identity.sec_ch_ua_value().as_deref(),
             Some("\"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Google Chrome\";v=\"156\"")
@@ -414,7 +446,7 @@ mod tests {
 
     #[test]
     fn http_only_language_ranges_use_navigator_defaults() {
-        for header in ["*", "en;q=0", "en;q=0,*;q=0"] {
+        for header in ["", "*", "*;q=0"] {
             for identity in [
                 BrowserIdentityProfile::new(DEFAULT_USER_AGENT, header),
                 BrowserIdentityProfile::default().with_accept_language(header),
@@ -424,6 +456,14 @@ mod tests {
                 assert_eq!(identity.languages(), ["en-US", "en"]);
             }
         }
+    }
+
+    #[test]
+    fn raw_accept_language_retains_http_value_and_legacy_order() {
+        let header = "fr-CA;q=0.2, en-US;q=1.0";
+        let identity = BrowserIdentityProfile::default().with_accept_language(header);
+        assert_eq!(identity.accept_language(), header);
+        assert_eq!(identity.languages(), ["fr-CA", "en-US"]);
     }
 
     #[test]
