@@ -4,6 +4,7 @@ use moli_layout::{
     DocumentLayoutServices, FrozenLayoutTree, LayoutError, LayoutPoint, LayoutViewport,
     RetainedLayoutWorld, ScrollProjectionRefresh,
 };
+use style::{properties::ComputedValues, servo_arc::Arc as ServoArc};
 
 use super::layout_snapshot::LatestLayoutTreeCache;
 #[cfg(feature = "devtools")]
@@ -29,6 +30,13 @@ pub(super) struct InferredFrameStyleViewportCacheKey {
 struct CachedInferredFrameStyleViewport {
     key: InferredFrameStyleViewportCacheKey,
     viewport: StyleViewport,
+}
+
+#[derive(Default)]
+pub(super) struct OnDemandFrameLayout {
+    /// The iframe owner's style before its first attribute change in this batch.
+    pub(super) previous_styles: HashMap<DomHandle, Option<ServoArc<ComputedValues>>>,
+    pub(super) needs_layout: bool,
 }
 
 /// Layout-facing state whose lifetime is bounded by exactly one main Document.
@@ -63,6 +71,7 @@ pub(super) struct DocumentLayoutState {
     /// separate from the single latest-tree slot because a later fresh layout
     /// may replace that slot while the frame view remains live.
     frame_viewports: HashMap<DomHandle, LayoutViewport>,
+    pub(super) on_demand_frames: OnDemandFrameLayout,
     /// Authored-size fallback used before parent layout publishes an exact
     /// iframe content viewport. The dependency key makes clean style reads
     /// cheap without turning this into independently valid layout state.
