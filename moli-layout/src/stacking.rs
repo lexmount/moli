@@ -95,20 +95,20 @@ struct StackingDescendants {
 
 /// Only IFCs containing atomic objects need fragment-level interleaving. Keep
 /// the existing single-pass text projection for all other paragraphs.
-struct InlineOrder {
-    order: std::sync::Arc<crate::world::BoxOrder>,
+struct InlineOrder<'a> {
+    order: &'a crate::world::BoxOrder,
     split: Vec<bool>,
     entries: Vec<Vec<PaintOrderEvent>>,
     atomic_lines: Vec<Option<(LayoutBoxId, usize)>>,
 }
 
-impl InlineOrder {
-    fn new<N>(world: &LayoutWorld<N>) -> Self
+impl<'a> InlineOrder<'a> {
+    fn new<N>(world: &'a LayoutWorld<N>) -> Self
     where
         N: Copy + Debug + Eq + Hash,
     {
         let mut result = Self {
-            order: world.boxes.order_snapshot(),
+            order: world.boxes.order(),
             split: vec![false; world.boxes.len()],
             entries: vec![Vec::new(); world.boxes.len()],
             atomic_lines: vec![None; world.boxes.len()],

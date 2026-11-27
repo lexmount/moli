@@ -26,7 +26,6 @@ fn order_and_storage_changes_preserve_handles_and_reject_retired_generations() {
     let first = boxes.insert(block(1));
     let removed = boxes.insert(block(2));
     let last = boxes.insert(block(3));
-    let original_order = boxes.order_snapshot();
     assert!(boxes.retain_in_order(vec![last, first]));
     assert_eq!(boxes.get(first).unwrap().source(), Some(1));
     assert_eq!(boxes.get(last).unwrap().source(), Some(3));
@@ -40,9 +39,6 @@ fn order_and_storage_changes_preserve_handles_and_reject_retired_generations() {
     assert_eq!(boxes.index_of(last), 0);
     assert_eq!(boxes.index_of(first), 1);
     assert!(boxes.get(removed).is_none());
-    // A published order is immutable even when the working order changes.
-    assert_eq!(original_order.id_at(0), first);
-    assert_eq!(original_order.id_at(1), removed);
 
     let mut current = boxes.insert(block(4));
     let capacity = boxes.capacity();

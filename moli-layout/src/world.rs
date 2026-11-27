@@ -1117,8 +1117,8 @@ where
         self.numeric_tree = None;
         self.boxes.retain_in_order(order);
         if self.boxes.len() != previous_len {
-            let live = self.boxes.order_snapshot();
-            for layout_box in self.boxes.values_mut() {
+            let (live, boxes) = self.boxes.order_and_values_mut();
+            for layout_box in boxes {
                 layout_box.structural_parent =
                     layout_box.structural_parent.filter(|id| live.contains(*id));
                 layout_box.parent = layout_box.parent.filter(|id| live.contains(*id));
@@ -1140,6 +1140,7 @@ where
                         .is_some_and(|b| b.inline_layout.is_some())
                 });
             }
+            let live = self.boxes.order();
             self.source_mapping.retain(|_, id| live.contains(*id));
             self.display_contents_mapping.retain(|_, ids| {
                 ids.retain(|id| live.contains(*id));
