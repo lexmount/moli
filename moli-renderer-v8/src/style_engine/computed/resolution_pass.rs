@@ -26,8 +26,7 @@ use super::STYLE_RESOLUTION_CONTEXTS;
 use super::{
     DocumentStyleWorld, DomHandle, DomHost, MarkerStyleDecision, MoliStyleEngine,
     StyloAnonymousBoxKind, StyloComputedStyleSnapshot, child_restyle_scope, document_quirks_mode,
-    layout_damage_for_style_change, marker_style_decision,
-    populate_inline_style_attribute_for_resolution, record_screen_restyle,
+    marker_style_decision, populate_inline_style_attribute_for_resolution, record_screen_restyle,
     stylo_pseudo_element_for_computed_style, with_cached_pseudo_style,
 };
 
@@ -189,37 +188,6 @@ pub(super) fn with_style_resolution_pass_in_world<R>(
             resolve(&mut pass)
         })
     })
-}
-
-impl MoliStyleEngine {
-    pub(crate) fn resolve_element_restyle_damage(
-        &self,
-        host: &DomHost,
-        document_url: &url::Url,
-        handle: DomHandle,
-    ) -> Option<ServoRestyleDamage> {
-        let world = self.active_owner_document_world(host, handle)?;
-        let state = &world.document_state;
-        if state
-            .source_dirty_scope_snapshot()
-            .requires_retained_style_update()
-            || state.try_with_retained_style_system(|_| ()).is_none()
-        {
-            return None;
-        }
-        let quirks_mode = document_quirks_mode(host, world.document);
-        with_style_resolution_pass_in_world(self, host, document_url, &world, quirks_mode, |pass| {
-            let element = pass.context.adapter.element(host, handle)?;
-            let previous = element.borrow_data()?.styles.get_primary()?.clone();
-            let element = pass.prepare(handle)?;
-            let data = element.borrow_data()?;
-            let current = data.styles.get_primary()?;
-            let difference = ServoRestyleDamage::compute_style_difference::<StyloElement<'_>>(
-                &previous, current,
-            );
-            Some(difference.damage | layout_damage_for_style_change(Some(&previous), Some(current)))
-        })
-    }
 }
 
 impl<'dom> StyleResolutionPass<'_, 'dom> {

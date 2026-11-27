@@ -1616,9 +1616,13 @@ impl PageScriptHost {
     }
 
     pub(crate) fn drain_pending_style_invalidations_for_computed_style_read(&self) {
-        self.drain_pending_style_invalidations_for_computed_style_read_for_document(
-            self.document_handle(),
-        );
+        let document_context = self.style_source_document_context();
+        self.style_engine
+            .drain_pending_style_invalidations_for_computed_style_read_with_document_context(
+                self.dom_host(),
+                self.document_handle(),
+                document_context.as_ref(),
+            );
     }
 
     pub(crate) fn drain_pending_style_invalidations_for_computed_style_read_for_document(
@@ -1631,7 +1635,6 @@ impl PageScriptHost {
                 self.dom_host(),
                 read_document,
                 document_context.as_ref(),
-                |frames| self.invalidate_published_frame_viewports_for_attribute_changes(frames),
             );
     }
 
@@ -1645,7 +1648,6 @@ impl PageScriptHost {
                 self.dom_host(),
                 document_context.as_ref(),
                 boundary,
-                |frames| self.invalidate_published_frame_viewports_for_attribute_changes(frames),
             );
         self.clear_layout_rect_cache();
     }
@@ -2595,20 +2597,11 @@ impl PageScriptHost {
             self.clear_layout_rect_cache();
         }
         let changed_iframe_attributes = effects.iter().filter_map(|effect| {
-            let StyleMutationEffect::Attribute {
-                element,
-                namespace,
-                name,
-                old_value,
-                new_value,
-            } = effect
-            else {
+            let StyleMutationEffect::Attribute { element, .. } = effect else {
                 return None;
             };
-            (namespace.is_none()
-                && matches!(name.as_str(), "width" | "height" | "frameborder" | "style")
-                && old_value != new_value
-                && self.dom_host().is_html_element_named(*element, "iframe"))
+            (self.dom_host().is_html_element_named(*element, "iframe")
+                && effect.affects_layout_metric(self.dom_host()))
             .then_some(*element)
         });
         self.invalidate_published_frame_viewports(changed_iframe_attributes);

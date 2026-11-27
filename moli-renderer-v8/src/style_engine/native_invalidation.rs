@@ -153,9 +153,9 @@ impl PendingNativeInvalidation {
         engine: &MoliStyleEngine,
         world: &DocumentStyleWorld,
         host: &DomHost,
-    ) -> Vec<DomHandle> {
+    ) {
         if self.is_empty() {
-            return Vec::new();
+            return;
         }
 
         // Retire removed roots before dropping history for consumed fragments.
@@ -169,14 +169,6 @@ impl PendingNativeInvalidation {
         );
         retain_live_structural_mutation_effects(host, &mut self.structures);
 
-        let frame_attribute_changes = self
-            .snapshots
-            .attribute_handles()
-            .filter(|&handle| {
-                host.owner_document_handle(handle) == Some(world.document)
-                    && host.is_html_element_named(handle, "iframe")
-            })
-            .collect();
         let dom_adapter = &engine.dom_adapter;
         let mut targets = self
             .attribute_hints
@@ -213,7 +205,7 @@ impl PendingNativeInvalidation {
             subtrees.extend(self.structures.iter().filter_map(mutation_root));
             cleanup.invalidate_subtrees(host, subtrees);
             cleanup.retain_native_invalidation_targets(host, targets);
-            return frame_attribute_changes;
+            return;
         };
 
         let replay_removal = self.snapshots.is_empty()
@@ -294,7 +286,6 @@ impl PendingNativeInvalidation {
         cleanup.retain_native_invalidation_targets(host, targets);
         subtrees.extend(self.connected_roots);
         cleanup.invalidate_subtrees(host, subtrees);
-        frame_attribute_changes
     }
 }
 
