@@ -133,6 +133,7 @@ fn html_presentation_attribute_applies(local_name: &str, name: &str) -> bool {
     match name {
         "hidden" => true,
         "align" => html_block_alignment(local_name).is_some() || is_html_table_row_part(local_name),
+        "face" => local_name == "font",
         "frameborder" => local_name == "iframe",
         "cellpadding" | "cellspacing" => local_name == "table",
         "bgcolor" | "valign" => local_name == "table" || is_html_table_row_part(local_name),
@@ -201,6 +202,11 @@ impl QueryElement<'_> {
         } else if element.namespace() == HTML_NAMESPACE {
             append_html_direction_declaration(*self, &mut block);
             append_html_text_alignment_declaration(*self, &mut block);
+            if html_presentation_attribute_applies(element.local_name(), "face")
+                && let Some(value) = element.attribute_ns("", "face")
+            {
+                append_parsed_presentation_declaration(*self, "font-family", value, &mut block);
+            }
             if has_html_embedded_dimensions(element.local_name()) {
                 append_html_embedded_dimension_declarations(element, &mut block);
             } else {
