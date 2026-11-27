@@ -151,6 +151,24 @@ pub(crate) fn set_lightweight_css_style_stylo_declaration_block_id<'s>(
     true
 }
 
+/// Initialize a fresh wrapper from its rule's existing native owner. Replaying
+/// native CSS text through public setters can lose private names and pending
+/// declarations whose individual values cannot be serialized.
+pub(crate) fn initialize_lightweight_css_style_from_stylo_declaration_block<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    style: v8::Local<'s, v8::Object>,
+) -> bool {
+    let Some(block) = stored_stylo_declaration_block(scope, style) else {
+        return false;
+    };
+    set_style_names(
+        scope,
+        style,
+        &stylo_declaration_block_property_names(&block),
+    );
+    true
+}
+
 #[derive(WebApiFunctionTemplate)]
 #[webapi(interface = web_api_interfaces::CSSStyleDeclaration)]
 struct LightweightCssStylePrototypeDeclaration {
