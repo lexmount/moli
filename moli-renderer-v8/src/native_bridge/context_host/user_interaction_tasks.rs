@@ -170,20 +170,18 @@ impl PageScriptHost {
                 RendererPageUserInteractionTaskKind::Event(event_kind),
                 PendingUserInteractionTaskPayload::EventTarget(event_target),
             ) => {
-                let (event_type, bubbles, composed) = match event_kind {
+                let (event_type, bubbles) = match event_kind {
                     RendererPageUserInteractionEventKind::DocumentSelectionChange => {
-                        ("selectionchange", false, false)
+                        ("selectionchange", false)
                     }
                     RendererPageUserInteractionEventKind::TextControlSelectionChange => {
-                        ("selectionchange", true, true)
+                        ("selectionchange", true)
                     }
-                    RendererPageUserInteractionEventKind::TextControlSelect => {
-                        ("select", true, false)
-                    }
-                    RendererPageUserInteractionEventKind::DialogClose => ("close", false, false),
+                    RendererPageUserInteractionEventKind::TextControlSelect => ("select", true),
+                    RendererPageUserInteractionEventKind::DialogClose => ("close", false),
                 };
                 if super::super::element::construct_simple_event(
-                    scope, event_type, bubbles, false, composed,
+                    scope, event_type, bubbles, false, false,
                 )
                 .is_some_and(|event| {
                     let _ = super::super::element::dispatch_public_event(

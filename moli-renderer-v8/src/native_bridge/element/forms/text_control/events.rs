@@ -7,7 +7,7 @@ pub(crate) fn dispatch_text_control_event(
     handle: DomHandle,
     event_type: &str,
 ) {
-    let composed = matches!(event_type, "beforeinput" | "input" | "selectionchange");
+    let composed = matches!(event_type, "beforeinput" | "input");
     if let Some(event) = construct_simple_event(scope, event_type, true, false, composed) {
         let _ = dispatch_public_event(scope, runtime_ptr, handle, event);
     }
