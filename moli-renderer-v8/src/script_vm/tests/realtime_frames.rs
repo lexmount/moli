@@ -72,7 +72,7 @@ fn realtime_frame_viewport_reads_share_current_layout_and_propagate_failures() {
 }
 
 #[test]
-fn viewport_reads_refresh_only_the_affected_frame_layout() {
+fn viewport_reads_without_realtime_reuse_published_layout() {
     for policy in [
         LayoutPolicy::Mock,
         LayoutPolicy::Lazy,
@@ -95,15 +95,14 @@ fn viewport_reads_refresh_only_the_affected_frame_layout() {
         );
         if policy != LayoutPolicy::Realtime {
             let read = "JSON.stringify([viewport.width, viewport.height, query.matches, child.matchMedia('(width:400px)').matches])";
-            let expected_builds = before + u64::from(policy == LayoutPolicy::Lazy);
             for _ in 0..2 {
                 let values = vm.eval(read).unwrap();
                 if policy == LayoutPolicy::Lazy {
-                    assert_eq!(values, "[400,100,true,true]");
+                    assert_eq!(values, "[320,100,false,false]");
                 }
                 assert_eq!(
                     vm.layout_pass_observability_for_test().1,
-                    expected_builds,
+                    before,
                     "{policy:?}"
                 );
             }
@@ -114,6 +113,39 @@ fn viewport_reads_refresh_only_the_affected_frame_layout() {
             );
         }
     }
+}
+
+#[test]
+fn lazy_frame_viewport_tracks_the_browsing_context_lifetime() {
+    let mut vm = frame_fixture(LayoutPolicy::Lazy, 320, 100);
+    assert_eq!(
+        vm.eval("frame.offsetWidth; child.innerWidth").unwrap(),
+        "320"
+    );
+    let frame = vm.element_handle_by_id_for_test("frame").unwrap();
+    assert!(vm._context_host.borrow().frame_viewport(frame).is_some());
+    let builds = vm.layout_pass_observability_for_test().1;
+    assert_eq!(
+        vm.eval("frame.style.width='400px'; child.document.open(); child.document.close(); child.innerWidth")
+            .unwrap(),
+        "320"
+    );
+    assert_eq!(
+        vm.eval("globalThis.detachedFrame=frame; detachedFrame.remove(); detachedFrame.contentWindow === null").unwrap(),
+        "true"
+    );
+    assert!(vm._context_host.borrow().frame_viewport(frame).is_none());
+    assert_eq!(
+        vm.eval("document.body.append(detachedFrame); JSON.stringify([detachedFrame.contentWindow === child, detachedFrame.contentWindow.innerWidth])").unwrap(),
+        "[false,320]"
+    );
+    assert_eq!(vm.layout_pass_observability_for_test().1, builds);
+    publish_layout_for_test(&mut vm);
+    assert_eq!(
+        vm.eval("detachedFrame.contentWindow.innerWidth").unwrap(),
+        "400"
+    );
+    assert_eq!(vm.layout_pass_observability_for_test().1, builds + 1);
 }
 
 #[test]

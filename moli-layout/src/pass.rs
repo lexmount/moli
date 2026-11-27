@@ -68,9 +68,6 @@ pub trait EmbeddedFrameRenderer<N>
 where
     N: Copy + std::fmt::Debug + Eq + std::hash::Hash,
 {
-    /// Records the owner style used by the final measured layout.
-    fn record_frame_owner_style(&mut self, _source: N, _style: &crate::ResolvedLayoutStyle) {}
-
     fn render_embedded_frame(
         &mut self,
         frame: N,
@@ -823,7 +820,6 @@ where
         if kind != crate::LayoutReplacedKind::Frame {
             continue;
         }
-        frames.record_frame_owner_style(source, &layout_box.style);
         let layout = layout_box.final_layout();
         let width = (layout.size.width
             - layout.border.left
