@@ -6,13 +6,16 @@ use moli_layout::{PaintGlyphRun, PaintPoint};
 use objc2_core_foundation::CFString;
 use objc2_core_graphics::{CGPath, CGPathElement, CGPathElementType};
 use objc2_core_text::CTFont;
-use peniko::kurbo::{Affine, BezPath};
+use peniko::kurbo::{Affine, BezPath, Vec2};
+
+use super::prepare_native_glyph;
 
 pub(super) fn outline(
     font_blob_id: u64,
     run: &PaintGlyphRun,
     offset: PaintPoint,
     glyph_transform: Option<Affine>,
+    glyph_embolden: Vec2,
 ) -> Option<BezPath> {
     let name = moli_system_fonts::native_outline_font_name(font_blob_id)?;
     let font = unsafe {
@@ -42,8 +45,11 @@ pub(super) fn outline(
         };
         let translate =
             Affine::translate((f64::from(glyph.x + offset.x), f64::from(glyph.y + offset.y)));
-        glyph_path.apply_affine(translate * transform);
-        run_path.extend(glyph_path);
+        run_path.extend(prepare_native_glyph(
+            glyph_path,
+            translate * transform,
+            glyph_embolden,
+        ));
     }
     Some(run_path)
 }
