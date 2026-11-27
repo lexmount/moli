@@ -580,6 +580,67 @@ getSelection().collapse(text, 1);
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn text_control_selectionchange_bubbles_through_nested_slots_to_document() {
+    run_page_vm_async_test(async move {
+        let loader =
+            crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
+        let document_url = Url::parse("https://example.com/slotted-selectionchange").unwrap();
+        let (mut page_vm, _resource_source, _owner_wake_rx) =
+            page_vm_with_bound_task_sources_and_owner_wake(&loader, document_url);
+
+        let assignments = page_vm.vm_mut().eval(
+            r#"
+globalThis.slottedSelectionEvents = [];
+const outerHost = document.createElement("div");
+document.body.append(outerHost);
+const outerRoot = outerHost.attachShadow({ mode: "open" });
+const innerHost = document.createElement("div");
+outerRoot.append(innerHost);
+
+const outerSlot = document.createElement("slot");
+innerHost.append(outerSlot);
+const innerRoot = innerHost.attachShadow({ mode: "open" });
+const innerSlot = document.createElement("slot");
+innerRoot.append(innerSlot);
+
+const input = document.createElement("input");
+input.value = "hello";
+outerHost.append(input);
+for (const [name, node] of [
+  ["input", input], ["innerRoot", innerRoot], ["outerRoot", outerRoot], ["document", document],
+]) {
+  node.addEventListener("selectionchange", event => {
+    slottedSelectionEvents.push([name, event.composed, event.target === input]);
+  });
+}
+input.setSelectionRange(0, 1);
+[input.assignedSlot === outerSlot, outerSlot.assignedSlot === innerSlot, input.getRootNode() === document].join("|");
+"#,
+        )?;
+        assert_eq!(assignments, "true|true|true");
+
+        // setSelectionRange queues select before selectionchange.
+        for _ in 0..2 {
+            assert!(
+                page_vm
+                    .run_exact_selected_page_task_for_test(
+                        PageSelectedTaskTestSelector::UserInteraction,
+                        &loader
+                    )
+                    .await?
+            );
+        }
+        assert_eq!(
+            page_vm.vm_mut().eval("JSON.stringify(slottedSelectionEvents)")?,
+            r#"[["input",false,true],["innerRoot",false,true],["outerRoot",false,true],["document",false,true]]"#
+        );
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .expect("slotted text-control selectionchange test should run");
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn user_interaction_task_is_document_exact_across_document_open() {
     run_page_vm_async_test(async move {
         let loader =
