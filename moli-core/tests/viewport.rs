@@ -2166,6 +2166,85 @@ async fn viewport_cut_copies_and_edits_only_the_current_editable_selection() -> 
 }
 
 #[tokio::test]
+async fn viewport_cut_targets_the_start_of_a_contenteditable_selection() -> Result<()> {
+    let browser =
+        Browser::new(BrowserConfig::default().with_layout_policy(LayoutPolicy::Realtime))?;
+    let mut page = browser
+        .fetch(&html_url(
+            "<div id=editor contenteditable><span id=first>abcde</span><span id=second>uvwxyz</span></div>\
+             <input id=other value=untouched>",
+        ))
+        .await?;
+    let mut frames = page
+        .subscribe_viewport_frames(ViewportSurface::default(), 1)
+        .await?;
+    let document = frame(&mut frames, |frame| frame.snapshot.is_some())
+        .await?
+        .document;
+
+    page.evaluate_runtime_expression_async(
+        r#"
+        editor.focus();
+        getSelection().setBaseAndExtent(second.firstChild, 1, first.firstChild, 1);
+        first.addEventListener('cut', event => {
+          event.clipboardData.setData('text/plain', event.target.id);
+          event.preventDefault();
+        }, {once:true});
+        "#,
+    )
+    .await?;
+    assert_eq!(
+        page.cut_viewport_selection(document).await?.as_deref(),
+        Some("first")
+    );
+    let state = page
+        .evaluate_runtime_expression_async(
+            "JSON.stringify([document.activeElement.id, first.textContent, second.textContent])",
+        )
+        .await?;
+    assert_eq!(state["value"], r#"["editor","abcde","uvwxyz"]"#);
+
+    page.evaluate_runtime_expression_async(
+        r#"
+        getSelection().setBaseAndExtent(first.firstChild, 1, first.firstChild, 3);
+        first.addEventListener('cut', () => {
+          getSelection().setBaseAndExtent(second.firstChild, 1, second.firstChild, 3);
+        }, {once:true});
+        "#,
+    )
+    .await?;
+    assert_eq!(
+        page.cut_viewport_selection(document).await?.as_deref(),
+        Some("vw")
+    );
+    let state = page
+        .evaluate_runtime_expression_async(
+            "JSON.stringify([first.textContent, second.textContent])",
+        )
+        .await?;
+    assert_eq!(state["value"], r#"["abcde","uxyz"]"#);
+
+    page.evaluate_runtime_expression_async(
+        r#"
+        getSelection().setBaseAndExtent(first.firstChild, 1, first.firstChild, 3);
+        first.addEventListener('cut', () => {
+          other.focus();
+          other.select();
+        }, {once:true});
+        "#,
+    )
+    .await?;
+    assert_eq!(page.cut_viewport_selection(document).await?, None);
+    let state = page
+        .evaluate_runtime_expression_async(
+            "JSON.stringify([document.activeElement.id, first.textContent, other.value])",
+        )
+        .await?;
+    assert_eq!(state["value"], r#"["other","abcde","untouched"]"#);
+    Ok(())
+}
+
+#[tokio::test]
 async fn viewport_ime_replaces_a_selection_across_contenteditable_nodes() -> Result<()> {
     use moli_core::{RendererViewportEdit, RendererViewportEditAction};
 

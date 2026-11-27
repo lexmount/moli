@@ -29,6 +29,7 @@ use crate::{
         },
         node_owner_document_relevant_context,
     },
+    range_boundary::point_order_in_dom,
     runtime::{RendererViewportEdit, RendererViewportEditAction, RendererViewportEditor},
     util::node_wrapper_from_handle,
 };
@@ -149,9 +150,41 @@ fn active_target(host: &PageScriptHost) -> Option<DomHandle> {
     }
 }
 
-fn clipboard_event_target(host: &PageScriptHost) -> Option<DomHandle> {
-    host.active_element_handle()
-        .or_else(|| host.document_focus_fallback_handle())
+fn contenteditable_clipboard_target(
+    host: &PageScriptHost,
+    focus_target: DomHandle,
+    document: DomHandle,
+) -> Option<DomHandle> {
+    if is_text_control(host, focus_target) {
+        return None;
+    }
+    let editing_host = contenteditable_editing_host(host, focus_target)?;
+    let selection = host.document_selection_snapshot(document)?;
+    let dom = host.dom_host();
+    let start = selection.start;
+    let end = selection.end;
+    let container = if point_order_in_dom(
+        dom,
+        start.container,
+        start.offset,
+        end.container,
+        end.offset,
+    )? == std::cmp::Ordering::Greater
+    {
+        end.container
+    } else {
+        start.container
+    };
+    let node = dom.node(container)?;
+    if !node.is_connected() || contenteditable_editing_host(host, container) != Some(editing_host) {
+        return None;
+    }
+    if node.is_element() {
+        Some(container)
+    } else {
+        node.parent_node()
+            .filter(|parent| dom.node(*parent).is_some_and(Node::is_element))
+    }
 }
 
 fn is_password_control(element: &Element) -> bool {
@@ -191,16 +224,19 @@ pub(crate) fn cut_viewport_selection(
     host: *mut PageScriptHost,
 ) -> Option<String> {
     let runtime = unsafe { &*host };
-    let event_target = clipboard_event_target(runtime)?;
-    let document = runtime.dom_host().owner_document_handle(event_target)?;
+    let focused = runtime.active_element_handle();
+    let focus_target = focused.or_else(|| runtime.document_focus_fallback_handle())?;
+    let document = runtime.dom_host().owner_document_handle(focus_target)?;
     if runtime
         .dom_host()
-        .node(event_target)
+        .node(focus_target)
         .and_then(Node::as_element)
         .is_some_and(is_password_control)
     {
         return None;
     }
+    let event_target =
+        contenteditable_clipboard_target(runtime, focus_target, document).unwrap_or(focus_target);
     let realm = node_owner_document_relevant_context(scope, host, event_target)?;
     let scope = &mut v8::ContextScope::new(scope, realm);
     let store = create_native_drag_data_store(scope)?;
@@ -216,8 +252,9 @@ pub(crate) fn cut_viewport_selection(
     }
 
     let runtime = unsafe { &*host };
-    if clipboard_event_target(runtime) != Some(event_target)
-        || runtime.dom_host().owner_document_handle(event_target) != Some(document)
+    // A cut listener may reselect text in another child of the same editor.
+    if runtime.active_element_handle() != focused
+        || runtime.dom_host().owner_document_handle(focus_target) != Some(document)
     {
         return None;
     }
