@@ -303,8 +303,15 @@ impl DocumentRuntime {
                 push_unique_handle(&mut media, handle);
             } else if self.dom_host.is_html_element_named(handle, "source")
                 && let Some(parent) = self.dom_host.parent_node(handle)
-                && (self.dom_host.is_html_element_named(parent, "audio")
-                    || self.dom_host.is_html_element_named(parent, "video"))
+                && self
+                    .dom_host
+                    .node(parent)
+                    .and_then(Node::as_element)
+                    .is_some_and(|element| {
+                        (element.is_html_element("audio") || element.is_html_element("video"))
+                            && !element.has_attribute_ns("", "src")
+                            && element.media_network_state() == 0
+                    })
             {
                 push_unique_handle(&mut media, parent);
             }
