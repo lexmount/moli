@@ -1310,8 +1310,7 @@ where
                 ));
             }
         }
-        for (index, layout_box) in self.boxes.ordered().enumerate() {
-            let id = self.boxes.id_at(index);
+        for (id, layout_box) in self.boxes.keyed() {
             self.validate_box_provenance(id, layout_box)?;
             self.validate_table_parentage(id, layout_box)?;
         }
