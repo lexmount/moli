@@ -107,7 +107,7 @@ async fn scrollbars_hidden_validates_params_and_requires_layout_without_changing
         "SID-1",
         "Emulation.setScrollbarsHidden",
         json!({"hidden":true}),
-        "Emulation.setScrollbarsHidden requires --layout",
+        "Emulation.setScrollbarsHidden requires layout. Start Moli with --lazy or --realtime.",
     )
     .await;
     mock.with_fixture(|conn| {
