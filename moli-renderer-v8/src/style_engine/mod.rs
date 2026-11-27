@@ -79,7 +79,8 @@ pub(crate) use computed::{
     ComputedDisplayKind, ComputedRenderedStyleFacts, ComputedTextTransformKind,
     ComputedTextWrapModeKind, ComputedWhiteSpaceCollapseKind, MarkerStyleDecision,
     StyleObservationSnapshot, StyleResolutionPass, StyloAnonymousBoxKind,
-    StyloComputedStyleSnapshot, marker_style_decision, serialize_resolved_computed_property,
+    StyloComputedStyleSnapshot, layout_damage_for_style_change, marker_style_decision,
+    serialize_resolved_computed_property,
 };
 use document_world::{DocumentStyleWorld, DocumentStyleWorlds};
 pub(in crate::style_engine) use drain::StyleInvalidationDrainBoundary;

@@ -27,7 +27,7 @@ use crate::{
     },
     native_bridge::element::{ComputedStyleRead, iframe_handle_viewport},
     script_vm::web_fonts::DocumentWebFontCompletion,
-    style_engine::{StyleViewport, StyloStyleEnvironment},
+    style_engine::{StyleViewport, StyloStyleEnvironment, layout_damage_for_style_change},
 };
 
 /// Invalidation required by a changed native input. Publication is a separate
@@ -361,13 +361,9 @@ impl PageScriptHost {
                 let damage = ServoRestyleDamage::compute_style_difference::<
                     moli_selector::StyloElement<'_>,
                 >(&previous, &current)
-                .damage;
+                .damage
+                    | layout_damage_for_style_change(Some(&previous), Some(&current));
                 !ServoRestyleDamage::REPAINT.contains(damage)
-                    || previous.effective_zoom != current.effective_zoom
-                    || previous.writing_mode != current.writing_mode
-                    // The frozen hit-test tree also samples these properties.
-                    || previous.clone_pointer_events() != current.clone_pointer_events()
-                    || previous.clone_visibility() != current.clone_visibility()
             })
         });
         if owner_needs_layout
