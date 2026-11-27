@@ -1,6 +1,7 @@
 use anyhow::{Context, Result, bail};
 use cidr::AnyIpCidr;
 use moli_browser_profile::BrowserProfilePaths;
+use moli_browser_profile::DEFAULT_ACCEPT_LANGUAGE;
 use moli_core::{
     LayoutPolicy, OptionalResourceFetchMask,
     page::{SubresourceJsonPathEquals, SubresourceJsonPathRegex, SubresourceResponseWaitCriteria},
@@ -136,6 +137,20 @@ fn apply_common_args(config: &mut AppConfig, common: &CommonArgs) -> Result<()> 
             .set_user_agent_suffix(user_agent_suffix);
     }
 
+    // `navigator.language`, `navigator.languages`, and every outbound
+    // `Accept-Language` header all read this one identity field, so a wrong
+    // default localizes the page itself: UI copy changes, text width changes,
+    // and auto-sized buttons change with it. Chromium follows the host locale,
+    // so derive the same default and let --accept-language pin a value.
+    let accept_language = common
+        .accept_language
+        .clone()
+        .unwrap_or_else(system_accept_language);
+    config
+        .browser
+        .fetch_mut()
+        .set_accept_language(accept_language);
+
     if let Some(http_timeout) = common.http_timeout {
         config
             .browser
@@ -254,6 +269,77 @@ fn apply_common_args(config: &mut AppConfig, common: &CommonArgs) -> Result<()> 
     Ok(())
 }
 
+/// Locale variables in the order glibc resolves them: the first non-empty,
+/// non-`C`/`POSIX` value wins.
+const LOCALE_ENV_VARS: [&str; 3] = ["LC_ALL", "LC_MESSAGES", "LANG"];
+
+/// Reads the host locale, preferring the platform source Chromium itself reads.
+///
+/// macOS keeps the user's choice in the `defaults` domain, not in the POSIX
+/// environment: a Terminal session normally exports `LANG=C.UTF-8` while the
+/// system locale is `zh_CN`. Falling back to `LANG` alone would therefore
+/// report "no preference" on a Chinese Mac.
+fn host_locale() -> Option<String> {
+    #[cfg(target_os = "macos")]
+    {
+        let output = std::process::Command::new("defaults")
+            .args(["read", "-g", "AppleLocale"])
+            .output()
+            .ok()?;
+        if output.status.success() {
+            let value = String::from_utf8(output.stdout).ok()?;
+            let value = value.trim();
+            if !value.is_empty() {
+                return Some(value.to_owned());
+            }
+        }
+    }
+    LOCALE_ENV_VARS
+        .iter()
+        .filter_map(|name| std::env::var(name).ok())
+        .find(|value| !value.trim().is_empty())
+}
+
+/// Derives an `Accept-Language` value from the host locale.
+///
+/// `zh_CN.UTF-8` becomes `zh-CN,zh;q=0.9`, the same shape Chromium sends when
+/// the host locale is Chinese. `C`, `POSIX`, and an unset locale mean "no
+/// preference", so the documented [`DEFAULT_ACCEPT_LANGUAGE`] stays in effect.
+fn system_accept_language() -> String {
+    if let Some(accept_language) = host_locale()
+        .as_deref()
+        .and_then(accept_language_from_locale)
+    {
+        return accept_language;
+    }
+    DEFAULT_ACCEPT_LANGUAGE.to_owned()
+}
+
+/// Converts a POSIX locale such as `en_US.UTF-8@euro` into an Accept-Language
+/// value, or `None` when the locale expresses no preference.
+fn accept_language_from_locale(locale: &str) -> Option<String> {
+    let base = locale.split('.').next()?.split('@').next()?.trim();
+    if base.is_empty() || base.eq_ignore_ascii_case("C") || base.eq_ignore_ascii_case("POSIX") {
+        return None;
+    }
+    let tag = base.replace('_', "-");
+    let mut parts = tag.split('-');
+    let language = parts.next()?;
+    if language.is_empty() || !language.chars().all(|c| c.is_ascii_alphabetic()) {
+        return None;
+    }
+    let Some(region) = parts.next() else {
+        return Some(language.to_owned());
+    };
+    if region.len() != 2 || !region.chars().all(|c| c.is_ascii_alphabetic()) {
+        return Some(language.to_owned());
+    }
+    Some(format!(
+        "{language}-{},{language};q=0.9",
+        region.to_ascii_uppercase()
+    ))
+}
+
 fn configure_web_bot_auth(fetch: &mut FetchConfig, common: &CommonArgs) -> Result<()> {
     let (key_file, domain) = match (
         common.web_bot_auth_key_file.as_deref(),
@@ -365,6 +451,57 @@ mod tests {
     use crate::cli::{Cli, Commands};
     use clap::Parser;
     use std::path::Path;
+
+    #[test]
+    fn accept_language_pins_navigator_language_for_fetch_and_serve() {
+        for command in ["fetch", "serve"] {
+            let mut arguments = vec![
+                "moli",
+                command,
+                "--accept-language",
+                "zh-CN,zh;q=0.9,en;q=0.8",
+            ];
+            if command == "fetch" {
+                arguments.push("https://example.test/");
+            }
+            let cli = Cli::parse_from(arguments);
+            let config = AppConfig::from_cli(&cli).expect("explicit language should build");
+            let identity = config.browser.fetch().browser_identity();
+            assert_eq!(identity.accept_language(), "zh-CN,zh;q=0.9,en;q=0.8");
+            assert_eq!(identity.language(), "zh-CN");
+            assert_eq!(identity.languages(), ["zh-CN", "zh", "en"]);
+        }
+    }
+
+    #[test]
+    fn accept_language_rejects_a_malformed_value() {
+        for value in ["", "   ", "zh CN", "zh-CN,", "zh-CN;q"] {
+            let cli = Cli::try_parse_from(["moli", "serve", "--accept-language", value]);
+            assert!(
+                cli.is_err(),
+                "`--accept-language {value:?}` should be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn locale_environment_maps_to_accept_language() {
+        assert_eq!(
+            super::accept_language_from_locale("zh_CN.UTF-8"),
+            Some("zh-CN,zh;q=0.9".to_owned())
+        );
+        assert_eq!(
+            super::accept_language_from_locale("en_US.UTF-8@euro"),
+            Some("en-US,en;q=0.9".to_owned())
+        );
+        assert_eq!(
+            super::accept_language_from_locale("fr"),
+            Some("fr".to_owned())
+        );
+        assert_eq!(super::accept_language_from_locale("C"), None);
+        assert_eq!(super::accept_language_from_locale("POSIX"), None);
+        assert_eq!(super::accept_language_from_locale(""), None);
+    }
 
     #[test]
     fn serve_debugger_pauses_are_opt_in() {
