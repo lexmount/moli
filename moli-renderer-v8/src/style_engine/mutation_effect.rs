@@ -95,6 +95,18 @@ impl StyleMutationEffect {
         )
     }
 
+    pub(crate) fn affects_native_layout(&self, host: &DomHost) -> bool {
+        match self {
+            Self::Attribute {
+                element,
+                namespace,
+                name,
+                ..
+            } => host.attribute_affects_native_layout(*element, namespace.as_deref(), name),
+            _ => true,
+        }
+    }
+
     pub(crate) fn from_dom_mutation_effects(effects: &DomMutationEffects) -> SmallVec<[Self; 1]> {
         // A single text update needs neither deduplication nor a heap buffer.
         let style = effects.style();

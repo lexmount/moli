@@ -382,6 +382,7 @@ pub(super) fn computed_style_property_value(
         host,
         owner_document,
         document_context,
+        |_| {},
     );
     let pseudo_element = match pseudo_element {
         Some(pseudo_element) => Some(stylo_pseudo_element_for_computed_style(pseudo_element)?),

@@ -1552,6 +1552,64 @@ yield; // Publish this scene before reading its geometry.
 }
 
 #[test]
+fn ondemand_iframe_viewport_tracks_attribute_selectors_after_publication() {
+    let mut vm = new_parsed_test_vm(
+        "https://attribute-sized-frame.test/",
+        r#"<!doctype html>
+           <style>
+             section { font-size:20px }
+             section[data-large] { font-size:30px }
+             iframe { width:10em; height:120px; border:0 }
+             iframe[align="left"] { width:400px; height:180px }
+             section[data-wide] iframe { width:500px; height:190px }
+           </style>
+           <section><iframe id="frame"></iframe></section>"#,
+    );
+    vm.set_layout_policy(moli_page_types::LayoutPolicy::OnDemand);
+
+    let result = eval_with_layout_publications(
+        &mut vm,
+        r#"
+(function* () {
+  const frame = document.getElementById('frame');
+  const child = frame.contentWindow;
+  child.document.open();
+  child.document.write(`
+    <style>
+      #target { width:10vw; height:10vh; color:blue }
+      @media (min-width:300px) { #target { color:red } }
+    </style>
+    <div id="target"></div>`);
+  child.document.close();
+  const style = child.getComputedStyle(child.document.getElementById('target'));
+  yield;
+  const read = () => [child.innerWidth, child.innerHeight, style.width, style.height, style.color];
+  const before = read();
+  frame.setAttribute('align', 'left');
+  const updated = read();
+  frame.removeAttribute('align');
+  const restored = read();
+  yield;
+  const parent = frame.parentElement;
+  parent.setAttribute('data-wide', '');
+  const frozen = read();
+  yield;
+  const ancestorResized = read();
+  parent.removeAttribute('data-wide');
+  parent.setAttribute('data-large', '');
+  yield;
+  return JSON.stringify([before, updated, restored, frozen, ancestorResized, read()]);
+})()
+"#,
+    )
+    .expect("attribute selectors should update the iframe viewport");
+    assert_eq!(
+        result,
+        r#"[[200,120,"20px","12px","rgb(0, 0, 255)"],[400,180,"40px","18px","rgb(255, 0, 0)"],[200,120,"20px","12px","rgb(0, 0, 255)"],[200,120,"20px","12px","rgb(0, 0, 255)"],[500,190,"50px","19px","rgb(255, 0, 0)"],[300,120,"30px","12px","rgb(255, 0, 0)"]]"#
+    );
+}
+
+#[test]
 fn nested_iframe_cached_viewport_units_follow_recursive_frame_resizes() {
     let mut vm = new_storage_test_vm("https://nested-cached-viewport-units.test/");
 
@@ -1868,7 +1926,15 @@ fn child_document_mixed_style_observations_do_not_churn_the_retained_world() {
 
 #[test]
 fn layout_publishes_authoritative_iframe_viewport_without_style_world_ping_pong() {
-    let mut vm = new_storage_test_vm("https://authoritative-child-style-viewport.test/");
+    let mut vm = new_parsed_test_vm(
+        "https://authoritative-child-style-viewport.test/",
+        r#"<!doctype html>
+           <style>
+             iframe[align="left"] { width:400px !important }
+             iframe[align="center"] { background-color:red }
+           </style>
+           <body></body>"#,
+    );
     let result = eval_with_layout_publications(
         &mut vm,
         r#"
@@ -1917,6 +1983,9 @@ yield; // Publish this scene before reading its geometry.
             r#"
 (() => {
   const { frame, childWindow, childDocument } = __authoritativeStyleViewport;
+  frame.setAttribute('unused', 'value');
+  frame.setAttribute('name', 'same-viewport');
+  frame.setAttribute('align', 'right');
   let stable = true;
   for (let index = 0; index < 8; index += 1) {
     stable &&= childWindow.getComputedStyle(childDocument.body).color === 'rgb(0, 140, 0)';
@@ -1924,6 +1993,10 @@ yield; // Publish this scene before reading its geometry.
     stable &&= frame.getBoundingClientRect().width === 200;
     stable &&= childWindow.innerWidth === 140;
   }
+  frame.setAttribute('align', 'center');
+  stable &&= childWindow.innerWidth === 140;
+  stable &&= getComputedStyle(frame).backgroundColor === 'rgb(255, 0, 0)';
+  stable &&= childWindow.getComputedStyle(childDocument.body).color === 'rgb(0, 140, 0)';
   return String(stable);
 })()
 "#,

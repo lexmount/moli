@@ -254,6 +254,30 @@ impl Element {
             .map(Attribute::value)
     }
 
+    /// The element's own language, with XML language taking precedence.
+    pub fn language_attribute(&self) -> Option<&str> {
+        self.attribute_ns(Attribute::XML_NAMESPACE, "lang")
+            .or_else(|| {
+                if self.supports_language_attribute(None) {
+                    self.attribute_ns("", "lang")
+                } else {
+                    None
+                }
+            })
+    }
+
+    /// Whether a `lang` attribute in this namespace participates in language matching.
+    pub fn supports_language_attribute(&self, namespace: Option<&str>) -> bool {
+        match namespace {
+            Some(Attribute::XML_NAMESPACE) => true,
+            None => matches!(
+                self.namespace(),
+                "http://www.w3.org/1999/xhtml" | "http://www.w3.org/2000/svg"
+            ),
+            Some(_) => false,
+        }
+    }
+
     pub fn has_attribute(&self, name: &str) -> bool {
         self.find_attribute(name).is_some()
     }

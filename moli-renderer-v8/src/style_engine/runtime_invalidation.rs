@@ -4,6 +4,7 @@ use dom::ElementState as StyloElementState;
 use indexmap::IndexSet;
 use moli_selector::{CssDirection, html_auto_directionality_root, html_directionality};
 use smallvec::SmallVec;
+use style::invalidation::element::restyle_hints::RestyleHint;
 
 #[cfg(test)]
 use crate::protocol_types::EmulatedMediaOverrides;
@@ -44,10 +45,10 @@ impl MoliStyleEngine {
             world
                 .document_state
                 .note_screen_style_attribute_changes(effects.iter().filter_map(|effect| {
-                    let StyleMutationEffect::Attribute { element, name, .. } = effect else {
+                    let StyleMutationEffect::Attribute { element, .. } = effect else {
                         return None;
                     };
-                    (!DomHost::attribute_affects_native_layout(name) && host.is_connected(*element))
+                    (!effect.affects_native_layout(host) && host.is_connected(*element))
                         .then_some(*element)
                 }));
             if !world_has_style_state(self, &world) {
@@ -58,7 +59,7 @@ impl MoliStyleEngine {
             world.document_state.note_style_input_change();
             let defer_cleanup = should_defer_structural_cleanup(&effects);
             if !defer_cleanup {
-                self.invalidate_mutation_dependent_subtrees(&world, host, &effects);
+                self.invalidate_auto_direction_subtrees(&world, host, &effects);
                 let detached_roots = effects
                     .iter()
                     .flat_map(StyleMutationEffect::detached_roots)
@@ -67,6 +68,7 @@ impl MoliStyleEngine {
                 self.invalidate_detached_style_subtrees(host, detached_roots);
             }
             world.pending_invalidations.borrow_mut().record_mutations(
+                self,
                 &world,
                 host,
                 &effects,
@@ -75,7 +77,7 @@ impl MoliStyleEngine {
         }
     }
 
-    fn invalidate_mutation_dependent_subtrees(
+    fn invalidate_auto_direction_subtrees(
         &self,
         world: &DocumentStyleWorld,
         host: &DomHost,
@@ -98,31 +100,29 @@ impl MoliStyleEngine {
                     name,
                     ..
                 } if name == "dir" => {
-                    // The enclosing auto-direction root also covers attr(dir)
-                    // dependencies on the element whose boundary changed.
-                    let root = host
-                        .parent_node(*element)
-                        .and_then(|parent| html_auto_directionality_root(host, parent));
-                    Some(root.unwrap_or(*element))
-                }
-                StyleMutationEffect::Attribute { element, name, .. } => {
-                    let uses_attribute = self
-                        .dom_adapter
-                        .element_styles_reference_attribute(host, *element, name)
-                        || world
-                            .pseudo_style_cache
-                            .references_attribute(*element, name);
-                    uses_attribute.then_some(*element)
+                    let parent = host.parent_node(*element)?;
+                    html_auto_directionality_root(host, parent)
                 }
                 _ => None,
             })
             .peekable();
         if roots.peek().is_some() {
-            // Direction hints and attr() can affect inherited styles without
-            // a dependency in the stylesheet selector maps.
+            // The direction of an ancestor can depend on this text or dir boundary.
             self.invalidation_cleanup_for_world(world)
                 .invalidate_subtrees(host, roots);
         }
+    }
+
+    pub(super) fn retained_style_references_attribute(
+        &self,
+        world: &DocumentStyleWorld,
+        host: &DomHost,
+        element: DomHandle,
+        name: &str,
+    ) -> bool {
+        self.dom_adapter
+            .element_styles_reference_attribute(host, element, name)
+            || world.pseudo_style_cache.references_attribute(element, name)
     }
 
     pub(super) fn invalidate_detached_style_subtrees(
@@ -308,17 +308,16 @@ impl MoliStyleEngine {
         let Some(world) = self.active_owner_document_world(host, root) else {
             return;
         };
-        // The inline rule can be replaced when the attribute text is not an
-        // input to selector matching or to any retained attr() value.
-        let can_replace_rules = host.is_connected(root)
-            && !self.has_retained_style_attribute_selector(host, root)
-            && !self
-                .dom_adapter
-                .element_styles_reference_attribute(host, root, "style")
-            && !world.pseudo_style_cache.references_attribute(root, "style");
+        // Attribute snapshots carry any selector dependencies. A retained
+        // attr(style) value can also change when the inline declaration does.
+        let hint = if self.retained_style_references_attribute(&world, host, root, "style") {
+            RestyleHint::RESTYLE_SELF
+        } else {
+            RestyleHint::RESTYLE_STYLE_ATTRIBUTE
+        };
         world.document_state.note_visual_input_change();
         self.invalidation_cleanup_for_world(&world)
-            .invalidate_inline_style(host, root, can_replace_rules);
+            .invalidate_inline_style(host, root, hint);
     }
 
     pub(crate) fn invalidate_style_subtree(&mut self, host: &DomHost, root: DomHandle) {

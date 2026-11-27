@@ -58,7 +58,7 @@ impl AttributeValue {
 
 impl Attribute {
     const XLINK_NAMESPACE: &'static str = "http://www.w3.org/1999/xlink";
-    const XML_NAMESPACE: &'static str = "http://www.w3.org/XML/1998/namespace";
+    pub(super) const XML_NAMESPACE: &'static str = "http://www.w3.org/XML/1998/namespace";
     const XMLNS_NAMESPACE: &'static str = "http://www.w3.org/2000/xmlns/";
 
     pub fn new(

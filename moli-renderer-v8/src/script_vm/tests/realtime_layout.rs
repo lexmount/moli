@@ -118,6 +118,47 @@ fn realtime_layout_writes_and_reads_in_one_call_share_only_current_inputs() {
 }
 
 #[test]
+fn realtime_html_attribute_changes_reuse_native_inputs_and_respect_css_selectors() {
+    let mut vm = realtime_vm(
+        r#"<!doctype html><style>
+           #target { width:100px }
+           #target[state="wide"] { width:240px }
+           </style><div id=target></div>"#,
+    );
+    assert_eq!(vm.eval("String(target.offsetWidth)").unwrap(), "100");
+    let builds = vm.layout_pass_observability_for_test().1;
+    let host = vm.context_host_weak_for_test().upgrade().unwrap();
+    let native_revision = || {
+        let host = host.borrow();
+        host.dom_host()
+            .document_layout_version(host.document_handle())
+    };
+    let revision = native_revision();
+
+    assert_eq!(
+        vm.eval("target.setAttribute('x','123'); target.setAttribute('width','9'); String(target.offsetWidth)")
+            .unwrap(),
+        "100"
+    );
+    assert_eq!(vm.layout_pass_observability_for_test().1, builds);
+    assert_eq!(native_revision(), revision);
+    assert_eq!(
+        vm.eval("target.setAttribute('state','wide'); String(target.offsetWidth)")
+            .unwrap(),
+        "240"
+    );
+    assert_eq!(vm.layout_pass_observability_for_test().1, builds + 1);
+    assert_eq!(native_revision(), revision);
+    assert_eq!(
+        vm.eval("target.removeAttribute('state'); String(target.offsetWidth)")
+            .unwrap(),
+        "100"
+    );
+    assert_eq!(vm.layout_pass_observability_for_test().1, builds + 2);
+    assert_eq!(native_revision(), revision);
+}
+
+#[test]
 fn retained_layout_world_belongs_to_realtime_screen_publication() {
     for mode in [
         LayoutPolicy::Mock,

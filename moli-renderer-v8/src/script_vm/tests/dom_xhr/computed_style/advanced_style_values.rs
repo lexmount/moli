@@ -862,11 +862,11 @@ fn html_presentational_hints_read_only_null_namespace_attributes() {
 }
 
 #[test]
-fn xml_lang_changes_restyle_descendants_that_inherit_language() {
+fn language_mutations_use_only_xml_and_supported_null_namespaces() {
     let mut vm = new_parsed_test_vm(
         "https://language-style-mutation.test/",
         r#"<!doctype html><style>span:lang(fr) { color: red }</style>
-           <div id="parent" lang="en"><span id="child">Text</span></div>"#,
+           <body lang="en"><div id="parent"><span id="child">Text</span></div>"#,
     );
     let result = vm
         .eval(
@@ -877,17 +877,34 @@ fn xml_lang_changes_restyle_descendants_that_inherit_language() {
   const child = document.getElementById('child');
   const read = () => getComputedStyle(child).color;
   const colors = [read()];
+  parent.setAttributeNS('urn:other', 'lang', 'fr');
+  colors.push(read());
   parent.setAttributeNS(xml, 'xml:lang', 'fr-CA');
   colors.push(read());
   parent.removeAttributeNS(xml, 'lang');
   colors.push(read());
-  return colors.join('|');
+  parent.setAttributeNS(null, 'lang', 'fr');
+  colors.push(read());
+  parent.removeAttributeNS(null, 'lang');
+  colors.push(read());
+
+  const foreign = document.createElementNS('urn:foreign', 'item');
+  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  parent.append(foreign, svg);
+  foreign.setAttribute('lang', 'fr');
+  svg.setAttribute('lang', 'fr');
+  const foreignMatches = foreign.matches(':lang(fr)');
+  foreign.setAttributeNS(xml, 'xml:lang', 'fr');
+  return JSON.stringify([colors, foreignMatches, foreign.matches(':lang(fr)'), svg.matches(':lang(fr)')]);
 })()
 "#,
         )
         .expect("language selectors should track an inherited xml:lang change");
 
-    assert_eq!(result, "rgb(0, 0, 0)|rgb(255, 0, 0)|rgb(0, 0, 0)");
+    assert_eq!(
+        result,
+        r#"[["rgb(0, 0, 0)","rgb(0, 0, 0)","rgb(255, 0, 0)","rgb(0, 0, 0)","rgb(255, 0, 0)","rgb(0, 0, 0)"],false,true,true]"#
+    );
 }
 
 #[test]
