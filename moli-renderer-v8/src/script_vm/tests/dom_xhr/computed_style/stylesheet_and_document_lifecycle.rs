@@ -1075,10 +1075,10 @@ fn computed_used_size_clamps_infinite_negative_math_to_zero() {
 fn computed_style_child_document_media_queries_use_iframe_viewport() {
     let mut vm = new_storage_test_vm("https://child-document-media-query.test/");
 
-    let result = vm
-        .eval(
-            r#"
-(() => {
+    let result = eval_with_layout_publications(
+        &mut vm,
+        r#"
+(function* () {
   if (!document.documentElement) {
     document.appendChild(document.createElement('html'));
   }
@@ -1096,14 +1096,16 @@ fn computed_style_child_document_media_queries_use_iframe_viewport() {
   document.body.offsetTop;
   const before = getComputedStyle(childDocument.body).color;
   frame.style.width = '200px';
+  const frozen = getComputedStyle(childDocument.body).color;
+  yield;
   const after = getComputedStyle(childDocument.body).color;
-  return `${before}|${after}`;
+  return `${before}|${frozen}|${after}`;
 })()
 "#,
-        )
-        .expect("child document media queries should use iframe viewport");
+    )
+    .expect("child document media queries should use the published iframe viewport");
 
-    assert_eq!(result, "rgb(255, 0, 0)|rgb(0, 128, 0)");
+    assert_eq!(result, "rgb(255, 0, 0)|rgb(255, 0, 0)|rgb(0, 128, 0)");
 }
 
 #[test]
@@ -1552,222 +1554,6 @@ yield; // Publish this scene before reading its geometry.
 }
 
 #[test]
-fn lazy_iframe_attribute_changes_observe_the_used_content_box() {
-    let mut vm = new_parsed_test_vm(
-        "https://iframe-content-box.test/",
-        r#"<!doctype html>
-           <style>
-             body { margin:0 }
-             iframe { display:block; box-sizing:border-box; width:200px; height:160px;
-                      padding:20px; border:10px solid }
-             iframe[data-offset] { margin-left:10px }
-             iframe[data-wide] { width:280px }
-           </style>
-           <iframe id="frame"></iframe>"#,
-    );
-    vm.set_layout_policy(moli_page_types::LayoutPolicy::Lazy);
-    vm.eval(
-        r#"
-const frame = document.getElementById('frame');
-const child = frame.contentWindow;
-child.document.open();
-child.document.write(`
-  <style>
-    body { margin:0 }
-    #target { width:10vw; height:10vh; color:blue }
-    @media (min-width:200px) { #target { color:red } }
-    iframe { display:block; width:50%; height:20px; border:0 }
-  </style>
-  <div id="target"></div><iframe id="nested"></iframe>`);
-child.document.close();
-const targetStyle = child.getComputedStyle(child.document.getElementById('target'));
-const nested = child.document.getElementById('nested').contentWindow;
-const readViewport = () => JSON.stringify([
-  child.innerWidth, child.innerHeight, nested.innerWidth,
-  targetStyle.width, targetStyle.height, targetStyle.color
-]);
-"#,
-    )
-    .unwrap();
-    publish_layout_for_test(&mut vm);
-    let original = r#"[140,100,70,"14px","10px","rgb(0, 0, 255)"]"#;
-    assert_eq!(vm.eval("readViewport()").unwrap(), original);
-    let builds = vm.layout_pass_observability_for_test().1;
-
-    assert_eq!(
-        vm.eval("frame.setAttribute('data-offset', ''); readViewport()")
-            .unwrap(),
-        original
-    );
-    assert_eq!(vm.eval("frame.getBoundingClientRect().left").unwrap(), "10");
-    assert_eq!(vm.layout_pass_observability_for_test().1, builds + 1);
-
-    assert_eq!(
-        vm.eval("frame.style.backgroundColor = 'red'; readViewport()")
-            .unwrap(),
-        original
-    );
-    assert_eq!(
-        vm.eval("getComputedStyle(frame).backgroundColor").unwrap(),
-        "rgb(255, 0, 0)"
-    );
-    assert_eq!(
-        vm.eval("frame.setAttribute('style', 'background-color:lime'); readViewport()")
-            .unwrap(),
-        original
-    );
-    assert_eq!(
-        vm.eval("frame.setAttribute('name', 'same-size'); readViewport()")
-            .unwrap(),
-        original
-    );
-    assert_eq!(vm.layout_pass_observability_for_test().1, builds + 1);
-
-    assert_eq!(
-        vm.eval("frame.setAttribute('data-wide', ''); readViewport()")
-            .unwrap(),
-        r#"[220,100,110,"22px","10px","rgb(255, 0, 0)"]"#
-    );
-    assert_eq!(vm.layout_pass_observability_for_test().1, builds + 2);
-}
-
-#[test]
-fn lazy_iframe_refresh_compares_against_the_published_owner_style() {
-    for screenshot in [false, true] {
-        for read_style in [false, true] {
-            let mut vm = new_parsed_test_vm(
-                "https://iframe-published-style.test/",
-                r#"<!doctype html>
-                   <style>
-                     iframe { box-sizing:border-box; width:200px; height:160px;
-                              padding:20px; border:10px solid }
-                     section[data-wide] iframe { width:280px }
-                   </style>
-                   <section id="owner"><iframe id="frame"></iframe></section>"#,
-            );
-            vm.set_layout_policy(moli_page_types::LayoutPolicy::Lazy);
-            vm.eval("globalThis.child = frame.contentWindow").unwrap();
-            if screenshot {
-                publish_layout_for_test(&mut vm);
-            } else {
-                vm.eval("frame.getBoundingClientRect().width").unwrap();
-            }
-            let builds = vm.layout_pass_observability_for_test().1;
-            assert_eq!(vm.eval("child.innerWidth").unwrap(), "140");
-
-            vm.eval("owner.setAttribute('data-wide', '')").unwrap();
-            if read_style {
-                vm.eval("getComputedStyle(frame).width").unwrap();
-            }
-            assert_eq!(vm.eval("child.innerWidth").unwrap(), "140");
-            assert_eq!(vm.layout_pass_observability_for_test().1, builds);
-
-            assert_eq!(
-                vm.eval("frame.style.backgroundColor = 'red'; child.innerWidth")
-                    .unwrap(),
-                "220",
-                "screenshot={screenshot}, read_style={read_style}",
-            );
-            assert_eq!(vm.layout_pass_observability_for_test().1, builds + 1);
-
-            assert_eq!(
-                vm.eval("frame.style.backgroundColor = 'blue'; child.innerWidth")
-                    .unwrap(),
-                "220",
-            );
-            assert_eq!(vm.layout_pass_observability_for_test().1, builds + 1);
-        }
-    }
-}
-
-#[test]
-fn lazy_iframe_refresh_follows_relative_selector_layout_damage() {
-    for read_style in [false, true] {
-        let mut vm = new_parsed_test_vm(
-            "https://iframe-relative-selector-layout.test/",
-            r#"<!doctype html>
-               <style>
-                 body { margin:0; width:200px }
-                 body:has(> iframe[style]) { width:400px; background-color:blue }
-                 iframe { display:block; width:50%; height:100px; border:0 }
-               </style>
-               <iframe id="frame"></iframe>"#,
-        );
-        vm.set_layout_policy(moli_page_types::LayoutPolicy::Lazy);
-        let read_widths = "JSON.stringify([frame.offsetWidth, frame.contentWindow.innerWidth])";
-        assert_eq!(vm.eval(read_widths).unwrap(), "[100,100]");
-        let builds = vm.layout_pass_observability_for_test().1;
-
-        vm.eval("frame.style.backgroundColor = 'red'").unwrap();
-        if read_style {
-            assert_eq!(
-                vm.eval("getComputedStyle(document.body).backgroundColor")
-                    .unwrap(),
-                "rgb(0, 0, 255)"
-            );
-        }
-        assert_eq!(vm.layout_pass_observability_for_test().1, builds);
-        assert_eq!(
-            vm.eval(read_widths).unwrap(),
-            "[200,200]",
-            "read_style={read_style}"
-        );
-        assert_eq!(vm.layout_pass_observability_for_test().1, builds + 1);
-
-        vm.eval("frame.style.backgroundColor = 'blue'").unwrap();
-        assert_eq!(vm.eval(read_widths).unwrap(), "[200,200]");
-        assert_eq!(vm.layout_pass_observability_for_test().1, builds + 1);
-    }
-}
-
-#[test]
-fn lazy_iframe_refresh_updates_sibling_hit_testing() {
-    for (property, excluded) in [("pointer-events", "none"), ("visibility", "hidden")] {
-        for read_style in [false, true] {
-            let mut vm = new_parsed_test_vm(
-                "https://iframe-sibling-hit-testing.test/",
-                &format!(
-                    r#"<!doctype html>
-                       <style>
-                         body {{ margin:0 }}
-                         iframe {{ display:block; width:100px; height:100px; border:0 }}
-                         #target {{ position:absolute; left:300px; top:0; width:40px; height:40px;
-                                    background:red }}
-                         iframe[style] ~ #target {{ {property}:{excluded} }}
-                       </style>
-                       <iframe id="frame"></iframe><div id="target"></div>"#,
-                ),
-            );
-            vm.set_layout_policy(moli_page_types::LayoutPolicy::Lazy);
-            let hit = "document.elementFromPoint(310, 10) === target";
-            assert_eq!(vm.eval(hit).unwrap(), "true");
-            let builds = vm.layout_pass_observability_for_test().1;
-
-            vm.eval("frame.style.backgroundColor = 'blue'").unwrap();
-            if read_style {
-                let read = format!("getComputedStyle(target).getPropertyValue('{property}')");
-                assert_eq!(vm.eval(&read).unwrap(), excluded);
-            }
-            assert_eq!(vm.layout_pass_observability_for_test().1, builds);
-            assert_eq!(
-                vm.eval(hit).unwrap(),
-                "false",
-                "{property}, read_style={read_style}"
-            );
-            assert_eq!(vm.layout_pass_observability_for_test().1, builds + 1);
-
-            vm.eval("frame.style.backgroundColor = 'lime'").unwrap();
-            assert_eq!(vm.eval(hit).unwrap(), "false");
-            assert_eq!(vm.layout_pass_observability_for_test().1, builds + 1);
-
-            vm.eval("frame.removeAttribute('style')").unwrap();
-            assert_eq!(vm.eval(hit).unwrap(), "true");
-            assert_eq!(vm.layout_pass_observability_for_test().1, builds + 2);
-        }
-    }
-}
-
-#[test]
 fn nested_iframe_cached_viewport_units_follow_recursive_frame_resizes() {
     let mut vm = new_storage_test_vm("https://nested-cached-viewport-units.test/");
 
@@ -1840,6 +1626,12 @@ fn nested_iframe_cached_viewport_units_follow_recursive_frame_resizes() {
     let inner_document = child_document_handle_for_frame_id(&vm, "nested-viewport-inner-frame");
     let updates = vm.retained_style_system_update_count_for_document_for_test(inner_document);
     let stylist = vm.retained_stylist_identity_for_document_for_test(inner_document);
+    let builds = vm.layout_pass_observability_for_test().1;
+    vm.eval(
+        "const {outerFrame} = __nestedViewportUnitFixture; \
+         outerFrame.style.width = '100px'; outerFrame.style.height = '80px'",
+    )
+    .unwrap();
 
     let query = r#"
 (() => {
@@ -1851,8 +1643,6 @@ fn nested_iframe_cached_viewport_units_follow_recursive_frame_resizes() {
     target,
     held
   } = __nestedViewportUnitFixture;
-  outerFrame.style.width = '100px';
-  outerFrame.style.height = '80px';
   outerFrame.getBoundingClientRect();
   innerFrame.getBoundingClientRect();
   const heldValues = [held.width, held.height, held.paddingLeft];
@@ -1868,24 +1658,25 @@ fn nested_iframe_cached_viewport_units_follow_recursive_frame_resizes() {
   ].join('|');
 })()
 "#;
-    let after = vm
+    let frozen = vm
         .eval(query)
-        .expect("warm queries refresh invalidated frame viewports");
-    assert_eq!(after, "100|80|50|40|5px|4px|2px|5px|4px");
+        .expect("warm queries use the published frame viewports");
+    assert_eq!(frozen, "200|160|100|80|10px|8px|4px|10px|8px");
+    assert_eq!(vm.layout_pass_observability_for_test().1, builds);
     assert_eq!(
         vm.retained_style_system_update_count_for_document_for_test(inner_document),
-        updates + 1,
-        "warm observation must consume the changed viewport once"
+        updates
     );
     publish_layout_for_test(&mut vm);
     let refreshed = vm
         .eval(query)
-        .expect("explicit refresh retains the already current recursive frame viewports");
+        .expect("explicit refresh updates the recursive frame viewports");
     assert_eq!(refreshed, "100|80|50|40|5px|4px|2px|5px|4px");
+    assert_eq!(vm.layout_pass_observability_for_test().1, builds + 1);
     assert_eq!(
         vm.retained_style_system_update_count_for_document_for_test(inner_document),
         updates + 1,
-        "explicit refresh must not consume the viewport transition a second time",
+        "explicit refresh updates the retained style world once",
     );
     assert_eq!(
         vm.retained_stylist_identity_for_document_for_test(inner_document),

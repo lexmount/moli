@@ -372,6 +372,26 @@ fn realtime_refreshes_retained_overflow_after_transform_projection() {
 }
 
 #[cfg(feature = "devtools")]
+#[test]
+fn realtime_hit_testing_follows_pointer_events_and_visibility_changes() {
+    let mut vm = new_parsed_test_vm(
+        "https://realtime-hit-test.test/",
+        r#"<!doctype html>
+           <style>body { margin:0 } #target { width:50px; height:50px }</style>
+           <div id="target"></div>"#,
+    );
+    vm.set_layout_policy(moli_page_types::LayoutPolicy::Realtime);
+    let hit = "document.elementFromPoint(10, 10) === target";
+    assert_eq!(vm.eval(hit).unwrap(), "true");
+    for declaration in ["pointer-events:none", "visibility:hidden"] {
+        vm.eval(&format!("target.style.cssText = '{declaration}'"))
+            .unwrap();
+        assert_eq!(vm.eval(hit).unwrap(), "false", "{declaration}");
+        vm.eval("target.removeAttribute('style')").unwrap();
+        assert_eq!(vm.eval(hit).unwrap(), "true", "{declaration}");
+    }
+}
+
 #[tokio::test(flavor = "current_thread")]
 async fn realtime_repaints_native_color_damage_without_rebuilding_geometry() {
     tokio::task::LocalSet::new()

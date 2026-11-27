@@ -79,8 +79,7 @@ pub(crate) use computed::{
     ComputedDisplayKind, ComputedRenderedStyleFacts, ComputedTextTransformKind,
     ComputedTextWrapModeKind, ComputedWhiteSpaceCollapseKind, MarkerStyleDecision,
     StyleObservationSnapshot, StyleResolutionPass, StyloAnonymousBoxKind,
-    StyloComputedStyleSnapshot, layout_damage_for_style_change, marker_style_decision,
-    serialize_resolved_computed_property,
+    StyloComputedStyleSnapshot, marker_style_decision, serialize_resolved_computed_property,
 };
 use document_world::{DocumentStyleWorld, DocumentStyleWorlds};
 pub(in crate::style_engine) use drain::StyleInvalidationDrainBoundary;
@@ -262,25 +261,6 @@ impl MoliStyleEngine {
             return None;
         }
         state.screen_restyle_targets(host, document)
-    }
-
-    pub(crate) fn screen_style_damage_is_within(
-        &self,
-        document: DomHandle,
-        supported_damage: ServoRestyleDamage,
-    ) -> bool {
-        let Some(world) = self.document_worlds.active_world(document) else {
-            return false;
-        };
-        let state = &world.document_state;
-        state.finish_screen_style_invalidation();
-        state.screen_style_dependencies_are_current()
-            && !state.screen_restyle_is_full()
-            && state.screen_damage_nodes.borrow().iter().all(|&handle| {
-                self.dom_adapter
-                    .element_restyle_damage(document, handle)
-                    .is_some_and(|damage| supported_damage.contains(damage))
-            })
     }
 
     /// Read canonical damage only after settling each affected path.

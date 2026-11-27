@@ -10,7 +10,6 @@ use moli_layout::{
 };
 use moli_page_types::LayoutPolicy;
 use moli_selector::QueryContainerSizes;
-use style::servo::restyle_damage::ServoRestyleDamage;
 
 #[cfg(feature = "devtools")]
 use super::layout_snapshot::PublishedFrameGeometry;
@@ -21,13 +20,10 @@ use crate::{
         CompletedStylesheetWebFont, StylesheetLoadBlockingResource, StylesheetSubresourceRequest,
     },
     document_runtime::DomHandle,
-    layout_renderer::{
-        FrameOwnerStyles, LayoutPassFeedback, layout_viewport_for_surface,
-        screen_targets_allow_layout_reuse,
-    },
-    native_bridge::element::{ComputedStyleRead, iframe_handle_viewport},
+    layout_renderer::{LayoutPassFeedback, layout_viewport_for_surface},
+    native_bridge::element::iframe_handle_viewport,
     script_vm::web_fonts::DocumentWebFontCompletion,
-    style_engine::{StyleViewport, StyloStyleEnvironment, layout_damage_for_style_change},
+    style_engine::{StyleViewport, StyloStyleEnvironment},
 };
 
 /// Invalidation required by a changed native input. Publication is a separate
@@ -179,7 +175,6 @@ impl PageScriptHost {
         if self.layout_policy != policy {
             let mut state = self.document_layout_state.borrow_mut();
             drop(state.take_retained_layout());
-            state.lazy_frames = Default::default();
             self.dom_host().track_layout_changes(None);
             self.realtime_layout_state = policy.is_realtime().then(Box::default);
         }
@@ -298,115 +293,6 @@ impl PageScriptHost {
             .frame_viewport(frame)
     }
 
-    pub(crate) fn observed_frame_viewport(&self, frame: DomHandle) -> Option<LayoutViewport> {
-        let (viewport, needs_validation) = {
-            let state = self.document_layout_state.try_borrow().ok()?;
-            let changes = &state.lazy_frames;
-            (
-                state.frame_viewport(frame)?,
-                changes.needs_layout || !changes.changed_owners.is_empty(),
-            )
-        };
-        if needs_validation && !self.layout_pass_active.get() {
-            // Keep the last exact viewport until a new screen pass publishes
-            // the frame's used content box.
-            let _ = self.ensure_initial_layout();
-            return self.frame_viewport(frame);
-        }
-        Some(viewport)
-    }
-
-    pub(super) fn note_lazy_frame_style_change(&self, frame: DomHandle) {
-        let host = self.dom_host();
-        if self.layout_policy != LayoutPolicy::Lazy
-            || !host.is_html_element_named(frame, "iframe")
-            || !host.is_connected(frame)
-        {
-            return;
-        }
-        let mut state = self.document_layout_state.borrow_mut();
-        if state.lazy_frames.needs_layout
-            || (state.frame_viewport(frame).is_none()
-                && state.latest_layout(self.document_handle()).is_none())
-        {
-            return;
-        }
-        state.lazy_frames.changed_owners.insert(frame);
-    }
-
-    fn validate_lazy_frame_layout(&self) {
-        if self.layout_policy != LayoutPolicy::Lazy || self.layout_pass_active.get() {
-            return;
-        }
-        let changed_owners = std::mem::take(
-            &mut self
-                .document_layout_state
-                .borrow_mut()
-                .lazy_frames
-                .changed_owners,
-        );
-        let host = self.dom_host();
-        let mut owner_documents = HashSet::new();
-        let owner_needs_layout = changed_owners.into_iter().any(|frame| {
-            let Some(document) = host
-                .owner_document_handle(frame)
-                .filter(|_| host.is_connected(frame))
-            else {
-                return true;
-            };
-            owner_documents.insert(document);
-            let previous = self.document_layout_state.borrow().frame_owner_style(frame);
-            let current = ComputedStyleRead::new(self, frame).computed_values();
-            previous.zip(current).is_none_or(|(previous, current)| {
-                let damage = ServoRestyleDamage::compute_style_difference::<
-                    moli_selector::StyloElement<'_>,
-                >(&previous, &current)
-                .damage
-                    | layout_damage_for_style_change(Some(&previous), Some(&current));
-                !ServoRestyleDamage::REPAINT.contains(damage)
-            })
-        });
-        if owner_needs_layout
-            || owner_documents
-                .iter()
-                .any(|&document| !self.lazy_restyles_allow_layout_reuse(document))
-        {
-            // Snapshot readers can still use the published projection until
-            // the replacement pass succeeds.
-            self.document_layout_state
-                .borrow_mut()
-                .lazy_frames
-                .needs_layout = true;
-        } else {
-            for document in owner_documents {
-                self.style_engine.consume_screen_style_work(document);
-            }
-        }
-    }
-
-    fn lazy_restyles_allow_layout_reuse(&self, document: DomHandle) -> bool {
-        // An owner's attribute can restyle its containing block or siblings
-        // without changing the owner's computed dimensions.
-        let repaint = ServoRestyleDamage::REPAINT;
-        let Some(restyles) =
-            self.style_engine
-                .screen_restyle_targets(self.dom_host(), document, repaint)
-        else {
-            return false;
-        };
-        (restyles.targets.is_empty()
-            || screen_targets_allow_layout_reuse(
-                self,
-                document,
-                restyles.targets,
-                restyles.after,
-                repaint,
-            ))
-            && self
-                .style_engine
-                .screen_style_damage_is_within(document, repaint)
-    }
-
     pub(crate) fn invalidate_mock_frame_viewports(
         &self,
         frames: impl IntoIterator<Item = DomHandle>,
@@ -420,10 +306,8 @@ impl PageScriptHost {
         }
         let changed = {
             let mut state = self.document_layout_state.borrow_mut();
-            let changed = state.update_frame_viewports(
-                frames.into_iter().map(|frame| (frame, None)),
-                FrameOwnerStyles::new(),
-            );
+            let changed =
+                state.update_frame_viewports(frames.into_iter().map(|frame| (frame, None)));
             state.clear_latest_layout();
             changed
         };
@@ -517,13 +401,14 @@ impl PageScriptHost {
         if self.layout_pass_active.get() {
             return Err(LayoutError::ReentrantLayoutPass);
         }
-        self.validate_lazy_frame_layout();
         let document = self.document_handle();
+        if self
+            .document_layout_state
+            .borrow()
+            .latest_layout(document)
+            .is_some()
         {
-            let state = self.document_layout_state.borrow();
-            if state.latest_layout(document).is_some() && !state.lazy_frames.needs_layout {
-                return Ok(());
-            }
+            return Ok(());
         }
         let request = LayoutPassRequest::new(
             self.layout_viewport_for_document(document),
@@ -718,7 +603,6 @@ impl PageScriptHost {
         document: DomHandle,
         mut pass: LayoutPassResult<DomHandle>,
         retain_paint: bool,
-        frame_owner_styles: FrameOwnerStyles,
     ) {
         if let Some(state) = &self.realtime_layout_state {
             state.clear_publication();
@@ -781,11 +665,8 @@ impl PageScriptHost {
         self.note_wheel_scroll_target_layout(document, &tree);
         let frame_viewports_changed = {
             let mut state = self.document_layout_state.borrow_mut();
-            if document == self.document_handle() {
-                state.lazy_frames = Default::default();
-            }
             state.retain_live_frame_viewports(|frame| self.child_browsing_context_is_live(frame));
-            state.update_frame_viewports(frame_viewports, frame_owner_styles)
+            state.update_frame_viewports(frame_viewports)
         };
         if frame_viewports_changed {
             self.style_viewport_generation

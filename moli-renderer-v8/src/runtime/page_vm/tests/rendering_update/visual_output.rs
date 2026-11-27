@@ -389,6 +389,100 @@ document.body.innerHTML = '<div id=target></div>';
 
 #[cfg(feature = "devtools")]
 #[tokio::test(flavor = "current_thread")]
+async fn lazy_iframe_layout_stays_frozen_until_screen_capture() {
+    use crate::runtime::{
+        RendererCaptureScreencastFrameReply, RendererCaptureScreenshotReply,
+        RendererCaptureScreenshotRequest,
+    };
+
+    run_page_vm_async_test(async move {
+        let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default())?;
+        let mut page = test_page_vm_with_loader_and_document_url(
+            &loader,
+            Vec::new(),
+            Url::parse("https://example.com/lazy-iframe-screen.html")?,
+        );
+        assert_eq!(
+            page.layout_configuration.policy,
+            moli_page_types::LayoutPolicy::Lazy
+        );
+        page.vm_mut().eval(
+            r#"
+document.head.innerHTML = `<style>
+    body { margin:0; width:400px }
+    iframe { display:block; box-sizing:border-box; width:50%; height:160px;
+             padding:20px; border:10px solid }
+    #target { position:absolute; left:300px; top:0; width:40px; height:40px; background:red }
+    iframe[style] ~ #target { pointer-events:none }
+</style>`;
+document.body.innerHTML = '<iframe id="frame"></iframe><div id="target"></div>';
+globalThis.child = frame.contentWindow;
+globalThis.query = child.matchMedia('(min-width:200px)');
+globalThis.readScreen = () => JSON.stringify([
+    frame.offsetWidth, child.innerWidth, child.innerHeight, target.offsetWidth,
+    query.matches, document.elementFromPoint(310, 10) === target,
+]);
+"#,
+        )?;
+        let builds = page.vm().layout_pass_observability_for_test().1;
+        assert_eq!(
+            page.vm_mut().eval("readScreen()")?,
+            "[200,140,100,40,false,true]"
+        );
+        assert_eq!(page.vm().layout_pass_observability_for_test().1, builds + 1);
+
+        page.vm_mut()
+            .eval("frame.style.width='280px'; target.style.width='60px'")?;
+        assert_eq!(
+            page.vm_mut()
+                .eval("getComputedStyle(target).pointerEvents")?,
+            "none"
+        );
+        assert_eq!(
+            page.vm_mut().eval("readScreen()")?,
+            "[200,140,100,40,false,true]"
+        );
+        assert_eq!(page.vm().layout_pass_observability_for_test().1, builds + 1);
+        assert!(matches!(
+            page.capture_screenshot(RendererCaptureScreenshotRequest::viewport_png())?,
+            RendererCaptureScreenshotReply::Captured(_)
+        ));
+        assert_eq!(
+            page.vm_mut().eval("readScreen()")?,
+            "[280,220,100,60,true,false]"
+        );
+        assert_eq!(page.vm().layout_pass_observability_for_test().1, builds + 2);
+
+        let RendererCaptureScreencastFrameReply::Captured(first) =
+            page.capture_screencast_frame(viewport_screencast_request(None))?
+        else {
+            panic!("initial screencast frame");
+        };
+        let builds = page.vm().layout_pass_observability_for_test().1;
+        page.vm_mut()
+            .eval("frame.removeAttribute('style'); document.body.style.width='640px'")?;
+        assert_eq!(
+            page.vm_mut().eval("readScreen()")?,
+            "[280,220,100,60,true,false]"
+        );
+        assert_eq!(page.vm().layout_pass_observability_for_test().1, builds);
+        assert!(matches!(
+            page.capture_screencast_frame(viewport_screencast_request(Some(first.visual_state)))?,
+            RendererCaptureScreencastFrameReply::Captured(_)
+        ));
+        assert_eq!(
+            page.vm_mut().eval("readScreen()")?,
+            "[320,260,100,60,true,true]"
+        );
+        assert_eq!(page.vm().layout_pass_observability_for_test().1, builds + 1);
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .expect("Lazy screenshot and screencast publish iframe geometry and viewport together");
+}
+
+#[cfg(feature = "devtools")]
+#[tokio::test(flavor = "current_thread")]
 async fn screencast_visual_token_tracks_child_document_styles_without_retaining_paint() {
     run_page_vm_async_test(async move {
         let loader =

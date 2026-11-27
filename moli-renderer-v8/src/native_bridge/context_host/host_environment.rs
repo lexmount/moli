@@ -2596,20 +2596,7 @@ impl PageScriptHost {
         {
             self.clear_layout_rect_cache();
         }
-        if self.layout_policy() == moli_page_types::LayoutPolicy::Lazy {
-            for effect in effects {
-                if let StyleMutationEffect::Attribute {
-                    element,
-                    old_value,
-                    new_value,
-                    ..
-                } = effect
-                    && old_value != new_value
-                {
-                    self.note_lazy_frame_style_change(*element);
-                }
-            }
-        } else if self.layout_policy() == moli_page_types::LayoutPolicy::Mock {
+        if self.layout_policy() == moli_page_types::LayoutPolicy::Mock {
             let changed_iframe_attributes = effects.iter().filter_map(|effect| {
                 let StyleMutationEffect::Attribute { element, .. } = effect else {
                     return None;
@@ -2637,7 +2624,6 @@ impl PageScriptHost {
     }
 
     pub(crate) fn note_element_inline_style_subtree_activity(&mut self, root: DomHandle) {
-        self.note_lazy_frame_style_change(root);
         if self.dom_host().is_connected(root) {
             self.dom_host().note_tracked_inline_style_target(root);
             self.note_realtime_tracked_input_change();
