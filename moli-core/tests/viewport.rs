@@ -2241,6 +2241,29 @@ async fn viewport_cut_targets_the_start_of_a_contenteditable_selection() -> Resu
         )
         .await?;
     assert_eq!(state["value"], r#"["other","abcde","untouched"]"#);
+
+    page.evaluate_runtime_expression_async(
+        r#"
+        first.contentEditable = 'true';
+        editor.focus();
+        getSelection().setBaseAndExtent(first.firstChild, 1, first.firstChild, 3);
+        first.addEventListener('cut', event => {
+          event.clipboardData.setData('text/plain', event.target.id);
+          event.preventDefault();
+        }, {once:true});
+        "#,
+    )
+    .await?;
+    let clipboard = page.cut_viewport_selection(document).await?;
+    let state = page
+        .evaluate_runtime_expression_async(
+            "JSON.stringify([document.activeElement.id, first.textContent])",
+        )
+        .await?;
+    assert_eq!(
+        (clipboard.as_deref(), state["value"].as_str()),
+        (Some("first"), Some(r#"["editor","abcde"]"#))
+    );
     Ok(())
 }
 

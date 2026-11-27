@@ -155,10 +155,11 @@ fn contenteditable_clipboard_target(
     focus_target: DomHandle,
     document: DomHandle,
 ) -> Option<DomHandle> {
-    if is_text_control(host, focus_target) {
+    if is_text_control(host, focus_target)
+        || contenteditable_editing_host(host, focus_target).is_none()
+    {
         return None;
     }
-    let editing_host = contenteditable_editing_host(host, focus_target)?;
     let selection = host.document_selection_snapshot(document)?;
     let dom = host.dom_host();
     let start = selection.start;
@@ -176,7 +177,8 @@ fn contenteditable_clipboard_target(
         start.container
     };
     let node = dom.node(container)?;
-    if !node.is_connected() || contenteditable_editing_host(host, container) != Some(editing_host) {
+    // The selection can start in a nested editable while its outer editor has focus.
+    if !node.is_connected() || dom.owner_document_handle(container) != Some(document) {
         return None;
     }
     if node.is_element() {
