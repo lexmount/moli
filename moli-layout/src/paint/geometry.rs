@@ -70,8 +70,8 @@ impl BoxAreas {
     where
         N: Copy + Debug + Eq + Hash,
     {
-        let layout_box = &projection.world.boxes[id.index()];
-        let geometry = projection.geometry(id.index());
+        let layout_box = &projection.world.boxes[id];
+        let geometry = projection.geometry(projection.world.boxes.index_of(id));
         let layout = layout_box.final_layout;
         // CSS ignores border-radius on boxes participating in the collapsed
         // table border model. Their shared grid edges are painted by the table

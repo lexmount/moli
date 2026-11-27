@@ -255,7 +255,7 @@ where
             );
         };
         project_background_layers(
-            &projection.world.boxes[background.index()],
+            &projection.world.boxes[background],
             BoxAreas::for_rect(capture.viewport_rect),
             paint_space,
             projection.css_images,
@@ -300,7 +300,7 @@ where
         }
 
         let contents_cull = if let PaintOrderEvent::BoxContents(id) = event
-            && projection.world.boxes[id.index()]
+            && projection.world.boxes[id]
                 .element_semantics()
                 .and_then(|element| element.replaced)
                 .is_some_and(|kind| {
@@ -309,7 +309,7 @@ where
             let clipped = clipped_replaced_cull_region(
                 projection,
                 current_cull,
-                projection.metadata.boxes[id.index()].content_clip,
+                projection.metadata.boxes[projection.world.boxes.index_of(id)].content_clip,
                 &active_clips.filter_output_clips,
                 snapshot.pixel_grid(),
             );
@@ -327,15 +327,17 @@ where
             PaintOrderEvent::BoxOutsetShadow(id) => {
                 active_clips.transition_to(
                     projection,
-                    projection.geometry(id.index()).clip_chain,
+                    projection
+                        .geometry(projection.world.boxes.index_of(id))
+                        .clip_chain,
                     &mut snapshot,
                 );
                 project_outset_box_shadows(projection, id, &mut snapshot);
             }
             PaintOrderEvent::PushStackingContext(id) => {
-                let layout_box = &projection.world.boxes[id.index()];
+                let layout_box = &projection.world.boxes[id];
                 let style = &layout_box.style;
-                let geometry = projection.geometry(id.index());
+                let geometry = projection.geometry(projection.world.boxes.index_of(id));
                 let space = &projection.coordinate_spaces[geometry.coordinate_space.index()];
                 let viewport_transform = space.paint.local_transform();
                 let paint_space = space.paint_space(capture.viewport_to_surface);
@@ -349,7 +351,9 @@ where
                 let filter_output_clips = if has_filter_group {
                     active_clips.push_filter_output_clips(
                         projection,
-                        projection.geometry(id.index()).clip_chain,
+                        projection
+                            .geometry(projection.world.boxes.index_of(id))
+                            .clip_chain,
                         &mut snapshot,
                     )
                 } else {
@@ -493,11 +497,15 @@ where
             PaintOrderEvent::BoxBackground(id) => {
                 active_clips.transition_to(
                     projection,
-                    projection.geometry(id.index()).clip_chain,
+                    projection
+                        .geometry(projection.world.boxes.index_of(id))
+                        .clip_chain,
                     &mut snapshot,
                 );
                 if let Some(links) = &links
-                    && let Some(fragment) = projection.metadata.boxes[id.index()].direct_fragment
+                    && let Some(fragment) = projection.metadata.boxes
+                        [projection.world.boxes.index_of(id)]
+                    .direct_fragment
                 {
                     links.append(projection, fragment, &mut snapshot);
                 }
@@ -515,7 +523,7 @@ where
             PaintOrderEvent::BoxContents(id) => {
                 active_clips.transition_to(
                     projection,
-                    projection.metadata.boxes[id.index()].content_clip,
+                    projection.metadata.boxes[projection.world.boxes.index_of(id)].content_clip,
                     &mut snapshot,
                 );
                 if let Some(links) = &links {
@@ -537,7 +545,7 @@ where
             PaintOrderEvent::InlineContents(id) => {
                 active_clips.transition_to(
                     projection,
-                    projection.metadata.boxes[id.index()].content_clip,
+                    projection.metadata.boxes[projection.world.boxes.index_of(id)].content_clip,
                     &mut snapshot,
                 );
                 if let Some(links) = &links {
@@ -562,7 +570,7 @@ where
             PaintOrderEvent::BoxText(id) => {
                 active_clips.transition_to(
                     projection,
-                    projection.metadata.boxes[id.index()].content_clip,
+                    projection.metadata.boxes[projection.world.boxes.index_of(id)].content_clip,
                     &mut snapshot,
                 );
                 project_box_text(projection, id, current_cull, &mut metrics, &mut snapshot);
@@ -570,16 +578,16 @@ where
             PaintOrderEvent::BoxCaret(id) | PaintOrderEvent::InlineSelection { owner: id, .. } => {
                 active_clips.transition_to(
                     projection,
-                    projection.metadata.boxes[id.index()].content_clip,
+                    projection.metadata.boxes[projection.world.boxes.index_of(id)].content_clip,
                     &mut snapshot,
                 );
-                let space = &projection.coordinate_spaces[id.index() + 1];
+                let space = &projection.coordinate_spaces[projection.world.boxes.index_of(id) + 1];
                 let range = match event {
                     PaintOrderEvent::InlineSelection { start, end, .. } => Some(start..end),
                     _ => None,
                 };
                 project_selection(
-                    &projection.world.boxes[id.index()],
+                    &projection.world.boxes[id],
                     space
                         .paint_space(snapshot.viewport_to_surface)
                         .local_transform(),
@@ -591,7 +599,7 @@ where
             PaintOrderEvent::InlineBox { owner, fragment } => {
                 active_clips.transition_to(
                     projection,
-                    projection.metadata.boxes[owner.index()].content_clip,
+                    projection.metadata.boxes[projection.world.boxes.index_of(owner)].content_clip,
                     &mut snapshot,
                 );
                 if let Some(links) = &links {
@@ -614,19 +622,21 @@ where
                 );
             }
             PaintOrderEvent::InlineText { owner, line, item } => {
-                let layout_box = &projection.world.boxes[owner.index()];
+                let layout_box = &projection.world.boxes[owner];
                 if !layout_box.style.is_visible() {
                     event_index += 1;
                     continue;
                 }
                 active_clips.transition_to(
                     projection,
-                    projection.metadata.boxes[owner.index()].content_clip,
+                    projection.metadata.boxes[projection.world.boxes.index_of(owner)].content_clip,
                     &mut snapshot,
                 );
-                let space = projection.coordinate_spaces[owner.index() + 1]
+                let space = projection.coordinate_spaces
+                    [projection.world.boxes.index_of(owner) + 1]
                     .paint_space(snapshot.viewport_to_surface);
-                let viewport_transform = projection.coordinate_spaces[owner.index() + 1]
+                let viewport_transform = projection.coordinate_spaces
+                    [projection.world.boxes.index_of(owner) + 1]
                     .paint
                     .local_transform();
                 let text = inline_text.entry(owner).or_insert_with(|| {
@@ -648,7 +658,9 @@ where
             PaintOrderEvent::TableCollapsedBorders(id) => {
                 active_clips.transition_to(
                     projection,
-                    projection.geometry(id.index()).clip_chain,
+                    projection
+                        .geometry(projection.world.boxes.index_of(id))
+                        .clip_chain,
                     &mut snapshot,
                 );
                 project_collapsed_table_borders(projection, id, &mut snapshot);
@@ -656,14 +668,20 @@ where
             PaintOrderEvent::BoxOutline(id) => {
                 if id != projection.world.root || capture.paint_root_scrollbars {
                     let scrollbar_clip = (id != projection.world.root)
-                        .then_some(projection.geometry(id.index()).clip_chain)
+                        .then_some(
+                            projection
+                                .geometry(projection.world.boxes.index_of(id))
+                                .clip_chain,
+                        )
                         .flatten();
                     active_clips.transition_to(projection, scrollbar_clip, &mut snapshot);
                     project_scrollbars(projection, id, &mut snapshot);
                 }
                 active_clips.transition_to(
                     projection,
-                    projection.geometry(id.index()).clip_chain,
+                    projection
+                        .geometry(projection.world.boxes.index_of(id))
+                        .clip_chain,
                     &mut snapshot,
                 );
                 project_box_outline(projection, id, &mut snapshot);
@@ -677,8 +695,8 @@ where
                     snapshot.push_fragment(PaintFragment::PopLayer);
                 }
                 if state.mask_layer {
-                    let layout_box = &projection.world.boxes[id.index()];
-                    let geometry = projection.geometry(id.index());
+                    let layout_box = &projection.world.boxes[id];
+                    let geometry = projection.geometry(projection.world.boxes.index_of(id));
                     let paint_space = projection.coordinate_spaces
                         [geometry.coordinate_space.index()]
                     .paint_space(capture.viewport_to_surface);
@@ -708,18 +726,13 @@ where
                     snapshot.push_fragment(PaintFragment::PopLayer);
                 }
                 active_clips.pop_filter_output_clips(state.filter_output_clips, &mut snapshot);
-                debug_assert!(
-                    projection.world.boxes[id.index()].creates_stacking_context(
-                        id == projection.world.root,
-                        projection.world.boxes[id.index()]
-                            .parent
-                            .is_some_and(|parent| {
-                                let display =
-                                    projection.world.boxes[parent.index()].style.display();
-                                display.is_flex_container() || display.is_grid_container()
-                            })
-                    )
-                );
+                debug_assert!(projection.world.boxes[id].creates_stacking_context(
+                    id == projection.world.root,
+                    projection.world.boxes[id].parent.is_some_and(|parent| {
+                        let display = projection.world.boxes[parent].style.display();
+                        display.is_flex_container() || display.is_grid_container()
+                    })
+                ));
                 current_cull = context_cull_regions
                     .pop()
                     .expect("stacking cull regions are structurally balanced");
@@ -877,7 +890,7 @@ fn canvas_background<N>(
 where
     N: Copy + Debug + Eq + Hash,
 {
-    let root_box = &world.boxes[root.index()];
+    let root_box = &world.boxes[root];
     let is_html_root = root_box
         .element_semantics()
         .is_some_and(|element| element.is_html_element("html"));
@@ -893,7 +906,7 @@ where
 
     let mut stack = root_box.children.iter().rev().copied().collect::<Vec<_>>();
     while let Some(id) = stack.pop() {
-        let layout_box = &world.boxes[id.index()];
+        let layout_box = &world.boxes[id];
         if layout_box
             .element_semantics()
             .is_some_and(|element| element.is_html_element("body"))
@@ -956,11 +969,11 @@ fn project_box_background<N>(
 ) where
     N: Copy + Debug + Eq + Hash,
 {
-    let layout_box = &projection.world.boxes[id.index()];
+    let layout_box = &projection.world.boxes[id];
     if layout_box.inline_flattened || !layout_box.style.is_visible() {
         return;
     }
-    let geometry = projection.geometry(id.index());
+    let geometry = projection.geometry(projection.world.boxes.index_of(id));
     let paint_space = projection.coordinate_spaces[geometry.coordinate_space.index()]
         .paint_space(snapshot.viewport_to_surface);
     let areas = BoxAreas::for_box(projection, id);
@@ -1090,13 +1103,13 @@ fn project_background_text_clip_mask<N>(
     // instead selects its runs from the shared root IFC, then includes only
     // independent IFCs rooted inside that inline's box subtree.
     let mut stack: Vec<LayoutBoxId> = match scope {
-        TextClipMaskScope::AllGlyphs => projection.world.boxes[root.index()]
+        TextClipMaskScope::AllGlyphs => projection.world.boxes[root]
             .children
             .iter()
             .rev()
             .copied()
             .collect(),
-        TextClipMaskScope::InlineBox(target) => projection.world.boxes[target.index()]
+        TextClipMaskScope::InlineBox(target) => projection.world.boxes[target]
             .children
             .iter()
             .rev()
@@ -1104,7 +1117,7 @@ fn project_background_text_clip_mask<N>(
             .collect(),
     };
     while let Some(id) = stack.pop() {
-        let layout_box = &projection.world.boxes[id.index()];
+        let layout_box = &projection.world.boxes[id];
         stack.extend(layout_box.children.iter().rev().copied());
         project_box_text_clip_mask(
             projection,
@@ -1129,11 +1142,11 @@ fn project_box_text_clip_mask<N>(
 ) where
     N: Copy + Debug + Eq + Hash,
 {
-    let layout_box = &projection.world.boxes[id.index()];
+    let layout_box = &projection.world.boxes[id];
     if !layout_box.style.is_visible() {
         return;
     }
-    let geometry = projection.geometry(id.index());
+    let geometry = projection.geometry(projection.world.boxes.index_of(id));
     let viewport_transform = projection.coordinate_spaces[geometry.coordinate_space.index()]
         .paint
         .local_transform();
@@ -1141,7 +1154,7 @@ fn project_box_text_clip_mask<N>(
     let transform = snapshot.viewport_to_surface.concatenate(viewport_transform);
     let clip_count = push_clip_chain(
         projection,
-        projection.metadata.boxes[id.index()].content_clip,
+        projection.metadata.boxes[projection.world.boxes.index_of(id)].content_clip,
         filter_output_clips,
         snapshot,
     );
@@ -1156,11 +1169,11 @@ fn project_outset_box_shadows<N>(
 ) where
     N: Copy + Debug + Eq + Hash,
 {
-    let layout_box = &projection.world.boxes[id.index()];
+    let layout_box = &projection.world.boxes[id];
     if layout_box.inline_flattened || !layout_box.style.is_visible() {
         return;
     }
-    let geometry = projection.geometry(id.index());
+    let geometry = projection.geometry(projection.world.boxes.index_of(id));
     let paint_space = projection.coordinate_spaces[geometry.coordinate_space.index()]
         .paint_space(snapshot.viewport_to_surface);
     let areas = BoxAreas::for_box(projection, id);
@@ -1197,11 +1210,11 @@ fn project_box_outline<N>(
 ) where
     N: Copy + Debug + Eq + Hash,
 {
-    let layout_box = &projection.world.boxes[id.index()];
+    let layout_box = &projection.world.boxes[id];
     if layout_box.inline_flattened || !layout_box.style.is_visible() {
         return;
     }
-    let geometry = projection.geometry(id.index());
+    let geometry = projection.geometry(projection.world.boxes.index_of(id));
     let paint_space = projection.coordinate_spaces[geometry.coordinate_space.index()]
         .paint_space(snapshot.viewport_to_surface);
     let radii = layout_box
@@ -1230,11 +1243,11 @@ fn project_box_contents<N>(
 where
     N: Copy + Debug + Eq + Hash,
 {
-    let layout_box = &projection.world.boxes[id.index()];
+    let layout_box = &projection.world.boxes[id];
     if !layout_box.style.is_visible() {
         return Ok(());
     }
-    let geometry = projection.geometry(id.index());
+    let geometry = projection.geometry(projection.world.boxes.index_of(id));
     let viewport_space = projection.coordinate_spaces[geometry.coordinate_space.index()].paint;
     let paint_space = viewport_space.with_outer_transform(snapshot.viewport_to_surface);
     let transform = paint_space.local_transform();
@@ -1283,7 +1296,7 @@ fn project_replaced_placeholder<N: Copy + Debug + Eq + Hash>(
     paint_space: PaintSpace,
     snapshot: &mut PaintSnapshot,
 ) {
-    let layout_box = &projection.world.boxes[id.index()];
+    let layout_box = &projection.world.boxes[id];
     report_replaced_placeholder(&layout_box.source_label, snapshot);
     if !style_has_canvas_background(&layout_box.style)
         && let Some(shape) = paint_space.pixel_snapped_box_shape(
@@ -1314,11 +1327,11 @@ fn project_inline_contents<N>(
 ) where
     N: Copy + Debug + Eq + Hash,
 {
-    let layout_box = &projection.world.boxes[id.index()];
+    let layout_box = &projection.world.boxes[id];
     if !layout_box.style.is_visible() {
         return;
     }
-    let space = &projection.coordinate_spaces[id.index() + 1];
+    let space = &projection.coordinate_spaces[projection.world.boxes.index_of(id) + 1];
     let local_cull = cull.local_rect(space.paint.local_transform());
     let paint_space = space.paint_space(snapshot.viewport_to_surface);
     let mut text_clip_mask = |scope: TextClipMaskScope, snapshot: &mut PaintSnapshot| {
@@ -1354,11 +1367,11 @@ fn project_box_text<N>(
 ) where
     N: Copy + Debug + Eq + Hash,
 {
-    let layout_box = &projection.world.boxes[id.index()];
+    let layout_box = &projection.world.boxes[id];
     if !layout_box.style.is_visible() {
         return;
     }
-    let geometry = projection.geometry(id.index());
+    let geometry = projection.geometry(projection.world.boxes.index_of(id));
     let viewport_transform = projection.coordinate_spaces[geometry.coordinate_space.index()]
         .paint
         .local_transform();
@@ -1381,7 +1394,7 @@ fn unavailable_replaced_content_paint<N>(
 where
     N: Copy + Debug + Eq + Hash,
 {
-    let layout_box = &projection.world.boxes[id.index()];
+    let layout_box = &projection.world.boxes[id];
     if !layout_box.is_replaced() {
         return None;
     }

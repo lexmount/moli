@@ -223,7 +223,7 @@ where
             }
             bounds
         }
-        PaintOrderEvent::BoxCaret(id) => caret_rect(&projection.world.boxes[id.index()])
+        PaintOrderEvent::BoxCaret(id) => caret_rect(&projection.world.boxes[id])
             .map_or(PaintCullBounds::Empty, |rect| {
                 map_box_rect(projection, id, rect)
             }),
@@ -232,7 +232,7 @@ where
         } => {
             let mut bounds = PaintCullBounds::Empty;
             range_selection_rects(
-                &projection.world.boxes[owner.index()],
+                &projection.world.boxes[owner],
                 Some(&(start..end)),
                 |rect| {
                     bounds.include(map_box_rect(projection, owner, rect));
@@ -248,7 +248,7 @@ where
             map_snapped_box_rect(projection, owner, rect)
         }
         PaintOrderEvent::InlineText { owner, line, .. } => {
-            let layout_box = &projection.world.boxes[owner.index()];
+            let layout_box = &projection.world.boxes[owner];
             let context = layout_box.inline_layout.as_ref().unwrap();
             match context.fragments.lines[line].paint_bounds {
                 InlinePaintBounds::Empty => PaintCullBounds::Empty,
@@ -274,11 +274,13 @@ fn box_background_bounds<N>(projection: &PaintProjection<'_, N>, id: LayoutBoxId
 where
     N: Copy + Debug + Eq + Hash,
 {
-    let layout_box = &projection.world.boxes[id.index()];
+    let layout_box = &projection.world.boxes[id];
     if layout_box.inline_flattened || !layout_box.style.is_visible() {
         return PaintCullBounds::Empty;
     }
-    let rect = projection.geometry(id.index()).border_box;
+    let rect = projection
+        .geometry(projection.world.boxes.index_of(id))
+        .border_box;
     let border = layout_box.final_layout.border;
     let widths = PaintEdgeSizes::new(border.top, border.right, border.bottom, border.left);
     let ink = border_image_area(&layout_box.style, rect, widths).unwrap_or(rect);
@@ -300,7 +302,7 @@ fn box_contents_bounds<N>(projection: &PaintProjection<'_, N>, id: LayoutBoxId) 
 where
     N: Copy + Debug + Eq + Hash,
 {
-    let layout_box = &projection.world.boxes[id.index()];
+    let layout_box = &projection.world.boxes[id];
     if !layout_box.style.is_visible() {
         return PaintCullBounds::Empty;
     }
@@ -321,7 +323,9 @@ where
         }
         _ => {}
     }
-    let mut local = projection.geometry(id.index()).border_box;
+    let mut local = projection
+        .geometry(projection.world.boxes.index_of(id))
+        .border_box;
     if let Some(context) = layout_box.inline_layout.as_ref() {
         let layout = layout_box.final_layout;
         let origin = LayoutPoint::new(
@@ -357,7 +361,7 @@ fn table_border_bounds<N>(projection: &PaintProjection<'_, N>, id: LayoutBoxId) 
 where
     N: Copy + Debug + Eq + Hash,
 {
-    let layout_box = &projection.world.boxes[id.index()];
+    let layout_box = &projection.world.boxes[id];
     if !layout_box.style.is_visible() {
         return PaintCullBounds::Empty;
     }
@@ -375,11 +379,11 @@ fn outset_shadow_bounds<N>(projection: &PaintProjection<'_, N>, id: LayoutBoxId)
 where
     N: Copy + Debug + Eq + Hash,
 {
-    let layout_box = &projection.world.boxes[id.index()];
+    let layout_box = &projection.world.boxes[id];
     if layout_box.inline_flattened || !layout_box.style.is_visible() {
         return PaintCullBounds::Empty;
     }
-    let geometry = projection.geometry(id.index());
+    let geometry = projection.geometry(projection.world.boxes.index_of(id));
     let paint_space = projection.coordinate_spaces[geometry.coordinate_space.index()].paint;
     let areas = BoxAreas::for_box(projection, id);
     let mut bounds = PaintCullBounds::Empty;
@@ -424,11 +428,11 @@ fn box_outline_bounds<N>(projection: &PaintProjection<'_, N>, id: LayoutBoxId) -
 where
     N: Copy + Debug + Eq + Hash,
 {
-    let layout_box = &projection.world.boxes[id.index()];
+    let layout_box = &projection.world.boxes[id];
     if layout_box.inline_flattened || !layout_box.style.is_visible() {
         return PaintCullBounds::Empty;
     }
-    let geometry = projection.geometry(id.index());
+    let geometry = projection.geometry(projection.world.boxes.index_of(id));
     let paint_space = projection.coordinate_spaces[geometry.coordinate_space.index()].paint;
     let mut bounds = PaintCullBounds::Empty;
     let pixel_grid = PaintPixelGrid::new(projection.viewport.device_pixel_ratio);
@@ -445,7 +449,7 @@ where
         bounds.include(map_snapped_rect(transform, rect, pixel_grid));
     }
 
-    let extent = projection.scroll_extent(id.index());
+    let extent = projection.scroll_extent(projection.world.boxes.index_of(id));
     let scrollbar_space = if id == projection.world.root {
         PaintSpace::ROOT
     } else {
@@ -476,7 +480,7 @@ fn context_output_bounds<N>(
 where
     N: Copy + Debug + Eq + Hash,
 {
-    let filters = project_filters(&projection.world.boxes[id.index()].style);
+    let filters = project_filters(&projection.world.boxes[id].style);
     let moves_pixels = filters.effects.iter().any(filter_moves_pixels);
     let unsupported_transform = projection.resolved_transform_has_unsupported_3d(id);
     if unsupported_transform {
@@ -489,7 +493,7 @@ where
         return (source_bounds, false);
     }
 
-    let geometry = projection.geometry(id.index());
+    let geometry = projection.geometry(projection.world.boxes.index_of(id));
     let transform = projection.coordinate_spaces[geometry.coordinate_space.index()]
         .paint
         .local_transform();
@@ -524,7 +528,7 @@ fn map_box_rect<N>(
 where
     N: Copy + Debug + Eq + Hash,
 {
-    let geometry = projection.geometry(id.index());
+    let geometry = projection.geometry(projection.world.boxes.index_of(id));
     let transform = projection.coordinate_spaces[geometry.coordinate_space.index()]
         .paint
         .local_transform();
@@ -539,7 +543,7 @@ fn map_snapped_box_rect<N>(
 where
     N: Copy + Debug + Eq + Hash,
 {
-    let geometry = projection.geometry(id.index());
+    let geometry = projection.geometry(projection.world.boxes.index_of(id));
     let paint_space = projection.coordinate_spaces[geometry.coordinate_space.index()].paint;
     map_snapped_rect(
         paint_space.property_transform(),

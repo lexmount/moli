@@ -73,7 +73,7 @@ where
     }
 
     fn normalize_box(&self, id: LayoutBoxId, path: String) -> NormalizedBoxNode {
-        let layout_box = &self.boxes[id.index()];
+        let layout_box = &self.boxes[id];
         let formatting_context = if layout_box.inline_formatting_context {
             Some(NormalizedFormattingContext::Inline)
         } else if layout_box.style.display().is_flex_container() {

@@ -76,13 +76,13 @@ fn numeric_cache_growth_keeps_box_viewport_and_invalidation_owners_distinct() {
         None
     );
 
-    // Numeric box growth reuses the old viewport ID for a real box. Its
-    // cache starts empty, while the viewport's own cache survives the growth.
-    let sibling = world.viewport_taffy_node();
-    world.cache_store(sibling, &input, output(70.0));
-    world.boxes.push(block(1));
-    assert_eq!(world.cache_get(sibling, &input), None);
+    // Viewport IDs stay reserved when real numeric boxes are appended.
     let viewport = world.viewport_taffy_node();
+    world.cache_store(viewport, &input, output(70.0));
+    let sibling = world.boxes.insert(block(1)).to_taffy();
+    assert_ne!(sibling, viewport);
+    assert_eq!(world.viewport_taffy_node(), viewport);
+    assert_eq!(world.cache_get(sibling, &input), None);
     assert_eq!(world.cache_get(viewport, &input), Some(output(70.0)));
 
     world.cache_store(sibling, &input, output(80.0));
@@ -153,8 +153,10 @@ fn numeric_cache_bindings_follow_boxes_through_compaction_and_growth() {
     world.cache_store(kept.to_taffy(), &input, output(80.0));
 
     world.compact_reachable();
-    let kept = world.source_box(2).unwrap();
-    assert_eq!(kept.index(), 1);
+    assert_eq!(world.source_box(2), Some(kept));
+    assert_eq!(world.boxes.index_of(kept), 1);
+    assert!(world.box_by_id(discarded).is_none());
+    assert_eq!(world.cache_get(discarded.to_taffy(), &input), None);
     assert_eq!(world.cache_get(kept.to_taffy(), &input), Some(output(80.0)));
 
     // Grow both vectors past their initial allocations. A recycled box ID

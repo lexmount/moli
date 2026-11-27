@@ -9,7 +9,7 @@ fn text_world(retained: bool) -> LayoutWorld<u8> {
     let mut builder = layouts.style_run_builder(&mut fonts, text, 1.0, true);
     let style = builder.push_style(parley::TextStyle::default());
     builder.push_style_run(style, ..);
-    let mut inline = empty_inline_context();
+    let mut inline = empty_inline_context(LayoutBoxId::from_index(0));
     inline.text = text.to_owned();
     inline.measurement_layout = Some(builder.build(text));
     let mut style = ResolvedLayoutStyle::from_stylo(
@@ -33,7 +33,7 @@ fn text_world(retained: bool) -> LayoutWorld<u8> {
     let mut world = LayoutWorld::new(layout_box, false);
     world.boxes[0].inline_layout = Some(Box::new(inline));
     if retained {
-        world.inline_numeric_reuse = Some(Box::new(crate::inline::InlineNumericReuse::new(1)));
+        world.inline_numeric_reuse = Some(Box::new(crate::inline::InlineNumericReuse::new()));
     }
     world
 }
@@ -84,7 +84,7 @@ fn releasing_screen_paint_preserves_retained_inline_work() {
     };
     let expected = measure(&mut world, final_inputs, false);
     world.release_paint_storage();
-    world.inline_numeric_reuse.as_mut().unwrap().begin_pass(1);
+    world.inline_numeric_reuse.as_mut().unwrap().begin_pass();
     assert_eq!(measure(&mut world, final_inputs, false), expected);
     assert_eq!(world.inline_numeric_reuse.as_ref().unwrap().hits(), 1);
     assert!(
@@ -431,17 +431,17 @@ fn numeric_cache_growth_keeps_box_viewport_and_invalidation_owners_distinct() {
         None
     );
 
-    // The old viewport ID becomes a real box ID when numeric preparation
-    // appends a box. Its cache must start empty, without losing viewport work.
-    let sibling = world.viewport_taffy_node();
+    // Viewport work and box work keep disjoint identities during growth.
+    let viewport = world.viewport_taffy_node();
     let mut viewport_output = output.clone();
     viewport_output.size.width += 10.0;
-    world.cache_store(sibling, &input, viewport_output.clone());
-    let mut extra = text_world(false).boxes.remove(0);
+    world.cache_store(viewport, &input, viewport_output.clone());
+    let mut extra = text_world(false).boxes.pop().unwrap();
     extra.source = Some(1);
-    world.boxes.push(extra);
+    let sibling = world.boxes.insert(extra).to_taffy();
+    assert_ne!(sibling, viewport);
+    assert_eq!(world.viewport_taffy_node(), viewport);
     assert_eq!(world.cache_get(sibling, &input), None);
-    let viewport = world.viewport_taffy_node();
     assert_eq!(
         world.cache_get(viewport, &input),
         Some(viewport_output.clone())

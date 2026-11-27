@@ -30,7 +30,7 @@ where
         axes: Size<bool>,
     ) -> LayoutOutput {
         debug_assert_eq!(inputs.run_mode, RunMode::ComputeSize);
-        let layout_box = &self.boxes[child.index()];
+        let layout_box = &self.boxes[child];
         let style = &layout_box.style;
         let computed = style
             .stylo_computed_values()
@@ -85,7 +85,7 @@ where
         inputs: LayoutInput,
         axes: Size<bool>,
     ) -> LayoutInput {
-        let layout_box = &self.boxes[id.index()];
+        let layout_box = &self.boxes[id];
         let specified = if inputs.sizing_mode == SizingMode::InherentSize {
             layout_box
                 .style
@@ -204,7 +204,7 @@ where
         inputs: LayoutInput,
         horizontal_margin: f32,
     ) -> LayoutOutput {
-        let layout_box = &self.boxes[child.index()];
+        let layout_box = &self.boxes[child];
         let preferred_width = layout_box.style.taffy.size.width;
         let is_replaced = layout_box.is_replaced();
         let uses_fit_content = !is_replaced

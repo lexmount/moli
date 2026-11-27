@@ -16,14 +16,14 @@ pub(super) fn project_collapsed_table_borders<N>(
 ) where
     N: Copy + Debug + Eq + Hash,
 {
-    let layout_box = &projection.world.boxes[id.index()];
+    let layout_box = &projection.world.boxes[id];
     if !layout_box.style.is_visible() {
         return;
     }
     let Some(borders) = projection.world.collapsed_table_borders.get(&id) else {
         return;
     };
-    let geometry = projection.geometry(id.index());
+    let geometry = projection.geometry(projection.world.boxes.index_of(id));
     let paint_space = projection.coordinate_spaces[geometry.coordinate_space.index()]
         .paint_space(snapshot.viewport_to_surface);
 
