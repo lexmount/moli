@@ -388,17 +388,6 @@ pub(crate) fn css_rule_live_stylesheet_typed_rule_read<'s, T>(
     css_style_sheet_live_typed_rule_read(scope, parent_style_sheet, &rule_path, read_at_path)
 }
 
-pub(crate) fn css_rule_live_stylesheet_counter_style_rule_read<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    rule: v8::Local<'s, v8::Object>,
-) -> Option<CssCounterStyleRuleView> {
-    css_rule_live_stylesheet_typed_rule_read(
-        scope,
-        rule,
-        native_stylesheet_counter_style_rule_read_with_stylo,
-    )
-}
-
 pub(crate) fn css_rule_live_stylesheet_font_face_rule_read<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     rule: v8::Local<'s, v8::Object>,

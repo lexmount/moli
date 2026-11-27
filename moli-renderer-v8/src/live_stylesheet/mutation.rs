@@ -445,6 +445,37 @@ impl LiveStylesheet {
         })
     }
 
+    pub(crate) fn set_counter_style_property(
+        &self,
+        rule_path: &[usize],
+        property: CssCounterStyleProperty,
+        value: &str,
+    ) -> bool {
+        let Some(NativeStylesheetRule::Css(CssRule::CounterStyle(rule))) =
+            self.native_rule_at_path(rule_path)
+        else {
+            return false;
+        };
+        let mut updated = rule.read_with(&self.stylesheet.shared_lock.read()).clone();
+        let changed = self.with_parser_context(CssRuleType::CounterStyle, None, |context| {
+            property.set(&mut updated, context, value)
+        });
+        if !changed {
+            return false;
+        }
+        // Validate before copying, then update the rule that belongs to this
+        // sheet so a shared parsed stylesheet and its other owners stay intact.
+        self.ensure_owned_contents_for_mutation();
+        let Some(NativeStylesheetRule::Css(CssRule::CounterStyle(rule))) =
+            self.native_rule_at_path(rule_path)
+        else {
+            return false;
+        };
+        *rule.write_with(&mut self.stylesheet.shared_lock.write()) = updated;
+        self.note_rule_value_mutation_at_path(rule_path, RuleChangeKind::Generic);
+        true
+    }
+
     pub(crate) fn set_font_feature_values_rule_map_entry(
         &self,
         rule_path: &[usize],

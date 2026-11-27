@@ -48,22 +48,6 @@ pub(crate) fn css_property_rule_view_from_object<'s>(
     css_rule_detached_snapshot_typed_view(scope, object, css_property_rule_view_from_css_text)
 }
 
-pub(crate) fn css_counter_style_rule_view_from_css_text(
-    css_text: &str,
-) -> Option<CssCounterStyleRuleView> {
-    parse_counter_style_rule_view_with_stylo(css_text)
-}
-
-pub(crate) fn css_counter_style_rule_view_from_object<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    object: v8::Local<'s, v8::Object>,
-) -> Option<CssCounterStyleRuleView> {
-    if let Some(view) = css_rule_live_stylesheet_counter_style_rule_read(scope, object) {
-        return Some(view);
-    }
-    css_rule_detached_snapshot_typed_view(scope, object, css_counter_style_rule_view_from_css_text)
-}
-
 pub(crate) fn css_font_face_rule_view_from_css_text(css_text: &str) -> Option<CssFontFaceRuleView> {
     parse_font_face_rule_view_with_stylo(css_text)
 }
@@ -2311,20 +2295,6 @@ pub(crate) fn css_namespace_rule_prefix_getter_callback<'s>(
         .map(|view| view.prefix)
         .unwrap_or_default();
     rv.set(v8_dynamic_string_value(scope, &prefix));
-}
-
-pub(crate) fn css_counter_style_rule_name_getter_callback<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: v8::FunctionCallbackArguments<'s>,
-    mut rv: v8::ReturnValue<'s, v8::Value>,
-) {
-    if !ensure_css_rule_object(scope, args.this(), "CSSCounterStyleRule", "name") {
-        return;
-    }
-    let name = css_counter_style_rule_view_from_object(scope, args.this())
-        .map(|view| view.name)
-        .unwrap_or_default();
-    rv.set(v8_dynamic_string_value(scope, &name));
 }
 
 pub(crate) fn css_style_rule_style_getter_callback<'s>(

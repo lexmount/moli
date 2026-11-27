@@ -1489,6 +1489,82 @@ fn css_counter_style_rule_survives_stylo_stylesheet_mutations() {
     );
 }
 #[test]
+fn css_counter_style_properties_edit_native_rules_and_detached_snapshots() {
+    let mut vm = new_parsed_test_vm(
+        "https://css-counter-style-properties.test/",
+        "<!doctype html><html><head></head><body></body></html>",
+    );
+
+    let result = vm
+        .eval(
+            r##"
+(() => {
+  const source = '@media all { @counter-style markers { system: fixed; symbols: A B; } }';
+  const makeSheet = () => {
+    const style = document.createElement('style');
+    style.textContent = source;
+    document.head.appendChild(style);
+    return style.sheet;
+  };
+  const sheet = makeSheet();
+  const other = makeSheet();
+  const media = sheet.cssRules[0];
+  const rule = media.cssRules[0];
+  const properties = ['name', 'system', 'symbols', 'additiveSymbols', 'negative', 'prefix',
+    'suffix', 'range', 'pad', 'speakAs', 'fallback'];
+  const read = rule => properties.map(property => rule[property]);
+  const initial = ['markers', 'fixed', 'A B', '', '', '', '', '', '', '', ''];
+  const initiallySpecified = JSON.stringify(read(rule)) === JSON.stringify(initial);
+
+  Object.assign(rule, {
+    name: 'UPPER-ROMAN', system: 'fixed 3', symbols: 'X Y', additiveSymbols: '10 T, 1 I',
+    negative: '"(" ")"', prefix: '"["', suffix: '"]"', range: '3 4', pad: '2 "0"',
+    speakAs: 'numbers', fallback: 'LOWER-ALPHA'
+  });
+  const expected = ['upper-roman', 'fixed 3', 'X Y', '10 T, 1 I', '"(" ")"', '"["',
+    '"]"', '3 4', '2 "0"', 'numbers', 'lower-alpha'];
+  const updated = JSON.stringify(read(rule)) === JSON.stringify(expected);
+  const serialized = rule.cssText;
+  const live = media.cssRules[0] === rule && media.cssText.includes(serialized)
+    && serialized.includes('@counter-style upper-roman')
+    && serialized.includes('additive-symbols: 10 T, 1 I;');
+  const isolated = JSON.stringify(read(other.cssRules[0].cssRules[0])) === JSON.stringify(initial);
+
+  Object.assign(rule, {
+    name: 'decimal', system: 'numeric', symbols: '', additiveSymbols: '1 I, 10 T',
+    range: '4 3', prefix: '"bad"; suffix: "unexpected"', pad: '-1 "0"'
+  });
+  rule.name = '123';
+  const invalidIgnored = rule.cssText === serialized;
+
+  const setter = Object.getOwnPropertyDescriptor(CSSCounterStyleRule.prototype, 'prefix').set;
+  let receiverChecked = false;
+  try { setter.call(media, '"wrong"'); } catch (error) { receiverChecked = error instanceof TypeError; }
+
+  rule.suffix = {
+    toString() {
+      media.deleteRule(0);
+      return '"."';
+    }
+  };
+  const detached = media.cssRules.length === 0 && rule.parentStyleSheet === null
+    && rule.name === 'upper-roman' && rule.suffix === '"."' && rule.cssText.includes('suffix: ".";');
+  return JSON.stringify({initiallySpecified, updated, live, isolated, invalidIgnored, receiverChecked, detached});
+})()
+"##,
+        )
+        .expect("counter style descriptors should edit the native rule exposed by CSSOM");
+
+    assert_eq!(
+        result,
+        concat!(
+            r#"{"initiallySpecified":true,"updated":true,"live":true,"isolated":true,"#,
+            r#""invalidIgnored":true,"receiverChecked":true,"detached":true}"#,
+        )
+    );
+}
+
+#[test]
 fn css_counter_style_rule_css_text_reset_preserves_live_stylesheet() {
     let mut vm = new_storage_test_vm("https://css-counter-style-css-text-live-reset.test/");
 
