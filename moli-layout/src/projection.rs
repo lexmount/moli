@@ -1526,6 +1526,7 @@ where
                 .expect("a frozen layout tree always owns the viewport coordinate space"),
         );
         let world = self.world;
+        let mut split_inline_boxes = HashMap::<N, Vec<LayoutOutputBoxId>>::new();
         let boxes = self
             .boxes
             .into_iter()
@@ -1547,6 +1548,11 @@ where
                     coordinate_space,
                 )| {
                     let layout_box = &world.boxes[geometry.id.index()];
+                    if layout_box.kind == crate::LayoutBoxKind::InlineContinuation
+                        && let Some(owner) = geometry_source
+                    {
+                        split_inline_boxes.entry(owner).or_default();
+                    }
                     let display = layout_box.style.display();
                     let css_sizing = (principal_source.is_some()
                         && !matches!(
@@ -1582,7 +1588,20 @@ where
                     }
                 },
             )
-            .collect();
+            .collect::<Vec<_>>();
+        if !split_inline_boxes.is_empty() {
+            let mut pending = vec![world.root];
+            while let Some(id) = pending.pop() {
+                let output_id = world.output_id(id);
+                if let Some(group) = boxes[output_id.index()]
+                    .geometry_source
+                    .and_then(|source| split_inline_boxes.get_mut(&source))
+                {
+                    group.push(output_id);
+                }
+                pending.extend(world.boxes[id].children.iter().rev().copied());
+            }
+        }
         let mut tree = FrozenLayoutTree::new(
             source_root,
             self.viewport,
@@ -1596,6 +1615,7 @@ where
             self.clip_chain,
             embedded_frames,
         );
+        tree.split_inline_boxes = split_inline_boxes;
         tree.scroll_projection = scroll_projection;
         tree
     }

@@ -217,6 +217,9 @@ where
     pub root_box: LayoutOutputBoxId,
     pub boxes: Vec<FrozenLayoutBox<N>>,
     pub fragments: Vec<LayoutFragment>,
+    /// Geometry for a split inline can span more than one physical box.
+    /// Only those sources need an explicit order for their CSSOM fragments.
+    pub(crate) split_inline_boxes: HashMap<N, Vec<LayoutOutputBoxId>>,
     /// Source/box relationships for `display: contents` nodes, which own no
     /// principal box but can still nominate rendered descendants for scroll.
     pub scroll_proxy_links: Vec<(N, LayoutOutputBoxId)>,
@@ -472,6 +475,12 @@ where
         let own_estimated_geometry_bytes = std::mem::size_of::<Self>()
             .saturating_add(allocation::<FrozenLayoutBox<N>>(self.boxes.capacity()))
             .saturating_add(allocation::<LayoutFragment>(self.fragments.capacity()))
+            .saturating_add(self.split_inline_boxes.values().fold(
+                allocation::<(N, Vec<LayoutOutputBoxId>)>(self.split_inline_boxes.capacity()),
+                |bytes, boxes| {
+                    bytes.saturating_add(allocation::<LayoutOutputBoxId>(boxes.capacity()))
+                },
+            ))
             .saturating_add(allocation::<LayoutObjectGeometry<N>>(
                 self.object_geometry.capacity(),
             ))
@@ -713,6 +722,7 @@ where
             root_box,
             boxes,
             fragments,
+            split_inline_boxes: HashMap::new(),
             scroll_proxy_links,
             object_geometry: Vec::new(),
             svg_viewports: HashMap::new(),
