@@ -2261,6 +2261,10 @@ async fn set_user_agent_override_applies_to_current_page_xhr_requests() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn set_user_agent_override_applies_complete_chromium_identity_profile() {
+    use crate::conn::{CdpConnection, CdpInitialStoragePartition};
+    use moli_core::{LayoutPolicy, OptionalResourceFetchMask, runtime::NavigationRuntimeConfig};
+    use moli_fetch::FetchConfig;
+
     async fn handler(
         State(seen): State<Arc<Mutex<Option<HeaderMap>>>>,
         headers: HeaderMap,
@@ -2284,7 +2288,22 @@ async fn set_user_agent_override_applies_complete_chromium_identity_profile() {
         .unwrap();
     });
 
-    let mut ctx = TestContext::new();
+    let mut fetch = FetchConfig::default();
+    fetch
+        .set_languages(vec!["zh-CN".to_owned(), "en-US".to_owned()])
+        .unwrap();
+    let runtime_config = NavigationRuntimeConfig::new(
+        fetch,
+        OptionalResourceFetchMask::NONE,
+        true,
+        LayoutPolicy::Lazy,
+    );
+    let mut ctx = TestContext::from_conn(
+        CdpConnection::new_with_initial_storage_partition_and_runtime_config(
+            CdpInitialStoragePartition::memory(),
+            runtime_config,
+        ),
+    );
     let natural_identity = ctx.with_fixture(|conn| conn.base_browser_identity().clone());
     let mut bc = BrowserContext::new("BID-1".into());
     bc.set_active_target_id("TID-1");
@@ -2297,7 +2316,7 @@ async fn set_user_agent_override_applies_complete_chromium_identity_profile() {
         "sessionId": "SID-1",
         "params": {
             "userAgent": "LinuxChrome/145",
-            "acceptLanguage": "fr-CA,fr;q=0.9",
+            "acceptLanguage": "fr-CA,en-GB",
             "platform": "Linux x86_64",
             "userAgentMetadata": {
                 "brands": [
@@ -2367,7 +2386,7 @@ async fn set_user_agent_override_applies_complete_chromium_identity_profile() {
     assert_eq!(identity["userAgent"], json!("LinuxChrome/145"));
     assert_eq!(identity["platform"], json!("Linux x86_64"));
     assert_eq!(identity["language"], json!("fr-CA"));
-    assert_eq!(identity["languages"], json!(["fr-CA", "fr;q=0.9"]));
+    assert_eq!(identity["languages"], json!(["fr-CA", "en-GB"]));
     assert_eq!(identity["languagesFrozen"], json!(true));
     assert_eq!(identity["base"]["platform"], json!("Linux"));
     assert_eq!(identity["base"]["brands"][0]["brand"], json!("Chromium"));
@@ -2387,7 +2406,10 @@ async fn set_user_agent_override_applies_complete_chromium_identity_profile() {
             .map(str::to_owned)
     };
     assert_eq!(header("user-agent").as_deref(), Some("LinuxChrome/145"));
-    assert_eq!(header("accept-language").as_deref(), Some("fr-CA,fr;q=0.9"));
+    assert_eq!(
+        header("accept-language").as_deref(),
+        Some("fr-CA,en-GB;q=0.9")
+    );
     assert_eq!(header("sec-ch-ua-platform").as_deref(), Some("\"Linux\""));
     assert_eq!(
         header("sec-ch-ua").as_deref(),
@@ -2428,9 +2450,9 @@ async fn set_user_agent_override_applies_complete_chromium_identity_profile() {
     )
     .expect("identity result should parse");
     assert_eq!(identity["platform"], json!("Win32"));
-    assert_eq!(identity["languages"], json!(["en-US", "en"]));
+    assert_eq!(identity["languages"], json!(["zh-CN", "en-US"]));
     assert_eq!(identity["languagesFrozen"], json!(true));
-    assert_eq!(identity["oldLanguages"], json!(["fr-CA", "fr;q=0.9"]));
+    assert_eq!(identity["oldLanguages"], json!(["fr-CA", "en-GB"]));
     assert_eq!(identity["oldLanguagesFrozen"], json!(true));
     assert_eq!(identity["languagesReplaced"], json!(true));
     assert_eq!(identity["uaData"]["brands"], json!([]));
