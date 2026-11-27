@@ -1,3 +1,5 @@
+use std::borrow::Cow;
+
 use super::callbacks::*;
 use super::*;
 use crate::util::serialize_v8_iter_array;
@@ -945,8 +947,8 @@ pub(super) fn build_svg_animated_length_for_attribute<'s>(
     initial_value: &str,
 ) -> v8::Local<'s, v8::Object> {
     let parsed = svg_animated_length_attribute_value(scope, owner, attribute, initial_value);
-    let base_val = build_svg_length_from_parsed(scope, parsed);
-    let anim_val = build_svg_length_from_parsed(scope, parsed);
+    let base_val = build_svg_length_from_parsed(scope, &parsed);
+    let anim_val = build_svg_length_from_parsed(scope, &parsed);
     for (value, read_only) in [(base_val, false), (anim_val, true)] {
         set_svg_length_owner_attribute(scope, value, owner, attribute);
         set_private_value(
@@ -1038,7 +1040,7 @@ pub(super) fn build_svg_length<'s>(
 ) -> v8::Local<'s, v8::Object> {
     build_svg_length_from_parsed(
         scope,
-        SvgParsedLength {
+        &SvgParsedLength {
             value,
             unit_type: SVG_LENGTH_TYPE_NUMBER,
             unit: SvgLengthUnit::Number,
@@ -1049,13 +1051,8 @@ pub(super) fn build_svg_length<'s>(
 
 pub(super) fn build_svg_length_from_parsed<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    parsed: SvgParsedLength,
+    parsed: &SvgParsedLength,
 ) -> v8::Local<'s, v8::Object> {
-    let value_as_string = parsed
-        .raw
-        .map(str::to_owned)
-        .or_else(|| Some(SvgLength::new(parsed.value, parsed.unit).serialize()))
-        .unwrap_or_else(|| "0".to_owned());
     let value =
         resolve_svg_length_without_context(parsed.value, parsed.unit).unwrap_or(parsed.value);
     SvgLengthObjectDeclaration::new(
@@ -1063,7 +1060,7 @@ pub(super) fn build_svg_length_from_parsed<'s>(
         parsed.unit.suffix().to_owned(),
         value,
         parsed.value,
-        value_as_string,
+        parsed.serialize().into_owned(),
     )
     .bind(scope)
     .expect("SVGLength declaration should bind")
@@ -1863,7 +1860,7 @@ pub(super) fn build_svg_value_list_item_values_from_attribute<'s>(
             .unwrap_or_default()
             .into_iter()
             .map(|parsed| {
-                build_svg_length_from_parsed(scope, svg_parsed_length_from_svg_length(parsed))
+                build_svg_length_from_parsed(scope, &svg_parsed_length_from_svg_length(parsed))
             })
             .collect(),
         SvgListKind::Number => svg_geometry::parse_number_list(raw)
@@ -2616,12 +2613,20 @@ pub(super) fn reflect_svg_angle_to_owner_attribute<'s>(
     let _ = runtime.set_attribute(scope, runtime_ptr, handle, &attribute, &value);
 }
 
-#[derive(Clone, Copy)]
 pub(super) struct SvgParsedLength {
     value: f64,
     unit_type: u32,
     unit: SvgLengthUnit,
-    raw: Option<&'static str>,
+    raw: Option<String>,
+}
+
+impl SvgParsedLength {
+    fn serialize(&self) -> Cow<'_, str> {
+        match &self.raw {
+            Some(raw) => Cow::Borrowed(raw),
+            None => Cow::Owned(SvgLength::new(self.value, self.unit).serialize()),
+        }
+    }
 }
 
 impl Default for SvgParsedLength {
@@ -2630,7 +2635,7 @@ impl Default for SvgParsedLength {
             value: 0.0,
             unit_type: SVG_LENGTH_TYPE_NUMBER,
             unit: SvgLengthUnit::Number,
-            raw: Some("0"),
+            raw: None,
         }
     }
 }
@@ -2655,7 +2660,7 @@ pub(super) fn set_svg_length_numeric_value<'s>(
     set_svg_length_parsed_value(
         scope,
         object,
-        SvgParsedLength {
+        &SvgParsedLength {
             value: f64::from(value),
             unit_type,
             unit,
@@ -2668,7 +2673,7 @@ pub(super) fn set_svg_length_numeric_value<'s>(
 pub(super) fn set_svg_length_parsed_value<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     object: v8::Local<'s, v8::Object>,
-    parsed: SvgParsedLength,
+    parsed: &SvgParsedLength,
 ) {
     set_private_value(
         scope,
@@ -2690,15 +2695,10 @@ pub(super) fn set_svg_length_parsed_value<'s>(
         SVG_LENGTH_VALUE_IN_SPECIFIED_UNITS_SLOT,
         v8::Number::new(scope, parsed.value).into(),
     );
-    let raw = parsed
-        .raw
-        .map(str::to_owned)
-        .or_else(|| Some(SvgLength::new(parsed.value, parsed.unit).serialize()))
-        .unwrap_or_else(|| "0".to_owned());
     let value = resolve_svg_length_user_value_for_unit(scope, object, parsed.value, parsed.unit)
         .or_else(|| resolve_svg_length_without_context(parsed.value, parsed.unit))
         .unwrap_or(parsed.value);
-    set_svg_length_value(scope, object, value, &raw);
+    set_svg_length_value(scope, object, value, &parsed.serialize());
 }
 
 pub(super) fn set_svg_length_value_in_user_units<'s>(
@@ -2735,6 +2735,12 @@ fn set_svg_length_specified_value(
     value: f64,
     unit: SvgLengthUnit,
 ) {
+    set_private_value(
+        scope,
+        object,
+        SVG_LENGTH_UNIT_TYPE_SLOT,
+        v8::Number::new(scope, f64::from(svg_length_unit_type(unit))).into(),
+    );
     set_private_value(
         scope,
         object,
@@ -2795,13 +2801,13 @@ pub(super) fn sync_svg_animated_length_from_owner_attribute<'s>(
     if let Some(base_val) = get_private_value(scope, animated, SVG_ANIMATED_LENGTH_BASE_VAL_SLOT)
         .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
     {
-        set_svg_length_parsed_value(scope, base_val, parsed);
+        set_svg_length_parsed_value(scope, base_val, &parsed);
         set_svg_length_owner_attribute(scope, base_val, owner, attribute);
     }
     if let Some(anim_val) = get_private_value(scope, animated, SVG_ANIMATED_LENGTH_ANIM_VAL_SLOT)
         .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
     {
-        set_svg_length_parsed_value(scope, anim_val, parsed);
+        set_svg_length_parsed_value(scope, anim_val, &parsed);
     }
 }
 
@@ -2829,7 +2835,7 @@ pub(super) fn sync_svg_length_from_owner_attribute<'s>(
         return;
     };
     let parsed = svg_animated_length_attribute_value(scope, owner, &attribute, &initial);
-    set_svg_length_parsed_value(scope, length, parsed);
+    set_svg_length_parsed_value(scope, length, &parsed);
 }
 
 fn svg_animated_length_attribute_value<'s>(
@@ -2840,7 +2846,7 @@ fn svg_animated_length_attribute_value<'s>(
 ) -> SvgParsedLength {
     svg_owner_attribute_value(scope, owner, attribute)
         .as_deref()
-        .and_then(parse_svg_length_value)
+        .and_then(parse_svg_length_dom_value)
         .or_else(|| parse_svg_length_value(initial_value))
         .unwrap_or_default()
 }
@@ -3461,8 +3467,26 @@ fn set_svg_owner_attribute_value<'s>(
     let _ = runtime.set_attribute(scope, runtime_ptr, handle, attribute, value);
 }
 
-pub(super) fn parse_svg_length_value(raw: &str) -> Option<SvgParsedLength> {
+fn parse_svg_length_value(raw: &str) -> Option<SvgParsedLength> {
     svg_geometry::parse_length(raw).map(svg_parsed_length_from_svg_length)
+}
+
+pub(super) fn parse_svg_length_dom_value(raw: &str) -> Option<SvgParsedLength> {
+    let parsed = parse_svg_length_value(raw);
+    if parsed.is_some() || !raw.contains('(') {
+        return parsed;
+    }
+
+    // Use the same substitution grammar as a CSS length. The SVG DOM keeps
+    // the specified expression and leaves its substitution to the cascade.
+    moli_css_parse::parse_cssom_property_without_document("width", raw, false)?
+        .has_unresolved_value()
+        .then(|| SvgParsedLength {
+            value: 0.0,
+            unit_type: SVG_LENGTH_TYPE_UNKNOWN,
+            unit: SvgLengthUnit::Number,
+            raw: Some(raw.to_owned()),
+        })
 }
 
 pub(super) fn svg_parsed_length_from_svg_length(length: SvgLength) -> SvgParsedLength {
@@ -3564,18 +3588,20 @@ pub(super) fn convert_svg_length_to_unit<'s>(
     object: v8::Local<'s, v8::Object>,
     unit_type: u32,
 ) -> bool {
+    // A pending substitution has an unknown unit and no scalar unit suffix.
+    // Other unknown units, such as ch, can still be converted normally.
+    if svg_length_number_slot(scope, object, SVG_LENGTH_UNIT_TYPE_SLOT)
+        == Some(f64::from(SVG_LENGTH_TYPE_UNKNOWN))
+        && svg_length_unit_slot(scope, object) == SvgLengthUnit::Number
+    {
+        return false;
+    }
     let unit = svg_length_unit_from_type(unit_type);
     let value = svg_length_value_in_user_units(scope, object);
     let Some(factor) = svg_length_unit_factor(scope, object, unit).filter(|factor| *factor != 0.0)
     else {
         return false;
     };
-    set_private_value(
-        scope,
-        object,
-        SVG_LENGTH_UNIT_TYPE_SLOT,
-        v8::Number::new(scope, unit_type as f64).into(),
-    );
     set_private_value(
         scope,
         object,

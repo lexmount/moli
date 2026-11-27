@@ -1,6 +1,51 @@
 use super::*;
 
 #[test]
+fn svg_lengths_keep_pending_substitutions_until_replaced() {
+    let mut vm = new_parsed_test_vm(
+        "https://svg-length-substitution.test/",
+        "<!doctype html><svg><rect width='4px'/></svg>",
+    );
+    assert_eq!(
+        vm.eval(
+            r#"(() => {
+        const check = (ok, label) => { if (!ok) throw Error(label); };
+        const svg = document.querySelector('svg');
+        const rect = svg.querySelector('rect');
+        const length = rect.width.baseVal;
+        const text = 'var(--PaintWidth, 5px)';
+        rect.setAttribute('width', text);
+        for (const value of [length, rect.width.animVal]) {
+            check(value.valueAsString === text, 'preserves the authored expression');
+            check(value.unitType === SVGLength.SVG_LENGTHTYPE_UNKNOWN, 'unknown unit');
+            check(value.value === 0 && value.valueInSpecifiedUnits === 0, 'unresolved value');
+        }
+
+        let conversionError;
+        try { length.convertToSpecifiedUnits(SVGLength.SVG_LENGTHTYPE_PX); }
+        catch (e) { conversionError = e; }
+        check(conversionError?.name === 'NotSupportedError', 'rejects conversion');
+        check(rect.getAttribute('width') === text, 'failed conversion preserves the attribute');
+
+        length.valueInSpecifiedUnits = 9;
+        check(length.unitType === SVGLength.SVG_LENGTHTYPE_NUMBER, 'scalar replacement unit');
+        check(length.value === 9 && rect.getAttribute('width') === '9', 'reflects replacement');
+
+        const standalone = svg.createSVGLength();
+        standalone.valueAsString = text;
+        check(standalone.valueAsString === text && standalone.value === 0, 'standalone expression');
+        standalone.value = 12;
+        check(standalone.unitType === SVGLength.SVG_LENGTHTYPE_NUMBER, 'standalone replacement unit');
+        check(standalone.valueAsString === '12' && standalone.value === 12, 'standalone replacement');
+        return true;
+    })()"#
+        )
+        .expect("SVGLength should keep pending substitution text"),
+        "true"
+    );
+}
+
+#[test]
 fn svg_length_absolute_unit_roundtrips_preserve_float_precision() {
     let mut vm = new_parsed_test_vm(
         "https://svg-length-absolute-roundtrip.test/",
