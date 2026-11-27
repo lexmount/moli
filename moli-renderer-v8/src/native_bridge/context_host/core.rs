@@ -623,6 +623,7 @@ impl PageScriptHost {
             next_javascript_dialog_id: 1,
             pending_network_output: Vec::new(),
             focused_window: PendingWindowMessageEndpoint::TopWindow,
+            window_focus_pending: false,
             focus_change_epoch: 0,
             subresource_activity_epoch: 0,
             subresource_last_activity_at: std::time::Instant::now(),

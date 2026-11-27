@@ -567,12 +567,29 @@ fn update_focus_from_previous_with_previous_focus_within(
     runtime.set_element_focus(None, next, next, None);
     let window_focus_transition = runtime.focus_window_for_element(next_handle);
 
-    let still_focused = || unsafe { &*runtime_ptr }.active_element_handle() == Some(next_handle);
     if let Some((previous_window, _)) = window_focus_transition {
         dispatch_window_focus_event(scope, runtime_ptr, previous_window, "blur");
-        if !still_focused() {
-            return false;
-        }
+    }
+    let element_kept_focus =
+        dispatch_element_focus_events(scope, runtime_ptr, previous, next_handle, selection);
+    if let Some((_, next_window)) = window_focus_transition
+        && unsafe { &mut *runtime_ptr }.take_pending_window_focus(next_window)
+    {
+        dispatch_window_focus_event(scope, runtime_ptr, next_window, "focus");
+    }
+    element_kept_focus && unsafe { &*runtime_ptr }.active_element_handle() == Some(next_handle)
+}
+
+fn dispatch_element_focus_events(
+    scope: &mut v8::PinScope<'_, '_>,
+    runtime_ptr: *mut PageScriptHost,
+    previous: Option<DomHandle>,
+    next_handle: DomHandle,
+    selection: FocusSelection,
+) -> bool {
+    let still_focused = || unsafe { &*runtime_ptr }.active_element_handle() == Some(next_handle);
+    if !still_focused() {
+        return false;
     }
     let previous_value = wrap_handle_value(scope, runtime_ptr, previous);
     if selection == FocusSelection::Initialize
@@ -608,11 +625,6 @@ fn update_focus_from_previous_with_previous_focus_within(
         return false;
     }
     schedule_focus_blur_if_needed(scope, runtime_ptr, next_handle);
-    if let Some((_, next_window)) = window_focus_transition
-        && still_focused()
-    {
-        dispatch_window_focus_event(scope, runtime_ptr, next_window, "focus");
-    }
     still_focused()
 }
 

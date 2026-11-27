@@ -159,6 +159,62 @@ fn reentrant_focus_dispatches_window_events_from_the_focused_frame() {
 }
 
 #[test]
+fn window_focus_notification_follows_the_frame_after_element_redirection() {
+    let probe = r#"((redirect) => {
+  document.body.innerHTML = '<input id=a><iframe id=first></iframe><iframe id=second></iframe>';
+  const [a, first, second] = document.body.children;
+  const firstDocument = first.contentDocument;
+  const secondDocument = second.contentDocument;
+  firstDocument.body.innerHTML = '<input id=b><input id=c>';
+  secondDocument.body.innerHTML = '<input id=d>';
+  const [b, c] = firstDocument.body.children;
+  const d = secondDocument.getElementById('d');
+  const focus = element => element.focus({preventScroll: true});
+  const events = [];
+  for (const frame of [first, second]) {
+    frame.contentWindow.addEventListener('focus', event => {
+      if (event.target === frame.contentWindow) events.push(frame.id);
+    });
+  }
+
+  focus(a);
+  if (redirect === 'focus' || redirect === 'focusin') {
+    b.addEventListener(redirect, () => focus(c));
+  } else if (redirect === 'window-blur') {
+    window.addEventListener('blur', () => focus(c), {once: true});
+  } else if (redirect === 'element-blur') {
+    b.addEventListener('focus', () => b.blur());
+  } else if (redirect === 'leave-frame' || redirect === 'return-to-frame') {
+    b.addEventListener('focusin', () => focus(d));
+    if (redirect === 'return-to-frame') {
+      d.addEventListener('focus', () => focus(c));
+    }
+  }
+
+  focus(b);
+  const frame = document.activeElement;
+  const child = frame.contentDocument;
+  return [
+    events.join(','), frame.id, child.activeElement.id || child.activeElement.tagName,
+    firstDocument.hasFocus(), secondDocument.hasFocus(),
+  ].join('|');
+})"#;
+    for (redirect, expected) in [
+        ("direct", "first|first|b|true|false"),
+        ("focus", "first|first|c|true|false"),
+        ("focusin", "first|first|c|true|false"),
+        ("window-blur", "first|first|c|true|false"),
+        ("element-blur", "first|first|BODY|true|false"),
+        ("leave-frame", "second|second|d|false|true"),
+        ("return-to-frame", "first|first|c|true|false"),
+    ] {
+        let mut vm = new_storage_html_test_vm("https://window-focus-redirection.test/");
+        let result = vm.eval(&format!("{probe}({redirect:?})")).unwrap();
+        assert_eq!(result, expected, "{redirect}");
+    }
+}
+
+#[test]
 fn window_focus_and_blur_validate_the_receiver_in_the_callee_realm() {
     let mut vm = new_storage_test_vm("https://window-focus-native.test/");
     vm.eval(r#"(() => {

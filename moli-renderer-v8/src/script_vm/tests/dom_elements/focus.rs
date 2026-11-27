@@ -187,6 +187,42 @@ target.focus();
 }
 
 #[test]
+fn window_focus_callback_refocusing_a_superseded_target_preserves_prevent_scroll() {
+    let mut vm = new_rendered_test_vm(
+        "https://example.com/",
+        r#"<!doctype html>
+<button id="outside">outside</button>
+<div style="height:250vh"></div>
+<iframe id="frame" style="position:absolute;left:250vw"></iframe>"#,
+    );
+    vm.eval(
+        "
+const iframe = document.getElementById('frame');
+const child = iframe.contentDocument;
+child.body.innerHTML = '<input id=target><input id=other>';
+const [target, other] = child.body.children;
+",
+    )
+    .unwrap();
+    publish_layout_for_test(&mut vm);
+    let result = vm
+        .eval(
+            "
+outside.focus({preventScroll: true});
+target.addEventListener('focus', () => other.focus({preventScroll: true}), {once: true});
+iframe.contentWindow.addEventListener('focus', () => target.focus({preventScroll: true}), {once: true});
+target.focus();
+const keptScroll = child.activeElement === target && window.scrollX === 0 && window.scrollY === 0;
+outside.focus({preventScroll: true});
+target.focus();
+[keptScroll, window.scrollX > 0 && window.scrollY > 0].join('|');
+",
+        )
+        .unwrap();
+    assert_eq!(result, "true|true");
+}
+
+#[test]
 fn editing_focus_initializes_selection_before_events_and_preserves_existing_ranges() {
     let mut vm = new_storage_html_test_vm("https://example.com/");
     let result = vm.eval(r#"(() => {

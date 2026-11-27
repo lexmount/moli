@@ -48,8 +48,22 @@ impl PageScriptHost {
         } else {
             self.window_endpoint_for_document(dom.owner_document_handle(handle)?)?
         };
-        let previous = std::mem::replace(&mut self.focused_window, next);
-        (previous != next).then_some((previous, next))
+        let previous = self.focused_window;
+        if previous == next {
+            return None;
+        }
+        self.focused_window = next;
+        self.window_focus_pending = true;
+        Some((previous, next))
+    }
+
+    /// Consume the notification once, even if element callbacks leave and
+    /// reenter the same Window before the outer transition resumes.
+    pub(crate) fn take_pending_window_focus(
+        &mut self,
+        window: PendingWindowMessageEndpoint,
+    ) -> bool {
+        self.focused_window == window && std::mem::take(&mut self.window_focus_pending)
     }
 
     pub(crate) fn unfocus_frame_owner(&mut self, handle: DomHandle) {
@@ -59,12 +73,14 @@ impl PageScriptHost {
                 .owner_document_handle(handle)
                 .and_then(|document| self.window_endpoint_for_document(document))
                 .unwrap_or(PendingWindowMessageEndpoint::TopWindow);
+            self.window_focus_pending = false;
         }
     }
 
     pub(super) fn clear_focused_window(&mut self, endpoint: PendingWindowMessageEndpoint) {
         if self.focused_window == endpoint {
             self.focused_window = PendingWindowMessageEndpoint::TopWindow;
+            self.window_focus_pending = false;
         }
     }
 
