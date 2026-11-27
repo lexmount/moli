@@ -364,7 +364,7 @@ def run(args):
     for site in sites:
         vals = [
             f"{med(site, 'viewport', v, 'retained_boxes_per_update'):.1f} / {med(site, 'viewport', v, 'reused_ifcs_per_update'):.1f}"
-            for v in V[1:]
+            for v in ("slotmap_before", "slotmap", "dense_before", "dense")
         ]
         lines.append("| " + site + " | " + " | ".join(vals) + " |")
     lines += [
