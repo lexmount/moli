@@ -26,6 +26,11 @@ mod matching;
 #[path = "fontconfig.rs"]
 mod platform;
 
+#[cfg(all(target_os = "ios", target_arch = "aarch64", target_abi = ""))]
+mod ios;
+#[cfg(all(target_os = "ios", target_arch = "aarch64", target_abi = ""))]
+pub use ios::native_outline_font_name;
+
 #[cfg(target_env = "ohos")]
 mod ohos;
 #[cfg(target_env = "ohos")]
@@ -38,10 +43,19 @@ pub fn font_collection(system_fonts: bool) -> Collection {
         return ohos::SYSTEM_FONTS.clone();
     }
 
-    Collection::new(CollectionOptions {
+    let collection = Collection::new(CollectionOptions {
         shared: false,
         system_fonts,
-    })
+    });
+    #[cfg(all(target_os = "ios", target_arch = "aarch64", target_abi = ""))]
+    let collection = {
+        let mut collection = collection;
+        if system_fonts {
+            ios::prefer_pingfang(&mut collection);
+        }
+        collection
+    };
+    collection
 }
 
 /// Caches named-family substitutions for one font collection.

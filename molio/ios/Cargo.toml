@@ -1,0 +1,40 @@
+[package]
+name = "molio-ios"
+version = "0.1.0"
+edition = "2024"
+license.workspace = true
+publish = false
+
+[lib]
+crate-type = ["staticlib"]
+
+[features]
+default = ["browser"]
+browser = [
+    "dep:anyhow",
+    "dep:moli-core",
+    "dep:moli-fetch",
+    "dep:parking_lot",
+    "dep:serde",
+    "dep:serde_json",
+    "dep:tempfile",
+    "dep:tokio",
+    "dep:url",
+]
+smoke = ["dep:moli-v8-init", "dep:v8"]
+
+[target.aarch64-apple-ios.dependencies]
+anyhow = { version = "1.0", optional = true }
+moli-core = { path = "../../moli-core", default-features = false, features = ["molio"], optional = true }
+moli-fetch = { path = "../../moli-fetch", optional = true }
+moli-v8-init = { path = "../../moli-v8-init", optional = true }
+parking_lot = { version = "0.12", optional = true }
+serde = { version = "1.0.228", features = ["derive"], optional = true }
+serde_json = { version = "1.0.145", optional = true }
+tempfile = { version = "3.27.0", optional = true }
+tokio = { version = "1.53.1", features = ["fs", "io-util", "macros", "net", "rt", "sync", "time"], optional = true }
+url = { version = "2.5.7", optional = true }
+v8 = { version = "152.2.0", features = ["v8_enable_pointer_compression"], optional = true }
+
+[lints]
+workspace = true

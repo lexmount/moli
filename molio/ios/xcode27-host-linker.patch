@@ -1,0 +1,16 @@
+diff --git a/toolchain/mac/BUILD.gn b/toolchain/mac/BUILD.gn
+index 8a6085b..4762217 100644
+--- a/toolchain/mac/BUILD.gn
++++ b/toolchain/mac/BUILD.gn
+@@ -22,8 +22,9 @@ template("mac_toolchain") {
+       forward_variables_from(invoker.toolchain_args, "*")
+       current_os = "mac"
+       if (target_os == "ios") {
+-        # Use LLD for the host part of a chrome/ios build.
+-        use_lld = true
++        # The pinned ld64.lld cannot parse Xcode 27's arm64e.x1 TAPI stubs.
++        # Use Xcode's linker for Torque, mksnapshot and the Rust host tools.
++        use_lld = false
+
+         # Override `is_component_build` for the host toolchain.
+         # See https://crbug.com/gn/286 for details why this is

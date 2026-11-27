@@ -1,0 +1,763 @@
+use std::{
+    collections::VecDeque,
+    ffi::{CStr, CString, c_char, c_void},
+    future::pending,
+    path::PathBuf,
+    rc::Rc,
+    sync::Arc,
+    thread,
+};
+
+use anyhow::Result;
+use moli_core::{
+    LayoutPolicy, OptionalResourceFetchMask, RendererDocumentLifecycleIdentity, RendererOutputItem,
+    RendererOutputTransportMessage, RendererOwnerAction, RendererPageNavigationState,
+    RendererViewportEdit, RendererViewportEditAction, RendererViewportEditor,
+    RendererViewportPointerInput, RendererViewportWheelInput, RendererViewportWheelPhase,
+    page::{
+        BufferedViewportFrames, PageInputExt, RendererAuxiliaryWindow,
+        RendererPopupActivationParts, ViewportBuffers, ViewportOutput, ViewportUpdate,
+    },
+    protocol_types::{DocumentActivity, ViewportSurface},
+    runtime::{Browser, BrowserConfig},
+};
+use parking_lot::Mutex;
+use tokio::{
+    sync::{mpsc, watch},
+    task::LocalSet,
+};
+
+use super::downloads::{DownloadClient, DownloadCommand, DownloadState, Downloads};
+
+enum Command {
+    Navigate(Option<String>),
+    History(i64),
+    Stop,
+    Activity(bool),
+    Edit {
+        document: RendererDocumentLifecycleIdentity,
+        target: u32,
+        action: EditorAction,
+    },
+    Resize {
+        width: u32,
+        height: u32,
+        scale: f64,
+        screen: (u32, u32),
+        revision: u64,
+    },
+    Tap(InputPosition),
+    Scroll(InputPosition, (f64, f64)),
+}
+
+enum EditorAction {
+    Edit(RendererViewportEditAction),
+    Key(EditorKey),
+}
+
+enum EditorKey {
+    Backspace,
+    Enter,
+    SelectAll,
+}
+
+struct InputPosition {
+    document: RendererDocumentLifecycleIdentity,
+    revision: u64,
+    position: (f64, f64),
+}
+
+// The UIKit main thread owns the handle. Only the channels and viewport output
+// are shared with the browser worker.
+type PopupQueue = Arc<Mutex<VecDeque<Box<RendererPopupActivationParts>>>>;
+type EditorState = Option<(RendererDocumentLifecycleIdentity, RendererViewportEditor)>;
+
+struct OpenTab {
+    popup: Option<Box<RendererPopupActivationParts>>,
+    editor: watch::Sender<EditorState>,
+    commands: mpsc::UnboundedReceiver<Command>,
+    output: Arc<ViewportOutput>,
+    status: watch::Sender<String>,
+    navigation: watch::Sender<Option<RendererPageNavigationState>>,
+}
+
+pub struct Molio {
+    tabs: mpsc::UnboundedSender<OpenTab>,
+    popups: PopupQueue,
+    downloads: DownloadClient,
+    auxiliary: Option<RendererAuxiliaryWindow>,
+    editor: watch::Receiver<EditorState>,
+    displayed_editor: EditorState,
+    commands: mpsc::UnboundedSender<Command>,
+    viewport: Arc<ViewportOutput>,
+    frames: watch::Receiver<()>,
+    status: watch::Receiver<String>,
+    navigation: watch::Receiver<Option<RendererPageNavigationState>>,
+    revision: u64,
+    presented: Option<(RendererDocumentLifecycleIdentity, u64)>,
+}
+
+async fn run_host(
+    mut tabs: mpsc::UnboundedReceiver<OpenTab>,
+    profile: PathBuf,
+    popups: PopupQueue,
+    mut download_commands: mpsc::UnboundedReceiver<DownloadCommand>,
+    download_entries: watch::Sender<Vec<super::downloads::Download>>,
+    download_directory: PathBuf,
+) {
+    let mut config = BrowserConfig::default()
+        .with_layout_policy(LayoutPolicy::Realtime)
+        .with_optional_resource_fetch_mask(
+            OptionalResourceFetchMask::IMAGE | OptionalResourceFetchMask::FONT,
+        );
+    config.set_realtime_max_fps(30);
+    config.set_profile_dir(Some(profile.clone()));
+
+    let browser = match Browser::new(config) {
+        Ok(browser) => browser,
+        Err(error) => {
+            while let Some(tab) = tabs.recv().await {
+                tab.status.send_replace(format!("{error:#}"));
+            }
+            return;
+        }
+    };
+    let downloads = Downloads::new(
+        browser.resource_request_client(),
+        download_entries,
+        download_directory,
+        Some(&profile),
+    );
+    let mut actions = browser.subscribe_viewport_actions();
+    loop {
+        tokio::select! {
+            tab = tabs.recv() => {
+                let Some(tab) = tab else { break };
+                let browser = browser.clone();
+                let downloads = Rc::clone(&downloads);
+                tokio::task::spawn_local(async move {
+                    if let Err(error) = run_tab(browser, &tab.status, tab.commands,
+                        tab.output, tab.navigation, tab.editor, tab.popup, downloads).await {
+                        tab.status.send_replace(format!("{error:#}"));
+                    }
+                });
+            }
+            Some(command) = download_commands.recv() => downloads.command(command),
+            message = actions.recv(), if !actions.is_closed() => {
+                let Some(RendererOutputTransportMessage::Publication(output)) = message else { continue };
+                for record in output.into_records() {
+                    match record.into_parts().1 {
+                        RendererOutputItem::OwnerAction(RendererOwnerAction::Download(activation)) =>
+                            downloads.start(activation),
+                        RendererOutputItem::OwnerAction(RendererOwnerAction::Popup(activation)) => {
+                            let popup = activation.into_parts();
+                            if popup.pending_auxiliary_page.is_some() {
+                                popups.lock().push_back(Box::new(popup));
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
+    }
+    downloads.shutdown().await;
+}
+
+async fn run_tab(
+    browser: Browser,
+    status: &watch::Sender<String>,
+    mut commands: mpsc::UnboundedReceiver<Command>,
+    output: Arc<ViewportOutput>,
+    navigation_state: watch::Sender<Option<RendererPageNavigationState>>,
+    editor_state: watch::Sender<EditorState>,
+    popup: Option<Box<RendererPopupActivationParts>>,
+    downloads: Rc<Downloads>,
+) -> Result<()> {
+    let mut page = if let Some(popup) = popup {
+        browser.adopt_viewport_page(&popup).await?
+    } else {
+        browser.create_viewport_page(Default::default()).await?
+    };
+    let mut edit_sequence = 0;
+    let mut page_state = page.subscribe_navigation_state().await?;
+    page_state.mark_changed();
+    status.send_replace(String::new());
+    let mut capture: Option<BufferedViewportFrames> = None;
+    let mut navigation: Option<
+        tokio::task::JoinHandle<Result<moli_core::page::CompletedPageCommand>>,
+    > = None;
+    loop {
+        tokio::select! {
+            Ok(()) = page_state.changed() => {
+                navigation_state.send_replace(page_state.borrow_and_update().clone());
+            }
+            result = async {
+                match &mut navigation {
+                    Some(task) => task.await,
+                    None => pending().await,
+                }
+            } => {
+                navigation = None;
+                let result = result
+                    .map_err(anyhow::Error::from)
+                    .and_then(|result| result)
+                    .and_then(|completion| page.finish_viewport_navigation(completion));
+                status.send_replace(match result {
+                    Ok(true) => String::new(),
+                    Ok(false) => "Navigation did not commit".into(),
+                    Err(error) => format!("{error:#}"),
+                });
+            }
+            update = async {
+                match &mut capture {
+                    Some(capture) => capture.changed().await,
+                    None => pending().await,
+                }
+            } => match update {
+                Ok(ViewportUpdate::ResourceChanged) => page.wake_viewport_frames().await?,
+                Ok(ViewportUpdate::StateChanged) => {
+                    let editor = capture.as_mut().and_then(BufferedViewportFrames::latest_state)
+                        .and_then(|frame| frame.editor.map(|editor| (frame.document, editor)));
+                    editor_state.send_if_modified(|current| {
+                        if *current == editor { return false; }
+                        *current = editor;
+                        true
+                    });
+                }
+                Err(_) => capture = None,
+            },
+            command = commands.recv() => match command {
+                Some(Command::Navigate(url)) => {
+                    if let Some(task) = navigation.take() {
+                        task.abort();
+                    }
+                    match page.start_viewport_navigation(url) {
+                        Ok(command) => {
+                            status.send_replace("Loading…".into());
+                            navigation = Some(tokio::task::spawn_local(command.wait()));
+                        }
+                        Err(error) => { status.send_replace(format!("{error:#}")); }
+                    }
+                }
+                Some(Command::History(delta)) => {
+                    if let Some(task) = navigation.take() {
+                        task.abort();
+                    }
+                    if let Err(error) = page.traverse_viewport_history(delta).await {
+                        status.send_replace(format!("{error:#}"));
+                    } else {
+                        status.send_replace(String::new());
+                    }
+                }
+                Some(Command::Stop) => {
+                    if let Some(task) = navigation.take() {
+                        task.abort();
+                    }
+                    page.stop_document_lifecycle_async().await?;
+                    status.send_replace(String::new());
+                }
+                Some(Command::Activity(active)) => {
+                    if !active {
+                        capture = None;
+                    }
+                    page.set_document_activity_async(DocumentActivity::new(active, active)).await?;
+                }
+                Some(Command::Edit { document, target, action }) => {
+                    if !page_state.borrow().as_ref().is_some_and(|state| state.document == document) {
+                        continue;
+                    }
+                    let Some(editor) = page.viewport_editor().await?.filter(|editor| editor.target == target) else {
+                        continue;
+                    };
+                    let editor = match action {
+                        EditorAction::Edit(action) => {
+                            edit_sequence += 1;
+                            page.edit_viewport(RendererViewportEdit {
+                                document, target, revision: editor.revision, sequence: edit_sequence,
+                                previous: None, action,
+                            }).await?.editor
+                        }
+                        EditorAction::Key(key) => {
+                            let (key, code, text, modifiers) = match key {
+                                EditorKey::Backspace => ("Backspace", "Backspace", "", 0),
+                                EditorKey::Enter => ("Enter", "Enter", "\r", 0),
+                                EditorKey::SelectAll => ("a", "KeyA", "", 2),
+                            };
+                            for (event, text) in [("keydown", text), ("keyup", "")] {
+                                let outcome = page.dispatch_key_event_with_outcome_async(
+                                    event, key, code, text, modifiers, false, !text.is_empty(),
+                                ).await?;
+                                if let Some(download) = outcome.pending_download {
+                                    downloads.start(download);
+                                }
+                            }
+                            page.viewport_editor().await?
+                        }
+                    };
+                    editor_state.send_replace(editor.map(|editor| (document, editor)));
+                }
+                Some(Command::Resize { width, height, scale, screen, revision }) => {
+                    let surface = ViewportSurface {
+                        inner_width: width,
+                        inner_height: height,
+                        outer_width: width,
+                        outer_height: height,
+                        device_pixel_ratio: scale,
+                        screen_width: screen.0,
+                        screen_height: screen.1,
+                        screen_avail_width: screen.0,
+                        screen_avail_height: screen.1,
+                        screen_orientation: moli_core::protocol_types::ScreenOrientation {
+                            kind: "portrait-primary",
+                            angle: 0,
+                        },
+                        ..ViewportSurface::default()
+                    };
+                    let layout = ViewportBuffers::layout_for(surface)?;
+                    let storage = std::array::from_fn(|_| Vec::with_capacity(layout.byte_len));
+                    let buffers = ViewportBuffers::new(layout, storage)?;
+                    capture = Some(page.subscribe_viewport_buffer(
+                        surface, revision, buffers, output.clone(),
+                    ).await?);
+                }
+                Some(Command::Tap(input)) => {
+                    for (event, buttons) in [("mousedown", 1), ("mouseup", 0)] {
+                        let outcome = page.dispatch_viewport_pointer(RendererViewportPointerInput {
+                            document: input.document,
+                            viewport_revision: input.revision,
+                            position: input.position,
+                            event,
+                            button: 0,
+                            buttons,
+                            click_count: 1,
+                            modifiers: 0,
+                        }).await?;
+                        if let Some(download) = outcome.and_then(|value| value.pending_download) {
+                            downloads.start(download);
+                        }
+                    }
+                    let editor = page.viewport_editor().await?;
+                    editor_state.send_replace(editor.map(|editor| (input.document, editor)));
+                }
+                Some(Command::Scroll(input, delta)) => {
+                    page.enqueue_viewport_wheel(RendererViewportWheelInput {
+                        document: input.document,
+                        viewport_revision: input.revision,
+                        position: input.position,
+                        buttons: 0,
+                        delta,
+                        modifiers: 0,
+                        phase: RendererViewportWheelPhase::Unspecified,
+                        precise: true,
+                    })?;
+                }
+                None => break,
+            }
+        }
+    }
+    if let Some(task) = navigation {
+        task.abort();
+    }
+    Ok(())
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn molio_create(
+    profile: *const c_char,
+    download_directory: *const c_char,
+) -> *mut Molio {
+    if profile.is_null() || download_directory.is_null() {
+        return std::ptr::null_mut();
+    }
+    let (Ok(profile), Ok(download_directory)) = (
+        (unsafe { CStr::from_ptr(profile) }).to_str(),
+        (unsafe { CStr::from_ptr(download_directory) }).to_str(),
+    ) else {
+        return std::ptr::null_mut();
+    };
+    let profile = PathBuf::from(profile);
+    let (tabs, receiver) = mpsc::unbounded_channel();
+    let popups = PopupQueue::default();
+    let host_popups = popups.clone();
+    let (downloads, download_commands, download_entries) =
+        DownloadClient::channel(PathBuf::from(download_directory));
+    let download_directory = downloads.directory.clone();
+    let Ok(runtime) = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+    else {
+        return std::ptr::null_mut();
+    };
+    let worker = thread::Builder::new()
+        .name("molio-ios".into())
+        .spawn(move || {
+            LocalSet::new().block_on(
+                &runtime,
+                run_host(
+                    receiver,
+                    profile,
+                    host_popups,
+                    download_commands,
+                    download_entries,
+                    download_directory,
+                ),
+            )
+        });
+    if worker.is_err() {
+        return std::ptr::null_mut();
+    }
+    open_tab(tabs, popups, downloads, None)
+}
+
+fn open_tab(
+    tabs: mpsc::UnboundedSender<OpenTab>,
+    popups: PopupQueue,
+    downloads: DownloadClient,
+    popup: Option<Box<RendererPopupActivationParts>>,
+) -> *mut Molio {
+    let (commands, receiver) = mpsc::unbounded_channel();
+    let (status, status_rx) = watch::channel("Starting…".into());
+    let (navigation, navigation_rx) = watch::channel(None);
+    let (editor, editor_rx) = watch::channel(None);
+    let auxiliary = popup
+        .as_ref()
+        .and_then(|popup| popup.auxiliary_window.clone());
+    let viewport = Arc::new(ViewportOutput::default());
+    if tabs
+        .send(OpenTab {
+            popup,
+            editor,
+            commands: receiver,
+            output: viewport.clone(),
+            status,
+            navigation,
+        })
+        .is_err()
+    {
+        return std::ptr::null_mut();
+    }
+    Box::into_raw(Box::new(Molio {
+        tabs,
+        popups,
+        downloads,
+        auxiliary,
+        editor: editor_rx,
+        displayed_editor: None,
+        commands,
+        frames: viewport.subscribe(),
+        viewport,
+        status: status_rx,
+        navigation: navigation_rx,
+        revision: 0,
+        presented: None,
+    }))
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn molio_new_tab(handle: &Molio) -> *mut Molio {
+    open_tab(
+        handle.tabs.clone(),
+        handle.popups.clone(),
+        handle.downloads.clone(),
+        None,
+    )
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn molio_pop_tab(handle: &Molio) -> *mut Molio {
+    let popup = handle.popups.lock().pop_front();
+    let Some(popup) = popup else {
+        return std::ptr::null_mut();
+    };
+    open_tab(
+        handle.tabs.clone(),
+        handle.popups.clone(),
+        handle.downloads.clone(),
+        Some(popup),
+    )
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn molio_tab_closed(handle: &Molio) -> bool {
+    handle
+        .auxiliary
+        .as_ref()
+        .is_some_and(RendererAuxiliaryWindow::is_closed)
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn molio_download_command(handle: &Molio, id: u64, action: u32) {
+    let command = match action {
+        0 => DownloadCommand::Cancel(id),
+        1 => DownloadCommand::Remove(id),
+        2 => DownloadCommand::Clear,
+        _ => return,
+    };
+    handle.downloads.send(command);
+}
+
+type ShowDownload = extern "C" fn(*mut c_void, u64, *const c_char, *const c_char, u32, u64, u64);
+
+#[unsafe(no_mangle)]
+extern "C" fn molio_list_downloads(handle: &Molio, context: *mut c_void, show: ShowDownload) {
+    for item in handle.downloads.entries.borrow().iter().rev() {
+        let Ok(name) = CString::new(item.name.replace('\0', "�")) else {
+            continue;
+        };
+        let (state, path) = match &item.state {
+            DownloadState::Downloading => (0, ""),
+            DownloadState::Complete(path) => (1, path.to_str().unwrap_or("")),
+            DownloadState::Canceled => (2, ""),
+            DownloadState::Failed(error) => (3, error.as_str()),
+        };
+        let Ok(path) = CString::new(path.replace('\0', "�")) else {
+            continue;
+        };
+        show(
+            context,
+            item.id,
+            name.as_ptr(),
+            path.as_ptr(),
+            state,
+            item.received,
+            item.total.unwrap_or(0),
+        );
+    }
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn molio_set_active(handle: &Molio, active: bool) {
+    let _ = handle.commands.send(Command::Activity(active));
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn molio_history(handle: &Molio, delta: i32) {
+    let _ = handle.commands.send(Command::History(i64::from(delta)));
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn molio_reload(handle: &Molio, stop: bool) {
+    let command = if stop {
+        Command::Stop
+    } else {
+        Command::Navigate(None)
+    };
+    let _ = handle.commands.send(command);
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn molio_destroy(handle: *mut Molio) {
+    if !handle.is_null() {
+        drop(unsafe { Box::from_raw(handle) });
+    }
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn molio_navigate(handle: &Molio, url: *const c_char) {
+    if !url.is_null()
+        && let Ok(url) = (unsafe { CStr::from_ptr(url) }).to_str()
+    {
+        let _ = handle
+            .commands
+            .send(Command::Navigate(Some(url.to_owned())));
+    }
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn molio_open_address(handle: &Molio, input: *const c_char) {
+    if !input.is_null()
+        && let Ok(input) = (unsafe { CStr::from_ptr(input) }).to_str()
+        && let Some(url) = super::address_target::address_target(input)
+    {
+        let _ = handle
+            .commands
+            .send(Command::Navigate(Some(url.to_string())));
+    }
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn molio_resize(
+    handle: &mut Molio,
+    width: u32,
+    height: u32,
+    scale: f64,
+    screen_width: u32,
+    screen_height: u32,
+) {
+    if width > 0 && height > 0 && scale.is_finite() && scale > 0. {
+        handle.revision += 1;
+        handle.presented = None;
+        let _ = handle.commands.send(Command::Resize {
+            width,
+            height,
+            scale,
+            screen: (screen_width, screen_height),
+            revision: handle.revision,
+        });
+    }
+}
+
+impl Molio {
+    fn input(&self, x: f64, y: f64, command: impl FnOnce(InputPosition) -> Command) {
+        if let Some((document, revision)) = self.presented {
+            let _ = self.commands.send(command(InputPosition {
+                document,
+                revision,
+                position: (x, y),
+            }));
+        }
+    }
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn molio_tap(handle: &Molio, x: f64, y: f64) {
+    handle.input(x, y, Command::Tap);
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn molio_scroll(handle: &Molio, x: f64, y: f64, delta_x: f64, delta_y: f64) {
+    handle.input(x, y, |input| Command::Scroll(input, (delta_x, delta_y)));
+}
+
+impl Molio {
+    fn edit(&self, action: EditorAction) {
+        if let Some((document, editor)) = &self.displayed_editor {
+            let _ = self.commands.send(Command::Edit {
+                document: *document,
+                target: editor.target,
+                action,
+            });
+        }
+    }
+}
+
+#[unsafe(no_mangle)]
+unsafe extern "C" fn molio_insert_text(
+    handle: &Molio,
+    text: *const c_char,
+    len: usize,
+    marked: bool,
+    selection_start: usize,
+    selection_end: usize,
+) {
+    let bytes = if len == 0 {
+        &[]
+    } else if text.is_null() || len > isize::MAX as usize {
+        return;
+    } else {
+        unsafe { std::slice::from_raw_parts(text.cast::<u8>(), len) }
+    };
+    let Ok(text) = std::str::from_utf8(bytes) else {
+        return;
+    };
+    let text = text.to_owned();
+    let action = if marked {
+        RendererViewportEditAction::Compose {
+            range: None,
+            text,
+            selection: Some(selection_start..selection_end),
+        }
+    } else {
+        RendererViewportEditAction::Commit { range: None, text }
+    };
+    handle.edit(EditorAction::Edit(action));
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn molio_finish_composition(handle: &Molio) {
+    handle.edit(EditorAction::Edit(RendererViewportEditAction::Finish));
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn molio_editor_key(handle: &Molio, key: u8) {
+    let key = match key {
+        0 => EditorKey::Backspace,
+        1 => EditorKey::Enter,
+        2 => EditorKey::SelectAll,
+        _ => return,
+    };
+    handle.edit(EditorAction::Key(key));
+}
+
+type Present = extern "C" fn(*mut c_void, *const u8, usize, u32, u32, usize);
+type ShowStatus = extern "C" fn(*mut c_void, *const c_char);
+type ShowEditor = extern "C" fn(*mut c_void, u32, *const c_char, bool, usize, usize, *const f32);
+type ShowNavigation = extern "C" fn(*mut c_void, *const c_char, *const c_char, bool, bool);
+
+#[unsafe(no_mangle)]
+extern "C" fn molio_poll(
+    handle: &mut Molio,
+    context: *mut c_void,
+    present: Present,
+    status: ShowStatus,
+    navigation: ShowNavigation,
+    editor: ShowEditor,
+) {
+    if handle.status.has_changed().unwrap_or(true) {
+        let message = handle.status.borrow_and_update().replace('\0', "�");
+        if let Ok(message) = CString::new(message) {
+            status(context, message.as_ptr());
+        }
+    }
+    if handle.navigation.has_changed().unwrap_or(false)
+        && let Some(state) = handle.navigation.borrow_and_update().as_ref()
+    {
+        let metadata = &state.navigation;
+        let address = CString::new(metadata.url.as_str()).expect("URL contains no NUL");
+        let title = CString::new(metadata.title.replace('\0', "�")).expect("NULs replaced");
+        navigation(
+            context,
+            address.as_ptr(),
+            title.as_ptr(),
+            metadata.can_go_back,
+            metadata.can_go_forward,
+        );
+    }
+    if handle.editor.has_changed().unwrap_or(false) {
+        handle.displayed_editor = handle.editor.borrow_and_update().clone();
+        if let Some((_, current)) = &handle.displayed_editor {
+            let text = CString::new(current.text.replace('\0', "�")).expect("NULs replaced");
+            editor(
+                context,
+                current.target,
+                text.as_ptr(),
+                current.password,
+                current.selection.start.saturating_sub(current.text_start),
+                current.selection.end.saturating_sub(current.text_start),
+                current
+                    .caret_rect
+                    .as_ref()
+                    .map_or(std::ptr::null(), |rect| rect.as_ptr()),
+            );
+        } else {
+            editor(context, 0, std::ptr::null(), false, 0, 0, std::ptr::null());
+        }
+    }
+    if handle.frames.has_changed().unwrap_or(false) {
+        handle.frames.borrow_and_update();
+        let revision = handle.revision;
+        handle.presented = handle
+            .viewport
+            .read(|frame| {
+                if frame.viewport_revision == revision
+                    && let Some(pixels) = frame.pixels
+                {
+                    present(
+                        context,
+                        pixels.as_ptr(),
+                        pixels.len(),
+                        frame.layout.width,
+                        frame.layout.height,
+                        frame.layout.width as usize * 4,
+                    );
+                    return Some((frame.document, revision));
+                }
+                None
+            })
+            .flatten();
+        if handle.presented.is_none() {
+            present(context, std::ptr::null(), 0, 0, 0, 0);
+        }
+    }
+}

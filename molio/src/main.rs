@@ -1,4 +1,5 @@
 mod address;
+mod address_target;
 mod browser;
 mod download_page;
 mod downloads;
