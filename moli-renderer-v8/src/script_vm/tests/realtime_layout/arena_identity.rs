@@ -72,3 +72,145 @@ fn stable_box_handles_preserve_fresh_geometry_and_paint_across_reparenting() {
         }
     }
 }
+
+fn assert_published_layout_matches_fresh(
+    vm: &mut super::StandaloneScriptVmHarness,
+    nodes: &[&str],
+    step: &str,
+) {
+    let host = vm.context_host_weak_for_test().upgrade().unwrap();
+    let document = host.borrow().document_handle();
+    let viewport = host.borrow().layout_viewport_for_document(document);
+    let retained = vm.screenshot_layout_snapshot(viewport).unwrap().unwrap();
+    let host = host.borrow();
+    let fresh = host
+        .build_layout_pass_for_document(
+            document,
+            moli_layout::LayoutPassRequest::with_paint(
+                viewport,
+                moli_layout::LayoutFlushReason::Screenshot,
+            ),
+        )
+        .unwrap()
+        .unwrap();
+    assert_eq!(Some(&retained), fresh.paint_snapshot(), "{step}");
+    for name in nodes {
+        let node = vm.document_runtime.get_element_by_id(name).unwrap();
+        let current = host
+            .with_latest_layout_tree_for_document(document, |tree| {
+                tree.client_rects_for_source(node)
+            })
+            .unwrap();
+        assert_eq!(
+            current,
+            fresh.client_rects_for_source(node),
+            "{step}: {name}"
+        );
+    }
+}
+
+#[test]
+fn retained_container_display_switches_match_fresh_after_warming_numeric_layout() {
+    let mut vm = realtime_vm(concat!(
+        "<!doctype html><style>body{margin:0;overflow:hidden;font:16px sans-serif}",
+        "#switcher{width:240px}#switcher.flex{display:flex;gap:6px}",
+        "#switcher.grid{display:grid;grid-template-columns:75px 100px}",
+        "#switcher.flex::before{content:'before';color:green}",
+        "#switcher.grid::after{content:'after';color:blue}",
+        "#side{width:130px}p{margin:0}</style><div id=warm style='height:10px'></div>",
+        "<div id=switcher><p id=firstCell>first paragraph with text</p>",
+        "<p id=secondCell>second paragraph with text</p></div>",
+        "<aside id=side>unmodified sibling content for reuse</aside>",
+        "<section style='width:70px;height:20px'><div style='width:15px;height:4px'></div></section>",
+    ));
+    vm.publish_layout_for_test().unwrap();
+    vm.eval("warm.style.height='13px';warm.getBoundingClientRect().height")
+        .unwrap();
+    let warmed = vm.layout_pass_observability_for_test().3.unwrap();
+    assert!(warmed.retained_numeric_tree, "{warmed:?}");
+    assert!(warmed.retained_numeric_layout_hits > 0, "{warmed:?}");
+
+    for mode in ["flex", "grid", "", "grid", "flex", ""] {
+        let edit = format!("switcher.className='{mode}'");
+        vm.eval(&edit).unwrap();
+        assert_published_layout_matches_fresh(
+            &mut vm,
+            &["switcher", "firstCell", "secondCell", "side"],
+            &edit,
+        );
+    }
+}
+
+#[test]
+fn reordered_box_storage_preserves_the_nested_scroll_projection() {
+    let mut vm = realtime_vm(concat!(
+        "<!doctype html><style>body{margin:0;overflow:hidden;font:16px sans-serif}",
+        "#frame{overflow:auto;width:210px;height:140px}",
+        "#scroller{overflow:auto;width:160px;height:90px}",
+        "#deleted,#spacer{height:24px}#sticky{position:sticky;top:0;height:20px;background:lime}",
+        "#fixed{position:fixed;top:7px;left:165px;width:14px;height:16px;background:blue}",
+        "#tall{height:320px;background:yellow}</style><div id=deleted></div>",
+        "<div id=frame><div id=spacer></div><div id=scroller><div id=sticky></div>",
+        "<div id=tall>scroll content</div><div id=fixed></div></div></div>",
+        "<section id=holding><p id=moving>reparent me</p></section>",
+    ));
+    vm.publish_layout_for_test().unwrap();
+    vm.eval("deleted.remove()").unwrap();
+    vm.publish_layout_for_test().unwrap();
+    vm.eval("frame.prepend(document.createElement('hr'));scroller.prepend(moving)")
+        .unwrap();
+    vm.publish_layout_for_test().unwrap();
+
+    for offset in [18, 61, 4] {
+        let builds = vm.layout_pass_observability_for_test().1;
+        let scroll_top = vm
+            .eval(&format!(
+                "scroller.scrollTop={offset};sticky.getBoundingClientRect();String(scroller.scrollTop)"
+            ))
+            .unwrap();
+        assert_eq!(scroll_top, offset.to_string());
+        assert_eq!(vm.layout_pass_observability_for_test().1, builds);
+        assert_published_layout_matches_fresh(
+            &mut vm,
+            &["frame", "scroller", "sticky", "fixed", "moving", "tall"],
+            &format!("scrollTop={offset}"),
+        );
+    }
+}
+
+#[test]
+fn unchanged_markers_keep_direct_item_paragraphs_and_rebuild_changed_text() {
+    let mut vm = realtime_vm(concat!(
+        "<!doctype html><style>body{margin:0;font:16px sans-serif}",
+        "#items{width:190px}li{list-style-position:inside}",
+        "#items.custom li::marker{content:'item. ';color:blue}</style>",
+        "<div id=prefix style='height:10px'></div>",
+        "<ol id=items start=3><li id=first>first item keeps a direct paragraph",
+        "<li id=second>second item keeps a direct paragraph</ol>",
+    ));
+    vm.publish_layout_for_test().unwrap();
+    for height in [17, 19] {
+        vm.eval(&format!(
+            "prefix.style.height='{height}px';first.getBoundingClientRect().height"
+        ))
+        .unwrap();
+        let metrics = vm.layout_pass_observability_for_test().3.unwrap();
+        assert!(metrics.reused_inline_contexts >= 2, "{metrics:?}");
+        // The first refresh reconciles the initial order, which still had
+        // generated marker text appended to the end.
+        if height == 19 {
+            assert!(metrics.retained_numeric_tree, "{metrics:?}");
+        }
+    }
+    for edit in [
+        "items.start=21",
+        "second.value=101;items.reversed=true",
+        "items.prepend(second)",
+        "items.className='custom'",
+        "items.className='';second.style.listStyleType='none'",
+        "second.style.listStyleType='decimal';second.style.listStylePosition='outside'",
+    ] {
+        vm.eval(edit).unwrap();
+        assert_published_layout_matches_fresh(&mut vm, &["first", "second"], edit);
+    }
+}
