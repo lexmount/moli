@@ -145,7 +145,7 @@ impl<N> LayoutBoxes<N> {
     }
 
     #[inline]
-    pub(crate) fn iter(&self) -> OrderedBoxes<'_, N> {
+    pub(crate) fn ordered(&self) -> OrderedBoxes<'_, N> {
         OrderedBoxes {
             ids: self.order.ids.iter(),
             entries: &self.entries,
@@ -154,7 +154,7 @@ impl<N> LayoutBoxes<N> {
 
     // Bulk resets may visit storage in any order. Callers needing logical
     // order use id_at()/get_mut() explicitly.
-    pub(crate) fn iter_mut(&mut self) -> impl Iterator<Item = &mut LayoutBox<N>> {
+    pub(crate) fn values_mut(&mut self) -> impl Iterator<Item = &mut LayoutBox<N>> {
         self.entries.values_mut()
     }
 
@@ -260,14 +260,6 @@ impl<N> DoubleEndedIterator for OrderedBoxes<'_, N> {
     }
 }
 impl<N> ExactSizeIterator for OrderedBoxes<'_, N> {}
-impl<'a, N> IntoIterator for &'a LayoutBoxes<N> {
-    type Item = &'a LayoutBox<N>;
-    type IntoIter = OrderedBoxes<'a, N>;
-    fn into_iter(self) -> Self::IntoIter {
-        self.iter()
-    }
-}
-
 #[cfg(test)]
 impl<N> Extend<LayoutBox<N>> for LayoutBoxes<N> {
     fn extend<T: IntoIterator<Item = LayoutBox<N>>>(&mut self, values: T) {

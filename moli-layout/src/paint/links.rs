@@ -20,7 +20,7 @@ impl LinkProjection {
         let targets = projection
             .world
             .boxes
-            .iter()
+            .ordered()
             .map(|layout_box| {
                 let mut current = layout_box.source.or(layout_box.owner);
                 let mut ancestors = Vec::new();

@@ -31,7 +31,10 @@ fn order_and_storage_changes_preserve_handles_and_reject_retired_generations() {
     assert_eq!(boxes.get(first).unwrap().source(), Some(1));
     assert_eq!(boxes.get(last).unwrap().source(), Some(3));
     assert_eq!(
-        boxes.iter().map(|value| value.source()).collect::<Vec<_>>(),
+        boxes
+            .ordered()
+            .map(|value| value.source())
+            .collect::<Vec<_>>(),
         vec![Some(3), Some(1)]
     );
     assert_eq!(boxes.index_of(last), 0);
@@ -127,7 +130,7 @@ fn physical_geometry_snapshot_detects_same_length_slot_replacement() {
     let current = boxes.insert(block(4));
     boxes.retain_in_order(vec![current, first, last]);
     let read_order = boxes.values().map(|b| b.source()).collect::<Vec<_>>();
-    let write_order = boxes.iter_mut().map(|b| b.source()).collect::<Vec<_>>();
+    let write_order = boxes.values_mut().map(|b| b.source()).collect::<Vec<_>>();
     assert_eq!(
         read_order, write_order,
         "a physical snapshot must restore in physical order"

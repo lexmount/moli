@@ -274,7 +274,7 @@ where
         } else {
             // Replaced images with live inputs are sampled during paint.
             // Inline SVG scenes belong to the paint resource cache.
-            for layout_box in world.boxes.iter_mut() {
+            for layout_box in world.boxes.values_mut() {
                 if layout_box.source.is_some()
                     && layout_box
                         .element_semantics()
@@ -415,7 +415,7 @@ impl<N: Copy + Debug + Eq + Hash> RetainedLayoutWorld<N> {
 
         let mut brush_updates = Vec::new();
         let mut text_styles = Vec::new();
-        for (index, layout_box) in world.boxes.iter().enumerate() {
+        for (index, layout_box) in world.boxes.ordered().enumerate() {
             if layout_box.kind == crate::LayoutBoxKind::Text
                 && let Some(parent) = layout_box.structural_parent
                 && let Some(style) = replacements.get(&parent)
@@ -611,7 +611,7 @@ fn projection_preserves_scrollbar_layout<N: Copy + Debug + Eq + Hash>(
         return true;
     }
     let policy = world.viewport_scroll_policy;
-    for (index, layout_box) in world.boxes.iter().enumerate() {
+    for (index, layout_box) in world.boxes.ordered().enumerate() {
         let id = world.boxes.id_at(index);
         if world.is_viewport_defining_body(id) {
             continue;
@@ -820,7 +820,7 @@ where
     fn build_local_box_geometry(&mut self, overflow: &OverflowProjection) {
         assert_eq!(overflow.len(), self.world.boxes.len());
         let layout_origins = self.world.global_layout_origins();
-        for (index, layout_box) in self.world.boxes.iter().enumerate() {
+        for (index, layout_box) in self.world.boxes.ordered().enumerate() {
             for diagnostic in layout_box.capability_diagnostics() {
                 self.diagnostics.push(PaintDiagnostic::new(
                     diagnostic.code(),
@@ -1741,7 +1741,7 @@ mod dependency_tests {
         }
         let mut world = LayoutWorld::new(box_for(0), false);
         world.boxes.extend([box_for(1), box_for(2)]);
-        for layout_box in world.boxes.iter_mut() {
+        for layout_box in world.boxes.values_mut() {
             layout_box.final_layout.size = taffy::Size {
                 width: 1000.0,
                 height: 1000.0,

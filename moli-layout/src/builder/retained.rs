@@ -274,8 +274,6 @@ where
     // Taffy's cache key does not include its shared block float context.
     // Preserve box construction work even when that context forces a cold
     // numeric pass.
-    let reuse_numeric_layout =
-        !had_floats && !order.iter().any(|id| world.boxes[id].style.is_floated());
     let retained_count = order
         .iter()
         .filter(|id| {
@@ -283,6 +281,11 @@ where
         })
         .count();
     world.compact_for_reuse(order);
+    let reuse_numeric_layout = !had_floats
+        && !world
+            .boxes
+            .values()
+            .any(|layout_box| layout_box.style.is_floated());
     Ok(Some((
         retained_count,
         pruned_source_count,
@@ -362,8 +365,7 @@ where
             .unwrap_or_default();
         if is_list_item {
             // Numbering is finalized later using the current list order.
-            // Recreate the marker without reconstructing the item's DOM children.
-            children.extend(self.build_list_marker(world, node)?);
+            children.extend(self.build_list_marker(world, node, Some(id))?);
         }
         children.extend(self.build_pseudo(world, node, LayoutPseudo::Before, before)?);
         let mut changed = false;

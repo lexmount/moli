@@ -1659,12 +1659,12 @@ mod tests {
                 },
                 ..LayoutInput::HIDDEN
             };
-            let before: Vec<_> = world.boxes.iter().map(|b| b.unrounded_layout).collect();
+            let before: Vec<_> = world.boxes.ordered().map(|b| b.unrounded_layout).collect();
             let cold = world.compute_child_layout(root.to_taffy(), inputs);
             assert_eq!(
                 world
                     .boxes
-                    .iter()
+                    .ordered()
                     .map(|b| b.unrounded_layout)
                     .collect::<Vec<_>>(),
                 before,
@@ -1681,7 +1681,7 @@ mod tests {
             let computations = |world: &LayoutWorld<usize>| {
                 world
                     .boxes
-                    .iter()
+                    .ordered()
                     .filter_map(|b| b.table_measure_cache.as_ref())
                     .map(|c| c.computations)
                     .sum::<usize>()
@@ -1690,7 +1690,7 @@ mod tests {
             assert_eq!(
                 world
                     .boxes
-                    .iter()
+                    .ordered()
                     .filter(|b| b.table_measure_cache.is_some())
                     .count(),
                 depth

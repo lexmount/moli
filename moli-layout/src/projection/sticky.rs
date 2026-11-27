@@ -85,7 +85,7 @@ where
     while let Some(candidate) = ancestor {
         let candidate_box = world
             .boxes
-            .get(world.boxes.index_of(candidate))
+            .get(candidate)
             .ok_or(LayoutError::InvalidBoxHandle { id: candidate })?;
         if remaining == 0 {
             return Err(LayoutError::NumericTreeCycle {
