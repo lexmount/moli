@@ -162,7 +162,7 @@ fn realtime_html_attribute_changes_reuse_native_inputs_and_respect_css_selectors
 fn retained_layout_world_belongs_to_realtime_screen_publication() {
     for mode in [
         LayoutPolicy::Mock,
-        LayoutPolicy::OnDemand,
+        LayoutPolicy::Lazy,
         LayoutPolicy::Realtime,
     ] {
         let mut vm = new_parsed_test_vm(
@@ -1493,7 +1493,7 @@ fn realtime_zoomed_rtl_scroll_matches_a_fresh_layout_without_rebuilding() {
 
 #[test]
 fn legacy_layout_modes_do_not_allocate_realtime_state_or_refresh_after_writes() {
-    for policy in [LayoutPolicy::Mock, LayoutPolicy::OnDemand] {
+    for policy in [LayoutPolicy::Mock, LayoutPolicy::Lazy] {
         let mut vm = new_parsed_test_vm(
             "https://legacy-layout.test/",
             "<!doctype html><div id=target style='width:100px'></div><input id=field type=button value=A>",
@@ -1511,7 +1511,7 @@ fn legacy_layout_modes_do_not_allocate_realtime_state_or_refresh_after_writes() 
             .unwrap();
         assert_eq!(vm.eval("field.value").unwrap(), "ABCDEFGHIJKLMNOPQRST");
         assert_eq!(vm.layout_pass_observability_for_test().1, before);
-        if policy == LayoutPolicy::OnDemand {
+        if policy == LayoutPolicy::Lazy {
             assert_eq!(width, "100");
         }
         assert!(
@@ -1526,7 +1526,7 @@ fn legacy_layout_modes_do_not_allocate_realtime_state_or_refresh_after_writes() 
 fn select_value_refreshes_selected_peer_and_has_styles_in_every_layout_policy() {
     for policy in [
         LayoutPolicy::Mock,
-        LayoutPolicy::OnDemand,
+        LayoutPolicy::Lazy,
         LayoutPolicy::Realtime,
     ] {
         for (case, change, same_before, same_after) in [

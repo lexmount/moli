@@ -4,7 +4,7 @@ use super::*;
 fn scroll_dictionaries_preserve_conversion_order_and_silent_cancellation() {
     for policy in [
         moli_page_types::LayoutPolicy::Mock,
-        moli_page_types::LayoutPolicy::OnDemand,
+        moli_page_types::LayoutPolicy::Lazy,
     ] {
         let mut vm = new_storage_html_test_vm("https://scroll-dictionary.test/");
         vm.set_layout_policy(policy);
@@ -21,7 +21,7 @@ fn scroll_dictionaries_preserve_conversion_order_and_silent_cancellation() {
 #[test]
 fn native_scroll_uses_state_after_conversion_without_partial_updates() {
     let mut vm = new_storage_html_test_vm("https://scroll-native-conversion.test/");
-    vm.set_layout_policy(moli_page_types::LayoutPolicy::OnDemand);
+    vm.set_layout_policy(moli_page_types::LayoutPolicy::Lazy);
     assert_eq!(
         eval_with_layout_publications(
             &mut vm,

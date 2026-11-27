@@ -93,7 +93,7 @@ async fn native_font_layer_reordering_needs_no_javascript_font_projection() {
         "<!doctype html><span id=probe style='display:inline-block;font:40px OrderFace'>AAAA</span>",
         &loader,
     );
-    vm.set_layout_policy(moli_page_types::LayoutPolicy::OnDemand);
+    vm.set_layout_policy(moli_page_types::LayoutPolicy::Lazy);
     let (narrow, wide) = order_font_data();
     take_owner_font_face_projection_count_for_test();
     vm.eval(&format!(r#"

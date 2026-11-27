@@ -258,7 +258,7 @@ async fn websocket_cdp_capture_screenshot_tracks_paint_and_layout_mutations() {
         spawn_dedicated_fixture_server(screenshot_fixture_app(), "layout-screenshot");
     let fixture_url = format!("http://{fixture_addr}/layout-screenshot-poc");
     let (cdp_addr, protocol_server) =
-        spawn_test_protocol_server_with_layout_policy(LayoutPolicy::OnDemand).await;
+        spawn_test_protocol_server_with_layout_policy(LayoutPolicy::Lazy).await;
     let (mut browser, _) = connect_async(
         discover_browser_websocket_url(cdp_addr)
             .await
@@ -534,7 +534,7 @@ async fn websocket_cdp_capture_screenshot_paints_fresh_canvas_pixels() {
         spawn_dedicated_fixture_server(screenshot_fixture_app(), "canvas-screenshot");
     let fixture_url = format!("http://{fixture_addr}/canvas-screenshot");
     let (cdp_addr, protocol_server) =
-        spawn_test_protocol_server_with_layout_policy(LayoutPolicy::OnDemand).await;
+        spawn_test_protocol_server_with_layout_policy(LayoutPolicy::Lazy).await;
     let (mut browser, _) = connect_async(
         discover_browser_websocket_url(cdp_addr)
             .await
@@ -657,7 +657,7 @@ async fn websocket_mobile_root_scrolls_using_frame_size() {
         "data:text/html,{}",
         percent_encoding::utf8_percent_encode(html, percent_encoding::NON_ALPHANUMERIC),
     );
-    for policy in [LayoutPolicy::OnDemand, LayoutPolicy::Realtime] {
+    for policy in [LayoutPolicy::Lazy, LayoutPolicy::Realtime] {
         let (addr, server) = spawn_test_protocol_server_with_layout_policy(policy).await;
         let (mut socket, _) = connect_async(discover_browser_websocket_url(addr).await.unwrap())
             .await
@@ -674,7 +674,7 @@ async fn websocket_mobile_root_scrolls_using_frame_size() {
         .await;
         assert_cdp_success(&applied, 7);
 
-        // OnDemand getters and setters consume the last published layout.
+        // Lazy getters and setters consume the last published layout.
         let before = capture_png(&mut socket, session, 8).await;
         let (width, height, pixels) = decode_png(&before);
         assert_eq!((width, height), (375, 667), "{policy:?}");
@@ -805,7 +805,7 @@ async fn websocket_mobile_fixed_layout_and_intersection_use_the_frame() {
         "data:text/html,{}",
         percent_encoding::utf8_percent_encode(html, percent_encoding::NON_ALPHANUMERIC),
     );
-    for policy in [LayoutPolicy::OnDemand, LayoutPolicy::Realtime] {
+    for policy in [LayoutPolicy::Lazy, LayoutPolicy::Realtime] {
         let (addr, server) = spawn_test_protocol_server_with_layout_policy(policy).await;
         let (mut socket, _) = connect_async(discover_browser_websocket_url(addr).await.unwrap())
             .await

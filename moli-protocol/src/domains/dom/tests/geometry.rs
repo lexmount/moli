@@ -1402,7 +1402,7 @@ async fn get_node_for_location_can_hit_inert_overlay() {
 async fn get_node_for_location_stays_in_the_inert_viewport_document() {
     for policy in [
         LayoutPolicy::Mock,
-        LayoutPolicy::OnDemand,
+        LayoutPolicy::Lazy,
         LayoutPolicy::Realtime,
     ] {
         let mut ctx = TestContext::new_with_layout_policy(policy);

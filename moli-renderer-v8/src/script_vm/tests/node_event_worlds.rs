@@ -4,7 +4,7 @@ use super::*;
 async fn node_event_callbacks_project_nodes_and_event_state_in_both_layout_modes() {
     for policy in [
         moli_page_types::LayoutPolicy::Mock,
-        moli_page_types::LayoutPolicy::OnDemand,
+        moli_page_types::LayoutPolicy::Lazy,
     ] {
         let mut vm = new_storage_test_vm("https://node-event-worlds.test/");
         vm.set_layout_policy(policy);
@@ -125,7 +125,7 @@ async fn node_event_callbacks_project_nodes_and_event_state_in_both_layout_modes
 async fn bubbling_node_events_project_the_whole_path_and_share_stop_flags() {
     for policy in [
         moli_page_types::LayoutPolicy::Mock,
-        moli_page_types::LayoutPolicy::OnDemand,
+        moli_page_types::LayoutPolicy::Lazy,
     ] {
         let mut vm = new_storage_test_vm("https://bubbling-node-worlds.test/");
         vm.set_layout_policy(policy);
@@ -224,7 +224,7 @@ async fn bubbling_node_events_project_the_whole_path_and_share_stop_flags() {
 async fn borrowed_default_world_node_callback_keeps_the_target_documents_wrappers() {
     for policy in [
         moli_page_types::LayoutPolicy::Mock,
-        moli_page_types::LayoutPolicy::OnDemand,
+        moli_page_types::LayoutPolicy::Lazy,
     ] {
         let mut vm = new_storage_test_vm("https://borrowed-node-world.test/");
         vm.set_layout_policy(policy);

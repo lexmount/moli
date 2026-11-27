@@ -25,8 +25,8 @@ fn paused_screencast_repaints_after_a_scanned_preload_decodes() {
         let url = Url::parse("https://example.test/").unwrap();
         let image_url = url.join("held.png").unwrap();
         let mut page = test_page_vm_with_loader_and_document_url(&loader, Vec::new(), url);
-        page.layout_configuration.policy = LayoutPolicy::OnDemand;
-        page.vm_mut().set_layout_policy(LayoutPolicy::OnDemand);
+        page.layout_configuration.policy = LayoutPolicy::Lazy;
+        page.vm_mut().set_layout_policy(LayoutPolicy::Lazy);
         page.set_viewport_surface(Some(ViewportSurface {
             inner_width: 32,
             inner_height: 32,

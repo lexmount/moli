@@ -1879,7 +1879,7 @@ fn child_browsing_context_lookup_tolerates_document_handle_cycle() {
 async fn cross_origin_child_source_changes_preserve_the_parent_execution_realm() {
     for policy in [
         moli_page_types::LayoutPolicy::Mock,
-        moli_page_types::LayoutPolicy::OnDemand,
+        moli_page_types::LayoutPolicy::Lazy,
         moli_page_types::LayoutPolicy::Realtime,
     ] {
         let url = "https://child-source-sync.test/";

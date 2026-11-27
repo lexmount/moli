@@ -564,7 +564,7 @@ JSON.stringify({
 async fn intersection_entries_use_the_borrowed_callback_realm_in_both_layout_modes() {
     for policy in [
         moli_page_types::LayoutPolicy::Mock,
-        moli_page_types::LayoutPolicy::OnDemand,
+        moli_page_types::LayoutPolicy::Lazy,
     ] {
         let mut vm = observer_callback_test_vm("https://intersection-entry-realm.test/");
         vm.set_layout_policy(policy);
@@ -579,7 +579,7 @@ async fn intersection_entries_use_the_borrowed_callback_realm_in_both_layout_mod
         )
         .unwrap();
         let before_ready = vm.layout_pass_observability_for_test().1;
-        if policy == moli_page_types::LayoutPolicy::OnDemand {
+        if policy == moli_page_types::LayoutPolicy::Lazy {
             // Legacy observers sample an already-published tree. Establish the
             // initial sample after fixture setup, before observer registration.
             assert_eq!(
@@ -593,7 +593,7 @@ async fn intersection_entries_use_the_borrowed_callback_realm_in_both_layout_mod
         let builds = vm.layout_pass_observability_for_test().1;
         assert_eq!(
             builds,
-            before_ready + u64::from(policy == moli_page_types::LayoutPolicy::OnDemand),
+            before_ready + u64::from(policy == moli_page_types::LayoutPolicy::Lazy),
             "readiness publishes one initial real layout and none for Mock: {policy:?}"
         );
         vm.eval(
@@ -623,7 +623,7 @@ async fn intersection_entries_use_the_borrowed_callback_realm_in_both_layout_mod
             r#"[{"callbackRealm":true,"observerRealm":true,"receiver":true,"arrayRealm":true,"entryRealm":true,"rectRealm":true,"target":true,"count":1,"argc":2}]"#,
             "{policy:?}"
         );
-        if policy == moli_page_types::LayoutPolicy::OnDemand {
+        if policy == moli_page_types::LayoutPolicy::Lazy {
             assert_eq!(vm.eval("entryWidth").unwrap(), "100");
         }
         assert_eq!(
@@ -638,7 +638,7 @@ async fn intersection_entries_use_the_borrowed_callback_realm_in_both_layout_mod
 async fn intersection_entries_project_targets_into_the_isolated_callback_world() {
     for policy in [
         moli_page_types::LayoutPolicy::Mock,
-        moli_page_types::LayoutPolicy::OnDemand,
+        moli_page_types::LayoutPolicy::Lazy,
     ] {
         let mut vm = new_storage_test_vm("https://intersection-isolated-world.test/");
         vm.set_layout_policy(policy);

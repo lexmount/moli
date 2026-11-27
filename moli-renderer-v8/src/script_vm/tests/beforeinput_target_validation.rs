@@ -3,7 +3,7 @@ use super::*;
 fn beforeinput_target_change(mutation: &str, should_edit: bool) {
     for policy in [
         moli_page_types::LayoutPolicy::Mock,
-        moli_page_types::LayoutPolicy::OnDemand,
+        moli_page_types::LayoutPolicy::Lazy,
     ] {
         let mut vm = new_storage_html_test_vm("https://beforeinput-target.test/");
         vm.set_layout_policy(policy);

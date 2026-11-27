@@ -77,7 +77,7 @@ impl AppConfig {
                 if let Some(interval_ms) = args.screencast_interval {
                     if !config.browser.layout_policy().uses_real_layout() {
                         bail!(
-                            "--screencast-interval-ms requires --layout or --realtime (MOLI_LAYOUT=true or MOLI_REALTIME=true)"
+                            "--screencast-interval-ms requires --lazy or --realtime (MOLI_LAYOUT=true or MOLI_REALTIME=true)"
                         );
                     }
                     config.server.screencast_interval_ms = interval_ms;
@@ -109,14 +109,14 @@ fn apply_common_args(config: &mut AppConfig, common: &CommonArgs) -> Result<()> 
         .set_web_security_disabled(common.disable_web_security);
     let layout_policy = if common.realtime {
         LayoutPolicy::Realtime
-    } else if common.layout {
-        LayoutPolicy::OnDemand
+    } else if common.lazy {
+        LayoutPolicy::Lazy
     } else {
         LayoutPolicy::Mock
     };
     if common.scrollbars && !layout_policy.uses_real_layout() {
         bail!(
-            "--scrollbars requires --layout or --realtime (MOLI_LAYOUT=true or MOLI_REALTIME=true)"
+            "--scrollbars requires --lazy or --realtime (MOLI_LAYOUT=true or MOLI_REALTIME=true)"
         );
     }
 

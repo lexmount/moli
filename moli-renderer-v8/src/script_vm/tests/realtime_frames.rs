@@ -75,7 +75,7 @@ fn realtime_frame_viewport_reads_share_current_layout_and_propagate_failures() {
 fn viewport_reads_do_not_add_layout_to_legacy_modes_or_top_level_queries() {
     for policy in [
         LayoutPolicy::Mock,
-        LayoutPolicy::OnDemand,
+        LayoutPolicy::Lazy,
         LayoutPolicy::Realtime,
     ] {
         let mut vm = frame_fixture(policy, 320, 100);
@@ -186,7 +186,7 @@ fn realtime_layout_zero_frame_resize_and_display_none_have_distinct_results() {
 
 #[test]
 fn legacy_layout_keeps_its_existing_zero_frame_coverage() {
-    let mut vm = frame_fixture(LayoutPolicy::OnDemand, 0, 0);
+    let mut vm = frame_fixture(LayoutPolicy::Lazy, 0, 0);
     let before = vm.layout_pass_observability_for_test().1;
     assert_eq!(vm.eval("String(fixed.offsetWidth)").unwrap(), "0");
     assert_eq!(vm.layout_pass_observability_for_test().1, before + 1);
@@ -251,7 +251,7 @@ fn realtime_child_window_reads_refresh_then_preserve_hidden_viewports() {
 
 #[test]
 fn legacy_hidden_frame_cssom_keeps_its_existing_empty_declaration() {
-    for policy in [LayoutPolicy::Mock, LayoutPolicy::OnDemand] {
+    for policy in [LayoutPolicy::Mock, LayoutPolicy::Lazy] {
         let mut vm = frame_fixture(policy, 320, 100);
         vm.eval("globalThis.retained=getComputedStyle(fixed);frame.style.display='none'")
             .unwrap();

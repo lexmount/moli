@@ -50,7 +50,7 @@ impl Default for RendererPageActionWindow {
 impl PageVm {
     pub(in crate::runtime) fn input_dispatch_policy(&self) -> RendererInputDispatchPolicy {
         match self.vm().layout_policy() {
-            moli_page_types::LayoutPolicy::Mock | moli_page_types::LayoutPolicy::OnDemand => {
+            moli_page_types::LayoutPolicy::Mock | moli_page_types::LayoutPolicy::Lazy => {
                 RendererInputDispatchPolicy::LegacyWindow
             }
             moli_page_types::LayoutPolicy::Realtime => RendererInputDispatchPolicy::Interactive,

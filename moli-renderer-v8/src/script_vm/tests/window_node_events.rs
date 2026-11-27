@@ -7,7 +7,7 @@ use super::*;
 async fn isolated_node_events_project_receivers_targets_and_share_dispatch_state() {
     for policy in [
         moli_page_types::LayoutPolicy::Mock,
-        moli_page_types::LayoutPolicy::OnDemand,
+        moli_page_types::LayoutPolicy::Lazy,
         moli_page_types::LayoutPolicy::Realtime,
     ] {
         let mut vm = new_storage_test_vm("https://node-events.test/");
@@ -73,7 +73,7 @@ async fn isolated_node_events_project_receivers_targets_and_share_dispatch_state
 async fn adopted_node_events_use_current_document_window_in_the_listener_world() {
     for policy in [
         moli_page_types::LayoutPolicy::Mock,
-        moli_page_types::LayoutPolicy::OnDemand,
+        moli_page_types::LayoutPolicy::Lazy,
         moli_page_types::LayoutPolicy::Realtime,
     ] {
         let mut vm = new_storage_test_vm("https://adopted-node-events.test/");
@@ -109,7 +109,7 @@ async fn adopted_node_events_use_current_document_window_in_the_listener_world()
 async fn inert_document_factories_preserve_native_execution_context_for_node_events() {
     for policy in [
         moli_page_types::LayoutPolicy::Mock,
-        moli_page_types::LayoutPolicy::OnDemand,
+        moli_page_types::LayoutPolicy::Lazy,
         moli_page_types::LayoutPolicy::Realtime,
     ] {
         let mut vm = new_storage_test_vm("https://inert-node-events.test/");
@@ -169,7 +169,7 @@ async fn inert_document_factories_preserve_native_execution_context_for_node_eve
 fn template_owner_document_clones_inherit_execution_context() {
     for policy in [
         moli_page_types::LayoutPolicy::Mock,
-        moli_page_types::LayoutPolicy::OnDemand,
+        moli_page_types::LayoutPolicy::Lazy,
     ] {
         let mut vm = new_storage_test_vm("https://template-clone-context.test/");
         vm.set_layout_policy(policy);
@@ -205,7 +205,7 @@ fn template_owner_document_clones_inherit_execution_context() {
 async fn retired_frame_nodes_and_inert_factories_distinguish_execution_context_presence() {
     for policy in [
         moli_page_types::LayoutPolicy::Mock,
-        moli_page_types::LayoutPolicy::OnDemand,
+        moli_page_types::LayoutPolicy::Lazy,
         moli_page_types::LayoutPolicy::Realtime,
     ] {
         let mut vm = new_storage_test_vm("https://retired-node-events.test/");
@@ -270,7 +270,7 @@ async fn retired_frame_nodes_and_inert_factories_distinguish_execution_context_p
 fn inert_node_execution_context_survives_creation_realm_and_wrapper_cache_retirement() {
     for policy in [
         moli_page_types::LayoutPolicy::Mock,
-        moli_page_types::LayoutPolicy::OnDemand,
+        moli_page_types::LayoutPolicy::Lazy,
         moli_page_types::LayoutPolicy::Realtime,
     ] {
         let mut vm = new_storage_test_vm("https://inert-node-realm-retirement.test/");
@@ -348,7 +348,7 @@ fn inert_node_execution_context_survives_creation_realm_and_wrapper_cache_retire
 fn popup_document_event_authority_follows_its_window_instead_of_parser_provenance() {
     for policy in [
         moli_page_types::LayoutPolicy::Mock,
-        moli_page_types::LayoutPolicy::OnDemand,
+        moli_page_types::LayoutPolicy::Lazy,
         moli_page_types::LayoutPolicy::Realtime,
     ] {
         let mut vm = new_storage_test_vm("https://popup-node-events.test/");

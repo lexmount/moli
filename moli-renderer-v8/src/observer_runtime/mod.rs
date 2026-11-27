@@ -1555,7 +1555,7 @@ fn rect_from_intersection_geometry(
 
 // The helpers below belong exclusively to the legacy `LayoutPolicy::Mock`
 // IntersectionObserver branch and read **only** the inline `style="..."`
-// attribute. The default OnDemand branch batches real layout queries in
+// attribute. The default Lazy branch batches real layout queries in
 // `observer_runtime::intersection` and never calls them.
 //
 // The compatibility path intentionally does not consult the cascade: doing so

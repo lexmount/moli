@@ -61,7 +61,7 @@ fn default_child_frame_client_rect() -> ClientRect {
 
 // Legacy geometry policy for explicit LayoutPolicy::Mock:
 //
-// OnDemand consumers must enter the unified GeometryProvider, which answers
+// Lazy consumers must enter the unified GeometryProvider, which answers
 // from the latest frozen tree or performs a cold refresh, and must never call
 // these helpers. Mock remains deterministic, cheap, and side-effect free for
 // the default CLI policy without `--layout`:
@@ -88,7 +88,7 @@ fn default_child_frame_client_rect() -> ClientRect {
 //   authored-size resolution belongs here.
 //
 // Public consumers reach this contract only through the Mock branch in
-// `geometry/provider.rs`; the default OnDemand branch performs a fresh complete
+// `geometry/provider.rs`; the default Lazy branch performs a fresh complete
 // layout pass and copies owned answers.
 fn is_mock_rendered_element(runtime: &PageScriptHost, handle: DomHandle) -> bool {
     runtime.cached_mock_rendered_element(handle, uncached_is_mock_rendered_element)

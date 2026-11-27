@@ -2,7 +2,7 @@ use super::*;
 
 fn measurement_vm() -> StandaloneScriptVmHarness {
     let mut vm = new_storage_html_test_vm("https://resize-measurement.test/");
-    vm.set_layout_policy(moli_page_types::LayoutPolicy::OnDemand);
+    vm.set_layout_policy(moli_page_types::LayoutPolicy::Lazy);
     vm.eval(
         r#"
         for (const id of ['content', 'border', 'device']) {
@@ -180,7 +180,7 @@ async fn resize_observer_entries_preserve_webidl_snapshots_and_callback_realms()
 #[test]
 fn ondemand_ro_uses_published_css_box_axes_and_unzoomed_dimensions() {
     let mut vm = new_storage_html_test_vm("https://resize-published-axis.test/");
-    vm.set_layout_policy(moli_page_types::LayoutPolicy::OnDemand);
+    vm.set_layout_policy(moli_page_types::LayoutPolicy::Lazy);
     vm.eval(r#"
         document.body.innerHTML='<div id=target style="display:block;width:50px;height:100px;padding:0;border:2px solid;box-sizing:content-box;writing-mode:vertical-lr;zoom:2"></div>';
         window.samples=[];
@@ -208,7 +208,7 @@ fn ondemand_ro_uses_published_css_box_axes_and_unzoomed_dimensions() {
     assert_eq!(
         vm.eval("JSON.stringify(samples)").unwrap(),
         "[[50,100,100,50,104,54]]",
-        "OnDemand must continue sampling the axes frozen with its previous layout"
+        "Lazy must continue sampling the axes frozen with its previous layout"
     );
     assert_eq!(vm.layout_pass_observability_for_test().1, builds);
     refresh_layout_for_test(&mut vm);
@@ -234,7 +234,7 @@ fn ondemand_ro_uses_published_css_box_axes_and_unzoomed_dimensions() {
 #[test]
 fn real_ro_css_box_projection_excludes_non_replaced_inline_fragments() {
     let mut vm = new_storage_html_test_vm("https://resize-css-box-kind.test/");
-    vm.set_layout_policy(moli_page_types::LayoutPolicy::OnDemand);
+    vm.set_layout_policy(moli_page_types::LayoutPolicy::Lazy);
     vm.eval(r#"
         document.body.innerHTML='<span id=inline style="padding:0;border:2px solid">text</span><span id=atomic style="display:inline-block;width:50px;height:100px;padding:0;border:2px solid;box-sizing:content-box;writing-mode:vertical-lr"></span>';
         window.samples=[];

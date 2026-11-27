@@ -244,8 +244,8 @@ mod tests {
         let mut config = BrowserConfig::default();
         assert_eq!(config.layout_policy(), LayoutPolicy::Mock);
 
-        config.set_layout_policy(LayoutPolicy::OnDemand);
-        assert_eq!(config.layout_policy(), LayoutPolicy::OnDemand);
+        config.set_layout_policy(LayoutPolicy::Lazy);
+        assert_eq!(config.layout_policy(), LayoutPolicy::Lazy);
 
         let config = config.with_layout_policy(LayoutPolicy::Mock);
         assert_eq!(config.layout_policy(), LayoutPolicy::Mock);

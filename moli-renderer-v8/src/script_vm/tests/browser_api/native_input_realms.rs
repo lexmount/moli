@@ -50,7 +50,7 @@ fn input_hit_test_policy_keeps_viewport_clipping_independent_of_fallback() {
     use moli_layout::LayoutPoint;
     use moli_page_types::LayoutPolicy;
 
-    for layout_policy in [LayoutPolicy::Mock, LayoutPolicy::OnDemand] {
+    for layout_policy in [LayoutPolicy::Mock, LayoutPolicy::Lazy] {
         let mut vm = new_parsed_test_vm(
             "https://hit-test-viewport-policy.test/",
             "<!doctype html><html id='root'><body><button>Target</button></body></html>",
@@ -99,7 +99,7 @@ fn input_hit_test_policy_keeps_viewport_clipping_independent_of_fallback() {
 fn mouse_release_over_inert_document_clears_capture_and_compatibility_state() {
     use moli_page_types::LayoutPolicy;
 
-    for policy in [LayoutPolicy::OnDemand, LayoutPolicy::Realtime] {
+    for policy in [LayoutPolicy::Lazy, LayoutPolicy::Realtime] {
         for release_x in [55.0, -20.0] {
             let mut vm = new_parsed_test_vm(
                 "https://inert-mouse-release.test/",
@@ -171,7 +171,7 @@ fn mouse_release_over_inert_document_clears_capture_and_compatibility_state() {
 fn mouse_input_in_an_inert_child_viewport_targets_its_document_root() {
     use moli_page_types::LayoutPolicy;
 
-    for policy in [LayoutPolicy::OnDemand, LayoutPolicy::Realtime] {
+    for policy in [LayoutPolicy::Lazy, LayoutPolicy::Realtime] {
         let mut vm = new_storage_html_test_vm("https://inert-child-mouse-input.test/");
         vm.set_layout_policy(policy);
         vm.eval(
@@ -225,7 +225,7 @@ fn mouse_input_in_an_inert_child_viewport_targets_its_document_root() {
 fn touch_input_in_an_inert_child_viewport_targets_its_document_root() {
     use moli_page_types::LayoutPolicy;
 
-    for policy in [LayoutPolicy::OnDemand, LayoutPolicy::Realtime] {
+    for policy in [LayoutPolicy::Lazy, LayoutPolicy::Realtime] {
         let mut vm = new_storage_html_test_vm("https://inert-child-touch-input.test/");
         vm.set_layout_policy(policy);
         vm.eval(

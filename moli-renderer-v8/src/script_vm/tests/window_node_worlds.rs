@@ -16,7 +16,7 @@ pub(super) async fn child_node_world(vm: &mut ScriptVm, name: &str) -> i64 {
 async fn isolated_dom_wrappers_preserve_identity_when_adopted_between_windows() {
     for policy in [
         moli_page_types::LayoutPolicy::Mock,
-        moli_page_types::LayoutPolicy::OnDemand,
+        moli_page_types::LayoutPolicy::Lazy,
         moli_page_types::LayoutPolicy::Realtime,
     ] {
         let mut vm = new_storage_test_vm("https://node-world-adoption.test/");
@@ -112,7 +112,7 @@ async fn isolated_dom_wrappers_preserve_identity_when_adopted_between_windows() 
 async fn retiring_one_node_world_member_releases_only_its_native_wrapper_roots() {
     for policy in [
         moli_page_types::LayoutPolicy::Mock,
-        moli_page_types::LayoutPolicy::OnDemand,
+        moli_page_types::LayoutPolicy::Lazy,
         moli_page_types::LayoutPolicy::Realtime,
     ] {
         let mut vm = new_storage_test_vm("https://node-world-roots.test/");
@@ -180,7 +180,7 @@ async fn retiring_one_node_world_member_releases_only_its_native_wrapper_roots()
 fn collected_isolated_worlds_release_their_optional_wrapper_cache_index() {
     for policy in [
         moli_page_types::LayoutPolicy::Mock,
-        moli_page_types::LayoutPolicy::OnDemand,
+        moli_page_types::LayoutPolicy::Lazy,
         moli_page_types::LayoutPolicy::Realtime,
     ] {
         let mut vm = new_storage_test_vm("https://node-world-cache-gc.test/");
