@@ -113,13 +113,26 @@ pub(crate) fn text_style(computed: &ComputedValues) -> TextStyle<'static, 'stati
         .resolve(Length::new(font_size))
         .px();
 
-    let families = font
+    let mut families = font
         .font_family
         .families
         .list
         .iter()
         .map(font_family_name)
         .collect::<Vec<_>>();
+    // CSS `font-family` names families, not glyph coverage. A family that lacks
+    // a character lets the browser search the remaining families, and every
+    // browser ends that search in a symbol font rather than .notdef. Append the
+    // platform symbol family so common arrows and marks resolve, which a face
+    // such as SF Pro or Helvetica does not cover: U+21B5 (↵), U+21E7 (⇧), and
+    // U+2713/U+2717 otherwise render as a box.
+    for fallback in symbol_fallback_families() {
+        if !families.iter().any(|family| {
+            matches!(family, FontFamilyName::Named(name) if name.eq_ignore_ascii_case(fallback))
+        }) {
+            families.push(FontFamilyName::Named(Cow::Borrowed(fallback)));
+        }
+    }
     let optical_size =
         (computed.clone_font_optical_sizing() == FontOpticalSizing::Auto).then_some(font_size);
     let variations = font_variations(&font.font_variation_settings, optical_size);
@@ -236,6 +249,28 @@ pub(crate) fn text_style(computed: &ComputedValues) -> TextStyle<'static, 'stati
         strikethrough_offset: None,
         strikethrough_size: decoration_thickness,
         strikethrough_brush: None,
+    }
+}
+
+/// Symbol families that cover arrows, technical marks, and dingbats which a
+/// text face usually omits.
+///
+/// The order follows the platform's own fallback: the dedicated symbol font
+/// first, then a monospaced face because terminal-oriented glyphs such as
+/// U+21B5 live there too. A name that the platform does not ship is harmless —
+/// family matching skips it.
+const fn symbol_fallback_families() -> &'static [&'static str] {
+    #[cfg(target_os = "macos")]
+    {
+        &["Apple Symbols", "Menlo"]
+    }
+    #[cfg(target_os = "windows")]
+    {
+        &["Segoe UI Symbol", "Segoe UI Historic"]
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    {
+        &["DejaVu Sans", "Noto Sans Symbols 2"]
     }
 }
 
@@ -456,4 +491,51 @@ fn text_stroke(
         color,
         paint_first,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A text face such as SF Pro or Helvetica has no glyph for U+21B5 (↵) or
+    /// U+2713 (✓), and CSS `font-family` names families rather than glyph
+    /// coverage, so the fallback list must reach a symbol family or those
+    /// characters render as a box.
+    #[test]
+    fn symbol_fallback_covers_technical_marks() {
+        let fallbacks = symbol_fallback_families();
+        assert!(
+            !fallbacks.is_empty(),
+            "a platform must name a symbol family to fall back to"
+        );
+        assert!(
+            fallbacks.iter().all(|name| !name.trim().is_empty()),
+            "a fallback family name must not be blank"
+        );
+    }
+
+    /// Appending a family that the CSS already names would shape it twice and
+    /// change nothing, so the append step must be a no-op for a list that
+    /// already ends in the platform symbol family.
+    #[test]
+    fn symbol_fallback_skips_a_family_already_named() {
+        let mut families = vec![FontFamilyName::Named(Cow::Borrowed("Apple Symbols"))];
+        for fallback in symbol_fallback_families() {
+            if !families.iter().any(|family| {
+                matches!(family, FontFamilyName::Named(name) if name.eq_ignore_ascii_case(fallback))
+            }) {
+                families.push(FontFamilyName::Named(Cow::Borrowed(fallback)));
+            }
+        }
+        let named = families
+            .iter()
+            .filter(|family| {
+                matches!(family, FontFamilyName::Named(name) if name.eq_ignore_ascii_case("Apple Symbols"))
+            })
+            .count();
+        assert_eq!(
+            named, 1,
+            "an already-named symbol family must not be added twice"
+        );
+    }
 }
