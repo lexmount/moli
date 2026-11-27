@@ -380,8 +380,9 @@ mod tests {
     #[test]
     fn accept_language_pins_navigator_language_for_fetch_and_serve() {
         let header = "en;q=0,fr;q=0.8,zh-CN,zh;q=0.8";
+        let flag = format!("--accept-lang={header}");
         for command in ["fetch", "serve"] {
-            let mut arguments = vec!["moli", command, "--accept-language", header];
+            let mut arguments = vec!["moli", command, flag.as_str()];
             if command == "fetch" {
                 arguments.push("https://example.test/");
             }
@@ -411,18 +412,15 @@ mod tests {
             "en;q=1.01",
             "en\n",
         ] {
-            let cli = Cli::try_parse_from(["moli", "serve", "--accept-language", value]);
-            assert!(
-                cli.is_err(),
-                "`--accept-language {value:?}` should be rejected"
-            );
+            let cli = Cli::try_parse_from(["moli", "serve", "--accept-lang", value]);
+            assert!(cli.is_err(), "`--accept-lang {value:?}` should be rejected");
         }
     }
 
     #[test]
     fn accept_language_requires_a_concrete_preference() {
         for header in ["*", "en;q=0", "en;q=0,*;q=0"] {
-            let error = Cli::try_parse_from(["moli", "serve", "--accept-language", header])
+            let error = Cli::try_parse_from(["moli", "serve", "--accept-lang", header])
                 .expect_err("Navigator needs a concrete language preference");
             assert!(
                 error

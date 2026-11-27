@@ -717,7 +717,7 @@ pub struct CommonArgs {
     /// then `LANGUAGE`, `LC_ALL`, `LC_MESSAGES`, or `LANG`, with `en-US,en;q=0.9`
     /// as the fallback.
     #[arg(
-        long,
+        long = "accept-lang",
         value_name = "LANGUAGES",
         env = "MOLI_ACCEPT_LANGUAGE",
         value_parser = parse_accept_language_arg
