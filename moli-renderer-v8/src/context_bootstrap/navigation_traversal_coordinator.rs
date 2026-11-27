@@ -15,8 +15,8 @@ use super::navigation_traversal_execution::{
 use super::navigation_traversal_plan::JointTraversalPlan;
 use super::navigation_window::{
     child_browsing_context_handle_for_runtime_owner, navigation_document_has_opaque_origin,
-    navigation_document_is_active, window_history_for_holder, window_location_for_holder,
-    window_navigation_for_holder, window_task_target_for_runtime_owner,
+    navigation_document_is_active, runtime_window_is_global, window_history_for_holder,
+    window_location_for_holder, window_navigation_for_holder, window_task_target_for_runtime_owner,
 };
 use crate::document_runtime::DomHandle;
 use crate::native_bridge::history_traversal::{
@@ -153,26 +153,40 @@ pub(super) fn execute<'s>(
     };
     let mut precommit = Vec::new();
     for (index, target) in plan.targets.iter().enumerate() {
-        if history_entry_seed_for_traversal(
+        let cross_document = history_entry_seed_for_traversal(
             scope,
             target.owner,
             target.current_index,
             target.target_index,
         )
-        .is_some()
-        {
+        .is_some();
+        if cross_document {
             dispatch_beforeunload_for_runtime_owner(scope, target.owner);
         }
         if validate(scope, &admission).is_none() {
             abort(scope, &admission, None);
             return;
         }
-        // Only the initiating Navigation owns this API method's info.
-        let info = initiator_info.filter(|_| target.owner.strict_equals(plan.owner.into()));
         let navigation = admission.participants[index]
             .navigation
             .as_ref()
             .map(|value| v8::Local::new(scope, value));
+        if !cross_document && runtime_window_is_global(scope, target.owner) {
+            if !navigation.is_some_and(|navigation| {
+                super::navigation_result::cancel_active_cross_document_navigation(
+                    scope, navigation, None,
+                )
+            }) && let Some(host_ptr) = context_host_ptr_from_global_bridge(scope)
+            {
+                unsafe { &mut *host_ptr }.clear_pending_location_navigation();
+            }
+            if validate(scope, &admission).is_none() {
+                abort(scope, &admission, None);
+                return;
+            }
+        }
+        // Only the initiating Navigation owns this API method's info.
+        let info = initiator_info.filter(|_| target.owner.strict_equals(plan.owner.into()));
         let outcome = navigation
             .map(|navigation| {
                 dispatch_navigation_traverse_event_with_outcome(
