@@ -4,11 +4,3 @@ retries = 2
 status-level = "retry"
 final-status-level = "flaky"
 success-output = "never"
-
-# Keep concurrent browsers and local fixtures within the runner CPU budget.
-[test-groups.cli-subprocesses]
-max-threads = 4
-
-[[profile.ci.overrides]]
-filter = 'package(=moli) & (binary(=fetch_cli) | binary(=cookie_file_serve))'
-test-group = "cli-subprocesses"
