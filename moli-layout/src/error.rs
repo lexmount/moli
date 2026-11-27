@@ -68,6 +68,9 @@ pub enum LayoutError {
     /// An internal box reference did not belong to the current pass.
     #[error("layout box index {index} does not belong to this pass")]
     InvalidBoxReference { index: usize },
+    /// An opaque construction handle is missing or has been retired.
+    #[error("layout box handle {id:?} does not belong to this world")]
+    InvalidBoxHandle { id: crate::LayoutBoxId },
     /// The numeric parent relation violated the pass-local tree contract.
     #[error("numeric layout parent relation contains a cycle at box index {index}")]
     NumericTreeCycle { index: usize },

@@ -120,7 +120,7 @@ pub(super) fn project_inline_box_fragments<N>(
     N: Copy + Debug + Eq + Hash,
 {
     let world = projection.world;
-    let owner = &world.boxes[owner_id.index()];
+    let owner = &world.boxes[owner_id];
     let Some(context) = owner.inline_layout.as_ref() else {
         return;
     };

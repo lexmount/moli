@@ -117,7 +117,7 @@ impl<'a, N: Copy + Debug + Eq + Hash> PaintProjection<'a, N> {
     }
 
     pub(crate) fn replaced_image(&self, id: LayoutBoxId) -> Option<Cow<'a, LayoutImageResource>> {
-        let layout_box = &self.world.boxes[id.index()];
+        let layout_box = &self.world.boxes[id];
         if let Some(source) = layout_box.source()
             && let Some(kind) = layout_box
                 .element_semantics()
@@ -166,13 +166,19 @@ impl<'a, N: Copy + Debug + Eq + Hash> PaintProjection<'a, N> {
     }
 
     pub(crate) fn inline_fragments(&self, id: LayoutBoxId) -> &[LayoutFragment] {
-        &self.fragments[self.metadata.boxes[id.index()].inline_fragments.clone()]
+        &self.fragments[self.metadata.boxes[self.world.boxes.index_of(id)]
+            .inline_fragments
+            .clone()]
     }
 
     pub(crate) fn resolved_transform_has_unsupported_3d(&self, id: LayoutBoxId) -> bool {
         match self.geometry {
-            PaintGeometry::LayoutPass { transforms, .. } => transforms[id.index()],
-            PaintGeometry::Published { scroll, .. } => scroll.resolved_transform(id.index()),
+            PaintGeometry::LayoutPass { transforms, .. } => {
+                transforms[self.world.boxes.index_of(id)]
+            }
+            PaintGeometry::Published { scroll, .. } => {
+                scroll.resolved_transform(self.world.boxes.index_of(id))
+            }
         }
         .has_unsupported_3d
     }

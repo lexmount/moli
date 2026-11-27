@@ -1,8 +1,8 @@
 use std::{collections::HashMap, fmt::Debug, hash::Hash, mem::size_of, num::NonZeroU32};
 
 use crate::{
-    FrozenLayoutBox, LayoutBoxGeometry, LayoutBoxId, LayoutError, LayoutPoint, LayoutScrollExtent,
-    LayoutScrollbarGeometry, LayoutWorld, style::ResolvedLayoutTransform,
+    FrozenLayoutBox, LayoutBoxGeometry, LayoutError, LayoutOutputBoxId, LayoutPoint,
+    LayoutScrollExtent, LayoutScrollbarGeometry, LayoutWorld, style::ResolvedLayoutTransform,
 };
 
 use super::{
@@ -13,11 +13,11 @@ use super::{
 /// Stable inputs for reprojecting a single frozen Document. Local box and
 /// fragment geometry, clip chains and scroll ranges stay in the frozen tree.
 pub(crate) struct ScrollProjection<N> {
-    root: LayoutBoxId,
+    root: LayoutOutputBoxId,
     placements: Vec<BoxPlacement>,
     layout_origins: Vec<LayoutPoint>,
     sticky: HashMap<usize, StickyConstraints>,
-    scroll_sources: Vec<(LayoutBoxId, N)>,
+    scroll_sources: Vec<(LayoutOutputBoxId, N)>,
     local: Option<LocalScrollSpaces>,
 }
 
@@ -30,7 +30,7 @@ struct LocalScrollSpaces {
 }
 
 struct LocalScrollSpace {
-    box_id: LayoutBoxId,
+    box_id: LayoutOutputBoxId,
     parent: Option<NonZeroU32>,
     published_offset: LayoutPoint,
     translation: ScrollTranslation,
@@ -44,10 +44,10 @@ pub(crate) struct ScrollTranslation {
 
 impl LocalScrollSpaces {
     fn new<N>(
-        root: LayoutBoxId,
+        root: LayoutOutputBoxId,
         placements: &[BoxPlacement],
         extents: &[LayoutScrollExtent],
-        scroll_sources: &[(LayoutBoxId, N)],
+        scroll_sources: &[(LayoutOutputBoxId, N)],
     ) -> Option<Self> {
         let mut sources = scroll_sources
             .iter()
@@ -89,7 +89,7 @@ impl LocalScrollSpaces {
     fn refresh<N>(
         &mut self,
         boxes: &[FrozenLayoutBox<N>],
-        offsets: &HashMap<LayoutBoxId, LayoutPoint>,
+        offsets: &HashMap<LayoutOutputBoxId, LayoutPoint>,
     ) {
         self.has_translation = false;
         for index in 0..self.spaces.len() {
@@ -119,7 +119,7 @@ impl LocalScrollSpaces {
     fn reset<N>(
         &mut self,
         boxes: &[FrozenLayoutBox<N>],
-        offsets: &HashMap<LayoutBoxId, LayoutPoint>,
+        offsets: &HashMap<LayoutOutputBoxId, LayoutPoint>,
     ) {
         self.has_translation = false;
         for space in &mut self.spaces {
@@ -140,7 +140,7 @@ impl<N: Copy + Debug + Eq + Hash> ScrollProjection<N> {
         placement: impl Fn(usize) -> Result<(BoxPlacement, Option<StickyConstraints>), LayoutError>,
     ) -> Result<Self, LayoutError> {
         let mut projection = Self {
-            root: world.root,
+            root: world.output_id(world.root),
             placements: Vec::with_capacity(boxes.len()),
             layout_origins: Vec::new(),
             sticky: HashMap::new(),
@@ -160,7 +160,7 @@ impl<N: Copy + Debug + Eq + Hash> ScrollProjection<N> {
             {
                 projection
                     .scroll_sources
-                    .push((LayoutBoxId::from_index(index), source));
+                    .push((LayoutOutputBoxId::from_index(index), source));
             }
         }
         if !projection.sticky.is_empty() {
@@ -171,7 +171,7 @@ impl<N: Copy + Debug + Eq + Hash> ScrollProjection<N> {
         }
         if parents_precede_children && projection.sticky.is_empty() {
             projection.local = LocalScrollSpaces::new(
-                world.root,
+                projection.root,
                 &projection.placements,
                 extents,
                 &projection.scroll_sources,
@@ -193,7 +193,7 @@ impl<N: Copy + Debug + Eq + Hash> ScrollProjection<N> {
             + self.placements.capacity() * size_of::<BoxPlacement>()
             + self.layout_origins.capacity() * size_of::<LayoutPoint>()
             + self.sticky.capacity() * size_of::<(usize, StickyConstraints)>()
-            + self.scroll_sources.capacity() * size_of::<(LayoutBoxId, N)>()
+            + self.scroll_sources.capacity() * size_of::<(LayoutOutputBoxId, N)>()
             + self.local.as_ref().map_or(0, |local| {
                 local.box_spaces.capacity() * size_of::<Option<NonZeroU32>>()
                     + local.spaces.capacity() * size_of::<LocalScrollSpace>()

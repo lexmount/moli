@@ -31,7 +31,7 @@ pub(super) fn project_replaced_image<N>(
 ) where
     N: Copy + Debug + Eq + Hash,
 {
-    let layout_box = &projection.world.boxes[id.index()];
+    let layout_box = &projection.world.boxes[id];
     let Some(kind) = layout_box
         .element_semantics()
         .and_then(|semantics| semantics.replaced)
@@ -178,7 +178,7 @@ fn project_unavailable_image<N>(
 ) where
     N: Copy + Debug + Eq + Hash,
 {
-    let layout_box = &projection.world.boxes[id.index()];
+    let layout_box = &projection.world.boxes[id];
     snapshot.push_diagnostic(PaintDiagnostic::new(
         "replaced-content-placeholder",
         format!(

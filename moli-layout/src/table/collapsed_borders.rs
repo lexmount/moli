@@ -385,7 +385,7 @@ pub(super) fn prepare_collapsed_table_borders<N>(
             cell.column,
             cell.row_span,
             cell.column_span,
-            &world.boxes[cell.id.index()].style,
+            &world.boxes[cell.id].style,
             box_order,
         );
         if cell.row_span > 1 || cell.column_span > 1 {
@@ -399,7 +399,7 @@ pub(super) fn prepare_collapsed_table_borders<N>(
             0,
             1,
             structure.column_count,
-            &world.boxes[row.id.index()].style,
+            &world.boxes[row.id].style,
             box_order,
         );
     }
@@ -413,7 +413,7 @@ pub(super) fn prepare_collapsed_table_borders<N>(
             0,
             rows.len(),
             structure.column_count,
-            &world.boxes[group.index()].style,
+            &world.boxes[group].style,
             box_order,
         );
     }
@@ -422,7 +422,7 @@ pub(super) fn prepare_collapsed_table_borders<N>(
     for column in structure
         .columns
         .iter()
-        .filter(|column| world.boxes[column.id.index()].kind == LayoutBoxKind::TableColumn)
+        .filter(|column| world.boxes[column.id].kind == LayoutBoxKind::TableColumn)
     {
         for offset in 0..column.span {
             borders.merge_box(
@@ -430,7 +430,7 @@ pub(super) fn prepare_collapsed_table_borders<N>(
                 column.start + offset,
                 structure.rows.len(),
                 1,
-                &world.boxes[column.id.index()].style,
+                &world.boxes[column.id].style,
                 column_box_order,
             );
         }
@@ -443,7 +443,7 @@ pub(super) fn prepare_collapsed_table_borders<N>(
             tracks.start,
             structure.rows.len(),
             tracks.len(),
-            &world.boxes[group.index()].style,
+            &world.boxes[group].style,
             column_group_box_order,
         );
     }
@@ -453,17 +453,17 @@ pub(super) fn prepare_collapsed_table_borders<N>(
         0,
         structure.rows.len(),
         structure.column_count,
-        &world.boxes[root.index()].style,
+        &world.boxes[root].style,
         box_order,
     );
 
     let table_strut = borders.table_strut();
     set_layout_border(world, root, table_strut);
-    world.boxes[root.index()].collapsed_table_border_part = true;
+    world.boxes[root].collapsed_table_border_part = true;
     for cell in &structure.cells {
         let strut = borders.cell_strut(cell);
         set_layout_border(world, cell.id, strut);
-        world.boxes[cell.id.index()].collapsed_table_border_part = true;
+        world.boxes[cell.id].collapsed_table_border_part = true;
     }
     for part in structure
         .rows
@@ -473,7 +473,7 @@ pub(super) fn prepare_collapsed_table_borders<N>(
         .chain(structure.columns.iter().map(|column| column.id))
         .chain(structure.columns.iter().filter_map(|column| column.group))
     {
-        world.boxes[part.index()].collapsed_table_border_part = true;
+        world.boxes[part].collapsed_table_border_part = true;
     }
     world.collapsed_table_borders.insert(root, borders);
 }
@@ -495,7 +495,7 @@ fn set_layout_border<N>(world: &mut LayoutWorld<N>, id: LayoutBoxId, widths: Pai
 where
     N: Copy + Debug + Eq + Hash,
 {
-    world.boxes[id.index()].style.taffy.border = Rect {
+    world.boxes[id].style.taffy.border = Rect {
         top: style_helpers::length(widths.top),
         right: style_helpers::length(widths.right),
         bottom: style_helpers::length(widths.bottom),
