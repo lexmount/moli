@@ -80,6 +80,20 @@ impl FetchConfig {
             BrowserIdentityProfile::new(user_agent, self.browser_identity.accept_language());
     }
 
+    /// Sets the value behind `navigator.language`, `navigator.languages`, and
+    /// every outbound `Accept-Language` header.
+    ///
+    /// One identity field feeds all three surfaces, so pages that localize
+    /// themselves from `navigator.language` change their UI copy, text width,
+    /// and auto-sized geometry when this value changes.
+    pub fn set_accept_language(&mut self, accept_language: impl Into<String>) {
+        self.browser_identity = self.browser_identity.with_accept_language(accept_language);
+    }
+
+    pub fn accept_language(&self) -> &str {
+        self.browser_identity.accept_language()
+    }
+
     pub fn set_browser_identity(&mut self, browser_identity: BrowserIdentityProfile) {
         self.browser_identity = browser_identity;
     }
