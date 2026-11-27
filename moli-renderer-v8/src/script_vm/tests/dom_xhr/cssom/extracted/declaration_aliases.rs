@@ -970,3 +970,25 @@ fn css_style_declaration_rejects_moz_user_select_compat_alias() {
 
     assert_eq!(result, "false|false||0|||0|");
 }
+
+#[test]
+fn cssom_rejects_invalid_outline_offsets_without_overwriting_a_declaration() {
+    let mut vm = new_storage_html_test_vm("https://outline-offset.test/");
+    let result = vm
+        .eval(
+            r#"(() => {
+              const style = document.createElement("div").style;
+              style.setProperty("outline-offset", "12px", "important");
+              const original = style.cssText;
+              for (const value of ["calc(1px * pow(1))", "10%", "hypot(1))"]) {
+                if (CSS.supports("outline-offset", value)) return "supports " + value;
+                style.setProperty("outline-offset", value);
+                if (style.cssText !== original) return "replaced by " + value;
+              }
+              return style.getPropertyValue("outline-offset") + "|" +
+                style.getPropertyPriority("outline-offset");
+            })()"#,
+        )
+        .unwrap();
+    assert_eq!(result, "12px|important");
+}
