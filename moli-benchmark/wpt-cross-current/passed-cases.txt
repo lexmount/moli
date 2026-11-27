@@ -62,6 +62,7 @@ IndexedDB/idb-binary-key-roundtrip.any.js?moli-wpt-any=window
 IndexedDB/idb-explicit-commit-throw.any.js?moli-wpt-any=dedicatedworker
 IndexedDB/idb-explicit-commit-throw.any.js?moli-wpt-any=window
 IndexedDB/idb-explicit-commit.any.js?moli-wpt-any=dedicatedworker
+IndexedDB/idb-explicit-commit.any.js?moli-wpt-any=window
 IndexedDB/idb-partitioned-basic.sub.html
 IndexedDB/idb-partitioned-coverage.sub.html
 IndexedDB/idb-partitioned-persistence.sub.html
@@ -374,6 +375,7 @@ IndexedDB/string-list-ordering.any.js?moli-wpt-any=dedicatedworker
 IndexedDB/string-list-ordering.any.js?moli-wpt-any=window
 IndexedDB/structured-clone-transaction-state.any.js?moli-wpt-any=dedicatedworker
 IndexedDB/structured-clone-transaction-state.any.js?moli-wpt-any=window
+IndexedDB/structured-clone.any.js?1-20=&moli-wpt-any=dedicatedworker
 IndexedDB/structured-clone.any.js?21-40=&moli-wpt-any=dedicatedworker
 IndexedDB/structured-clone.any.js?41-60=&moli-wpt-any=dedicatedworker
 IndexedDB/structured-clone.any.js?81-100=&moli-wpt-any=dedicatedworker
@@ -384,6 +386,7 @@ IndexedDB/transaction-abort-index-metadata-revert.any.js?moli-wpt-any=window
 IndexedDB/transaction-abort-multiple-metadata-revert.any.js?moli-wpt-any=dedicatedworker
 IndexedDB/transaction-abort-multiple-metadata-revert.any.js?moli-wpt-any=window
 IndexedDB/transaction-abort-object-store-metadata-revert.any.js?moli-wpt-any=dedicatedworker
+IndexedDB/transaction-abort-object-store-metadata-revert.any.js?moli-wpt-any=window
 IndexedDB/transaction-abort-request-error.any.js?moli-wpt-any=dedicatedworker
 IndexedDB/transaction-abort-request-error.any.js?moli-wpt-any=window
 IndexedDB/transaction-create_in_versionchange.any.js?moli-wpt-any=dedicatedworker
@@ -3886,7 +3889,6 @@ css/cssom-view/parsing/scroll-behavior-valid.html
 css/cssom-view/position-sticky-root-scroller-with-scroll-behavior.html
 css/cssom-view/pt-to-px-width.html
 css/cssom-view/range-bounding-client-rect-with-display-contents.html
-css/cssom-view/resize-event-on-initial-layout-002.html
 css/cssom-view/screenLeftTop.html
 css/cssom-view/scroll-back-to-initial-position.html
 css/cssom-view/scroll-behavior-smooth-after-hiding-iframe.html
@@ -9813,8 +9815,10 @@ trusted-types/should-sink-type-mismatch-violation-be-blocked-by-csp-003.html
 trusted-types/trusted-types-duplicate-names-list-report-only.html
 trusted-types/trusted-types-eval-reporting-no-unsafe-eval.html
 trusted-types/trusted-types-eval-reporting-report-only.html
+trusted-types/trusted-types-navigation.html?01-05
+trusted-types/trusted-types-navigation.html?06-10
 trusted-types/trusted-types-navigation.html?16-20
-trusted-types/trusted-types-navigation.html?36-last
+trusted-types/trusted-types-navigation.html?21-25
 trusted-types/trusted-types-reporting-for-DOMParser-parseFromString.html
 trusted-types/trusted-types-reporting-for-DedicatedWorker-DedicatedWorker-constructor.html
 trusted-types/trusted-types-reporting-for-DedicatedWorker-eval.html
@@ -10610,6 +10614,7 @@ xhr/setrequestheader-before-open.htm
 xhr/setrequestheader-bogus-name.htm
 xhr/setrequestheader-bogus-value.htm
 xhr/setrequestheader-case-insensitive.htm
+xhr/setrequestheader-content-type.htm
 xhr/setrequestheader-header-allowed.htm
 xhr/setrequestheader-header-forbidden.htm
 xhr/setrequestheader-open-setrequestheader.htm

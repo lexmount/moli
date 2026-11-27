@@ -2094,6 +2094,7 @@ css/cssom-view/offsetTopLeft-trailing-space-inline.html
 css/cssom-view/range-bounding-client-rect-with-nested-text.html
 css/cssom-view/range-client-rects-surrogate-indexing.html
 css/cssom-view/resize-event-on-initial-layout-001.html
+css/cssom-view/resize-event-on-initial-layout-002.html
 css/cssom-view/resizeTo-negative.html
 css/cssom-view/screen-detached-frame.html
 css/cssom-view/scroll-behavior-default-css.html
@@ -2466,6 +2467,7 @@ html/browsers/browsing-the-web/unloading-documents/002.html
 html/browsers/browsing-the-web/unloading-documents/003.html
 html/browsers/browsing-the-web/unloading-documents/004.html
 html/browsers/browsing-the-web/unloading-documents/005.html
+html/browsers/browsing-the-web/unloading-documents/beforeunload-canceling.html
 html/browsers/browsing-the-web/unloading-documents/beforeunload-on-navigation-of-parent.html
 html/browsers/browsing-the-web/unloading-documents/beforeunload-synchronous.html
 html/browsers/browsing-the-web/unloading-documents/navigation-during-beforeunload.html
@@ -2656,6 +2658,7 @@ html/semantics/embedded-content/the-img-element/relevant-mutations-lazy.html
 html/semantics/embedded-content/the-img-element/relevant-mutations.html
 html/semantics/embedded-content/the-img-element/sizes/parse-a-sizes-attribute-display-none.html
 html/semantics/embedded-content/the-img-element/sizes/parse-a-sizes-attribute-quirks-mode.html
+html/semantics/embedded-content/the-img-element/sizes/parse-a-sizes-attribute-standards-mode.html
 html/semantics/embedded-content/the-img-element/sizes/parse-a-sizes-attribute-width-1000px.html
 html/semantics/embedded-content/the-img-element/sizes/sizes-auto-dynamic-attributes.html
 html/semantics/embedded-content/the-img-element/source-media-outside-doc.html
@@ -2721,7 +2724,6 @@ html/semantics/popovers/popover-shadow-dom.html
 html/semantics/popovers/popover-stacking.html
 html/semantics/popovers/popover-types-with-hints.html
 html/semantics/scripting-1/the-script-element/execution-timing/083.html
-html/semantics/scripting-1/the-script-element/execution-timing/102.html
 html/semantics/scripting-1/the-script-element/execution-timing/128.html
 html/semantics/scripting-1/the-script-element/execution-timing/137.html
 html/semantics/scripting-1/the-script-element/json-module/json-module-service-worker-test.https.html
@@ -2847,6 +2849,7 @@ navigation-api/navigate-event/defer/tentative/defer-with-multiple-handlers-and-s
 navigation-api/navigate-event/defer/tentative/defer-with-multiple-handlers.html
 navigation-api/navigate-event/defer/tentative/defer-with-single-handler-reject.html
 navigation-api/navigate-event/defer/tentative/defer-with-single-handler.html
+navigation-api/navigate-event/defer/tentative/restore-after-bfcache.html
 navigation-api/navigate-event/intercept-detach-multiple.html
 navigation-api/navigate-event/navigate-history-back-bfcache.html
 navigation-api/navigate-event/navigation-back-cross-document-preventDefault.html
