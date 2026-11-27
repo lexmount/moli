@@ -1,10 +1,12 @@
-use std::collections::HashSet;
+use std::{collections::HashSet, rc::Rc};
 
 use style::{
     author_styles::AuthorStyles,
     invalidation::stylesheets::StylesheetInvalidationSet,
     shared_lock::{SharedRwLock, SharedRwLockReadGuard},
-    stylesheets::{CustomMediaMap, DocumentStyleSheet},
+    stylesheets::{
+        CustomMediaMap, DocumentStyleSheet, StylesheetInDocument, scope_rule::ImplicitScopeRoot,
+    },
     stylist::Stylist,
 };
 
@@ -27,6 +29,7 @@ pub(super) struct ShadowScopeStyles {
     root: DomHandle,
     active_stylesheets: ActiveStylesheetCollection,
     author_styles: AuthorStyles<DocumentStyleSheet>,
+    implicit_scope_roots: Rc<[Option<ImplicitScopeRoot>]>,
     flush_count: u64,
 }
 
@@ -39,6 +42,7 @@ impl ShadowScopeStyles {
         Self {
             root,
             active_stylesheets,
+            implicit_scope_roots: implicit_scope_roots(&author_styles),
             author_styles,
             flush_count: 1,
         }
@@ -64,12 +68,17 @@ impl ShadowScopeStyles {
         &mut self.author_styles
     }
 
+    pub(super) fn implicit_scope_roots(&self) -> Rc<[Option<ImplicitScopeRoot>]> {
+        Rc::clone(&self.implicit_scope_roots)
+    }
+
     pub(super) fn flush(
         &mut self,
         stylist: &mut Stylist,
         guard: &SharedRwLockReadGuard<'_>,
     ) -> StylesheetInvalidationSet {
         self.flush_count = self.flush_count.saturating_add(1);
+        self.implicit_scope_roots = implicit_scope_roots(&self.author_styles);
         self.author_styles.flush(stylist, guard)
     }
 
@@ -77,6 +86,21 @@ impl ShadowScopeStyles {
     pub(super) fn flush_count_for_test(&self) -> u64 {
         self.flush_count
     }
+}
+
+fn implicit_scope_roots(
+    author_styles: &AuthorStyles<DocumentStyleSheet>,
+) -> Rc<[Option<ImplicitScopeRoot>]> {
+    // Keep the indices used by Stylo's stylesheet set, including sheets
+    // whose media conditions currently do not match.
+    let sheets = &author_styles.stylesheets;
+    (0..sheets.len())
+        .map(|index| {
+            sheets
+                .get(index)
+                .and_then(StylesheetInDocument::implicit_scope_root)
+        })
+        .collect()
 }
 
 pub(super) struct ShadowScopeReconciliation {

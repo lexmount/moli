@@ -897,6 +897,14 @@ pub(crate) struct SharedStylesheetContents {
     base_url: url::Url,
     quirks_mode: QuirksMode,
     allow_import_rules: AllowImportRules,
+    has_implicit_scope: bool,
+}
+
+fn has_implicit_scope(rules: &[CssRule], guard: &SharedRwLockReadGuard<'_>) -> bool {
+    rules.iter().any(|rule| {
+        matches!(rule, CssRule::Scope(scope) if scope.bounds.start.is_none())
+            || has_implicit_scope(rule.children(guard), guard)
+    })
 }
 
 /// Renderer-owned identity for one authoritative parsed stylesheet.
@@ -1200,13 +1208,22 @@ impl LiveStylesheet {
         media: ServoArc<Locked<MediaList>>,
         runtime_state_kind: LiveStylesheetRuntimeStateKind,
     ) -> Self {
-        // The retained contents belong to this PageScriptHost's author lock.
-        {
+        let contents = {
             let guard = shared_lock.read();
-            let _ = shared_contents.contents.rules(&guard);
-        }
+            if shared_contents.has_implicit_scope {
+                // Stylo keys its cascade cache by contents identity. An implicit
+                // scope also depends on the owner's position and stylesheet index.
+                shared_contents
+                    .contents
+                    .deep_clone(&shared_lock, None, &guard)
+            } else {
+                // The retained contents belong to this PageScriptHost's author lock.
+                let _ = shared_contents.contents.rules(&guard);
+                shared_contents.contents.clone()
+            }
+        };
         let stylesheet = ServoArc::new(Stylesheet {
-            contents: shared_lock.wrap(shared_contents.contents.clone()),
+            contents: shared_lock.wrap(contents),
             shared_lock,
             media,
             disabled: AtomicBool::new(false),
@@ -1218,7 +1235,7 @@ impl LiveStylesheet {
             shared_contents.quirks_mode,
             shared_contents.allow_import_rules,
             runtime_state_kind,
-            Some(shared_contents),
+            (!shared_contents.has_implicit_scope).then_some(shared_contents),
         )
     }
 
@@ -1276,15 +1293,20 @@ impl LiveStylesheet {
         if let Some(shared_contents) = self.shared_initial_contents.borrow().as_ref() {
             return StdArc::clone(shared_contents);
         }
-        let contents = {
+        let (contents, has_implicit_scope) = {
             let guard = self.stylesheet.shared_lock.read();
-            self.stylesheet.contents.read_with(&guard).clone()
+            let contents = self.stylesheet.contents.read_with(&guard);
+            (
+                contents.clone(),
+                has_implicit_scope(contents.rules(&guard), &guard),
+            )
         };
         let shared_contents = StdArc::new(SharedStylesheetContents {
             contents,
             base_url: self.base_url.clone(),
             quirks_mode: self.quirks_mode,
             allow_import_rules: self.allow_import_rules,
+            has_implicit_scope,
         });
         *self.shared_initial_contents.borrow_mut() = Some(StdArc::clone(&shared_contents));
         shared_contents

@@ -659,13 +659,6 @@ impl StyleDocumentState {
         self.ancestor_style_validation_visits.get()
     }
 
-    pub(super) fn with_shadow_cascade_data<R>(
-        &self,
-        callback: impl FnOnce(&[(DomHandle, ServoArc<CascadeData>)]) -> R,
-    ) -> R {
-        self.with_retained_style_system(|retained| callback(&retained.shadow_cascade_data))
-    }
-
     pub(super) fn try_with_retained_style_system<R>(
         &self,
         callback: impl FnOnce(&RetainedStyleSystem) -> R,

@@ -504,13 +504,15 @@ fn install_shadow_cascade_data_for_resolution(
     world: &DocumentStyleWorld,
     dom_adapter: &moli_selector::StyloDomHostBinding<'_>,
 ) {
-    world
-        .document_state
-        .with_shadow_cascade_data(|shadow_cascade_data| {
-            for (root, cascade_data) in shadow_cascade_data {
-                dom_adapter.set_shadow_cascade_data(*root, cascade_data.clone());
-            }
-        });
+    world.document_state.with_retained_style_system(|retained| {
+        for scope in &retained.shadow_scopes {
+            dom_adapter.set_shadow_cascade_data(
+                scope.root(),
+                scope.author_styles().data.clone(),
+                scope.implicit_scope_roots(),
+            );
+        }
+    });
 }
 
 struct EmptyRegisteredSpeculativePainters;
