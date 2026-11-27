@@ -53,6 +53,11 @@ pub(crate) struct CssSizing {
     pub horizontal: bool,
 }
 
+pub(crate) struct InlineSplitPart {
+    pub box_id: LayoutOutputBoxId,
+    pub is_empty_inline_run: bool,
+}
+
 /// One node retained after a full layout pass. Scrolling can refresh its
 /// viewport coordinates and scroll extent without rebuilding the box.
 ///
@@ -217,6 +222,9 @@ where
     pub root_box: LayoutOutputBoxId,
     pub boxes: Vec<FrozenLayoutBox<N>>,
     pub fragments: Vec<LayoutFragment>,
+    /// Content-order continuations and promoted blocks, sorted by principal
+    /// box ID. Each sequence starts with the principal inline.
+    pub(super) inline_splits: Vec<Box<[InlineSplitPart]>>,
     /// Source/box relationships for `display: contents` nodes, which own no
     /// principal box but can still nominate rendered descendants for scroll.
     pub scroll_proxy_links: Vec<(N, LayoutOutputBoxId)>,
@@ -472,6 +480,12 @@ where
         let own_estimated_geometry_bytes = std::mem::size_of::<Self>()
             .saturating_add(allocation::<FrozenLayoutBox<N>>(self.boxes.capacity()))
             .saturating_add(allocation::<LayoutFragment>(self.fragments.capacity()))
+            .saturating_add(allocation::<Box<[InlineSplitPart]>>(
+                self.inline_splits.capacity(),
+            ))
+            .saturating_add(self.inline_splits.iter().fold(0usize, |bytes, parts| {
+                bytes.saturating_add(allocation::<InlineSplitPart>(parts.len()))
+            }))
             .saturating_add(allocation::<LayoutObjectGeometry<N>>(
                 self.object_geometry.capacity(),
             ))
@@ -700,6 +714,7 @@ where
         root_box: LayoutOutputBoxId,
         boxes: Vec<FrozenLayoutBox<N>>,
         fragments: Vec<LayoutFragment>,
+        inline_splits: Vec<Box<[InlineSplitPart]>>,
         scroll_proxy_links: Vec<(N, LayoutOutputBoxId)>,
         viewport_coordinate_space: FrozenCoordinateSpace,
         clip_chain: Vec<LayoutClipNode>,
@@ -713,6 +728,7 @@ where
             root_box,
             boxes,
             fragments,
+            inline_splits,
             scroll_proxy_links,
             object_geometry: Vec::new(),
             svg_viewports: HashMap::new(),

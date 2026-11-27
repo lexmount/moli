@@ -87,10 +87,15 @@ impl LayoutSource for Source {
 
     fn element_semantics(&self, node: Self::NodeId) -> Option<LayoutElementSemantics> {
         (self.0[node].kind == LayoutSourceKind::Element).then(|| {
+            let local_name = self.0[node].local_name;
             LayoutElementSemantics::new(
                 LayoutNamespace::Html,
-                self.0[node].local_name,
-                LayoutElementCategory::Generic,
+                local_name,
+                if local_name == "br" {
+                    LayoutElementCategory::LineBreak
+                } else {
+                    LayoutElementCategory::Generic
+                },
                 None,
             )
         })
@@ -2580,6 +2585,142 @@ fn pass_result_owns_complete_box_models_and_answers_a_batch_from_one_pass() {
 }
 
 #[test]
+fn inline_with_block_child_reports_the_block_geometry() {
+    let source = Source(vec![
+        Node::element("root", vec![1]),
+        Node::element("a", vec![2]),
+        Node::element("div", Vec::new()),
+    ]);
+    let mut styles = Styles::default();
+    styles
+        .0
+        .insert(0, fixed_size(LayoutDisplay::Block, 800.0, 600.0));
+    styles
+        .0
+        .insert(1, resolved(LayoutDisplay::Inline, Style::default()));
+    styles
+        .0
+        .insert(2, fixed_size(LayoutDisplay::Block, 120.0, 20.0));
+
+    let output = build(&source, &mut styles);
+    let block = output.client_rects_for_source(2)[0].bounding_rect();
+    let rects = output.client_rects_for_source(1);
+    assert_eq!(rects.len(), 3, "{rects:?}");
+    assert_eq!(rects[0].bounding_rect().width, 0.0);
+    assert_rect(rects[1].bounding_rect(), block);
+    assert_eq!(rects[2].bounding_rect().width, 0.0);
+    assert_eq!(block.width, 120.0);
+    let quads = output.content_quads_for_source(1);
+    assert_eq!(quads.len(), 1, "{quads:?}");
+    assert_rect(quads[0].bounding_rect(), block);
+}
+
+#[test]
+fn inline_with_nested_inline_block_child_reports_the_block_geometry() {
+    // <root><a><span><div 120x20/><inline-block/><abspos/></span></a></root>
+    // Only the block split out of the inlines is their geometry; atomic and
+    // out-of-flow boxes inside the nested inline are not.
+    let source = Source(vec![
+        Node::element("root", vec![1]),
+        Node::element("a", vec![2]),
+        Node::element("span", vec![3, 4, 5]),
+        Node::element("div", Vec::new()),
+        Node::element("inline-block", Vec::new()),
+        Node::element("abspos", Vec::new()),
+    ]);
+    let mut styles = Styles::default();
+    styles
+        .0
+        .insert(0, fixed_size(LayoutDisplay::Block, 800.0, 600.0));
+    styles
+        .0
+        .insert(1, resolved(LayoutDisplay::Inline, Style::default()));
+    styles
+        .0
+        .insert(2, resolved(LayoutDisplay::Inline, Style::default()));
+    styles
+        .0
+        .insert(3, fixed_size(LayoutDisplay::Block, 120.0, 20.0));
+    styles
+        .0
+        .insert(4, fixed_size(LayoutDisplay::InlineBlock, 30.0, 10.0));
+    styles.0.insert(
+        5,
+        fixed_size(LayoutDisplay::Block, 40.0, 10.0).with_position(LayoutPosition::Absolute),
+    );
+
+    let output = build(&source, &mut styles);
+    let rect_of = |source| output.client_rects_for_source(source)[0].bounding_rect();
+    let (block, inline_block, abspos) = (rect_of(3), rect_of(4), rect_of(5));
+    for inline in [1, 2] {
+        let rects = output
+            .client_rects_for_source(inline)
+            .iter()
+            .map(|quad| quad.bounding_rect())
+            .collect::<Vec<_>>();
+        // The empty leading edge, the promoted block, and the inline run.
+        assert_eq!(rects.len(), 3, "{inline}: {rects:?}");
+        assert_eq!(rects[0].width, 0.0);
+        assert_rect(rects[1], block);
+        assert!(rects[2].width > 0.0);
+        assert!(
+            !rects.contains(&inline_block) && !rects.contains(&abspos),
+            "{inline}: {rects:?}"
+        );
+        let quads = output.content_quads_for_source(inline);
+        assert_eq!(quads.len(), 2, "{inline}: {quads:?}");
+        assert_rect(quads[0].bounding_rect(), block);
+        assert_rect(quads[1].bounding_rect(), rects[2]);
+    }
+}
+
+#[test]
+fn split_inline_preserves_empty_lines_in_client_rects_and_content_quads() {
+    let source = Source(vec![
+        Node::element("root", vec![1]),
+        Node::html_element("link", "a", vec![2, 3, 4, 5, 6]),
+        Node::text("before", "before"),
+        Node::element("block", Vec::new()),
+        Node::html_element("first break", "br", Vec::new()),
+        Node::html_element("second break", "br", Vec::new()),
+        Node::text("after", "after"),
+    ]);
+    let mut styles = Styles::default();
+    styles
+        .0
+        .insert(0, fixed_size(LayoutDisplay::Block, 800.0, 600.0));
+    styles
+        .0
+        .insert(3, fixed_size(LayoutDisplay::Block, 120.0, 20.0));
+    for node in [1, 2, 4, 5, 6] {
+        styles
+            .0
+            .insert(node, resolved(LayoutDisplay::Inline, Style::default()));
+    }
+
+    let output = build(&source, &mut styles);
+    let block = output.client_rects_for_source(3)[0].bounding_rect();
+    for quads in [
+        output.client_rects_for_source(1),
+        output.content_quads_for_source(1),
+    ] {
+        assert_eq!(quads.len(), 5, "{quads:?}");
+        assert_rect(quads[1].bounding_rect(), block);
+        for quad in &quads[2..4] {
+            let line = quad.bounding_rect();
+            assert_eq!(line.width, 0.0, "{line:?}");
+            assert!(line.height > 0.0, "{line:?}");
+        }
+        assert!(
+            quads
+                .windows(2)
+                .all(|pair| { pair[0].bounding_rect().y < pair[1].bounding_rect().y })
+        );
+    }
+    assert_fragment_batches_match_direct_queries(&output, 0..8);
+}
+
+#[test]
 fn own_border_is_visual_geometry_not_scrollable_content() {
     let source = Source(vec![
         Node::element("root", vec![1]),
@@ -3115,18 +3256,43 @@ fn split_inline_continuations_remain_mapped_to_the_originating_element() {
 
     let output = build(&source, &mut styles);
     assert_fragment_batches_match_direct_queries(&output, 0..7);
+    // Before text, the block split out of the inline, after text.
     let rects = output.client_rects_for_source(1);
-    assert_eq!(rects.len(), 2, "{rects:?}");
+    assert_eq!(rects.len(), 3, "{rects:?}");
     let first = rects[0].bounding_rect();
-    let second = rects[1].bounding_rect();
+    let block = rects[1].bounding_rect();
+    let second = rects[2].bounding_rect();
     assert!(first.width > 0.0 && second.width > 0.0);
-    assert!(second.y > first.y, "{rects:?}");
+    assert_eq!(block.width, 50.0);
+    assert!(block.y > first.y && second.y > block.y, "{rects:?}");
     let union = output
         .box_model_for_source(1)
         .expect("split inline box model")
         .border
         .bounding_rect();
     assert!(union.height >= second.bottom() - first.y);
+
+    styles.0.insert(
+        0,
+        fixed_size(LayoutDisplay::Block, 200.0, 120.0)
+            .with_2d_transform(LayoutTransform2D::scale(1.0, -1.0)),
+    );
+    let flipped = build(&source, &mut styles);
+    let flipped_block = flipped.client_rects_for_source(3)[0];
+    for rects in [
+        flipped.client_rects_for_source(1),
+        flipped.content_quads_for_source(1),
+    ] {
+        assert_eq!(rects.len(), 3, "{rects:?}");
+        assert_eq!(rects[1], flipped_block);
+        assert!(
+            rects
+                .windows(2)
+                .all(|pair| { pair[0].bounding_rect().y > pair[1].bounding_rect().y }),
+            "{rects:?}"
+        );
+    }
+    assert_fragment_batches_match_direct_queries(&flipped, 0..7);
 }
 
 #[test]

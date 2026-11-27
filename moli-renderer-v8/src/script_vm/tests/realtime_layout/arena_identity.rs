@@ -110,6 +110,58 @@ fn assert_published_layout_matches_fresh(
 }
 
 #[test]
+fn retained_inline_splits_follow_block_removal_and_reinsertion() {
+    let mut vm = realtime_vm(concat!(
+        "<!doctype html><style>body{margin:0}#discard{height:10px}",
+        "#promoted{width:120px;height:20px;background:lime}</style>",
+        "<div id=discard></div><section><a id=outer><span id=inner>",
+        "<div id=promoted></div>after</span></a></section><aside>unchanged</aside>",
+    ));
+    vm.publish_layout_for_test().unwrap();
+    let host = vm.context_host_weak_for_test().upgrade().unwrap();
+    let document = host.borrow().document_handle();
+    let viewport = host.borrow().layout_viewport_for_document(document);
+    let nodes = ["outer", "inner"].map(|name| vm.document_runtime.get_element_by_id(name).unwrap());
+    for (edit, has_block) in [
+        ("discard.remove()", true),
+        ("window.savedBlock=promoted;savedBlock.remove()", false),
+        ("inner.append(savedBlock)", true),
+    ] {
+        vm.eval(edit).unwrap();
+        let host = host.borrow();
+        host.ensure_observable_layout().unwrap();
+        let metrics = vm.layout_pass_observability_for_test().3.unwrap();
+        assert!(metrics.retained_box_count > 0, "{edit}: {metrics:?}");
+        let retained = host
+            .with_latest_layout_tree_for_document(document, |tree| {
+                nodes.map(|node| {
+                    (
+                        tree.client_rects_for_source(node),
+                        tree.content_quads_for_source(node),
+                    )
+                })
+            })
+            .unwrap();
+        let fresh = host
+            .build_layout_pass_for_document(
+                document,
+                moli_layout::LayoutPassRequest::new(viewport, moli_layout::LayoutFlushReason::Test),
+            )
+            .unwrap()
+            .unwrap();
+        for (node, (rects, quads)) in nodes.into_iter().zip(retained) {
+            assert_eq!(rects, fresh.client_rects_for_source(node), "{edit}");
+            assert_eq!(quads, fresh.content_quads_for_source(node), "{edit}");
+            assert_eq!(
+                quads.iter().any(|quad| quad.bounding_rect().width == 120.0),
+                has_block,
+                "{edit}"
+            );
+        }
+    }
+}
+
+#[test]
 fn retained_container_display_switches_match_fresh_after_warming_numeric_layout() {
     let mut vm = realtime_vm(concat!(
         "<!doctype html><style>body{margin:0;overflow:hidden;font:16px sans-serif}",

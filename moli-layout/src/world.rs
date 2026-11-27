@@ -688,6 +688,9 @@ where
     pub(crate) native_grid_details: HashMap<LayoutBoxId, DetailedLayoutInfo<Atom>>,
     pub(crate) source_mapping: HashMap<N, LayoutBoxId>,
     pub(crate) display_contents_mapping: HashMap<N, Vec<LayoutBoxId>>,
+    /// Content-ordered box sequences emitted by block-in-inline splitting.
+    /// Each starts with its principal inline. Nested splits are recorded first.
+    pub(crate) inline_splits: Vec<Vec<LayoutBoxId>>,
     pub(crate) root: LayoutBoxId,
     /// The root is the document element only for a complete document source.
     /// Subtree and synthetic sources still use the same internal root slot.
@@ -733,6 +736,7 @@ where
             native_grid_details: HashMap::new(),
             source_mapping: HashMap::new(),
             display_contents_mapping: HashMap::new(),
+            inline_splits: Vec::new(),
             root,
             root_is_document_element,
             quirks_mode: style::context::QuirksMode::NoQuirks,
@@ -1146,6 +1150,13 @@ where
             self.display_contents_mapping.retain(|_, ids| {
                 ids.retain(|id| live.contains(*id));
                 !ids.is_empty()
+            });
+            self.inline_splits.retain_mut(|parts| {
+                if !live.contains(parts[0]) {
+                    return false;
+                }
+                parts.retain(|id| live.contains(*id));
+                true
             });
             self.compact_cache_slots();
         }
