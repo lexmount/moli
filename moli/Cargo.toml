@@ -55,6 +55,7 @@ libc = "0.2"
 moli-test-support = { path = "../moli-test-support" }
 strip-ansi-escapes = "0.2.1"
 tokio-tungstenite = "0.28.0"
+wait-timeout = "0.2.1"
 
 [lints]
 workspace = true

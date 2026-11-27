@@ -1,4 +1,6 @@
-use super::{PNG_FIXTURE_BODY, clean_output, run_fetch_cli_with_dump_and_args, run_moli};
+use super::{
+    PNG_FIXTURE_BODY, clean_output, run_fetch_cli_with_dump_and_args, run_moli, timing::TIMEOUT_MS,
+};
 use anyhow::Result;
 
 #[test]
@@ -52,7 +54,7 @@ fn realtime_fetch_waits_for_raf_resize_and_intersection_business_without_capture
             "--wait-selector",
             "#ready",
             "--timeout",
-            "3000",
+            TIMEOUT_MS,
         ],
     )?;
     assert!(output.status.success(), "{}", clean_output(&output.stderr));
@@ -129,7 +131,7 @@ fn realtime_fetch_loads_visible_lazy_images_without_capture() -> Result<()> {
         "--eval",
         "[initialWidth, initialFarTop, loaded.sort()]",
         "--timeout",
-        "3000",
+        TIMEOUT_MS,
         &url,
     ]);
     server.abort();
@@ -155,7 +157,7 @@ fn realtime_fetch_done_does_not_drain_an_infinite_animation_frame_list() -> Resu
         "--wait-until",
         "done",
         "--timeout",
-        "3000",
+        TIMEOUT_MS,
         "--wait-script",
         "globalThis.framesSeen >= 3",
         "--eval",

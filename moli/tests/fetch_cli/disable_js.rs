@@ -1,4 +1,4 @@
-use super::{Output, clean_output, run_fetch_cli_with_args};
+use super::{Output, clean_output, run_fetch_cli_with_args, timing::TIMEOUT_MS};
 use anyhow::Result;
 use axum::{
     Router,
@@ -302,7 +302,7 @@ fn fetch_disabled_until(
         "--disable-js",
         "--with-frames",
         "--timeout",
-        "5000",
+        TIMEOUT_MS,
         "--wait-script",
         ready_script,
     ];
@@ -518,7 +518,7 @@ fn child_javascript_url_fixture_executes_by_default() -> Result<()> {
         &[
             "--with-frames",
             "--timeout",
-            "5000",
+            TIMEOUT_MS,
             "--wait-script",
             READY_SCRIPT,
         ],
@@ -676,7 +676,7 @@ fn handles_non_streaming_data_document() -> Result<()> {
         &[
             "--disable-js",
             "--timeout",
-            "5000",
+            TIMEOUT_MS,
             "--wait-script",
             READY_SCRIPT,
         ],
@@ -731,7 +731,7 @@ fn keeps_script_execution_enabled_by_default() -> Result<()> {
         &[
             "--with-frames",
             "--timeout",
-            "5000",
+            TIMEOUT_MS,
             "--wait-script",
             ENABLED_READY_SCRIPT,
         ],

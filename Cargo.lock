@@ -4844,6 +4844,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "url",
+ "wait-timeout",
 ]
 
 [[package]]

@@ -1,4 +1,8 @@
-use super::{clean_output, subprocess::run_command_with_process_timeout};
+use super::{
+    clean_output,
+    subprocess::{PROCESS_WATCHDOG, run_command_with_process_timeout},
+    timing::TIMEOUT_MS,
+};
 use anyhow::{Context, Result, ensure};
 use axum::{Router, http::StatusCode, response::Html, routing::get};
 use base64::{Engine as _, engine::general_purpose::STANDARD};
@@ -163,7 +167,7 @@ fn run_layout(html: &str, expression: &str, fonts: bool) -> Result<Value> {
         "*",
         "--layout",
         "--timeout",
-        "2000",
+        TIMEOUT_MS,
         "--eval",
         expression,
     ]);
@@ -171,7 +175,7 @@ fn run_layout(html: &str, expression: &str, fonts: bool) -> Result<Value> {
         command.arg("--font");
     }
     command.arg(url);
-    let output = run_command_with_process_timeout(command, Duration::from_secs(10))
+    let output = run_command_with_process_timeout(command, PROCESS_WATCHDOG)
         .context("layout probe process failed")?;
     ensure!(
         output.status.success(),
