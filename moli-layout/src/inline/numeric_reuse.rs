@@ -179,11 +179,13 @@ impl InlineNumericReuse {
     /// Retire owners rejected by construction/input validation. Surviving
     /// entries keep their generational handles across order changes.
     pub(crate) fn retain_owners(&mut self, mut keep: impl FnMut(LayoutBoxId) -> bool) {
+        let previous_len = self.entries.len();
         self.entries.retain(|entry| keep(entry.owner));
-        self.owner_slots.clear();
-
-        for (slot, entry) in self.entries.iter().enumerate() {
-            self.owner_slots.insert(entry.owner, cache_slot(slot));
+        if self.entries.len() != previous_len {
+            self.owner_slots.clear();
+            for (slot, entry) in self.entries.iter().enumerate() {
+                self.owner_slots.insert(entry.owner, cache_slot(slot));
+            }
         }
         if let Some(cache) = &mut self.measurements {
             cache.retain_owners(keep);

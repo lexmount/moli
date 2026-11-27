@@ -64,7 +64,11 @@ impl InlineMeasurements {
     }
 
     pub(super) fn retain_owners(&mut self, mut keep: impl FnMut(LayoutBoxId) -> bool) {
+        let previous_len = self.owners.len();
         self.owners.retain(|entry| keep(entry.owner));
+        if self.owners.len() == previous_len {
+            return;
+        }
         self.slots.clear();
 
         for (slot, entry) in self.owners.iter().enumerate() {
