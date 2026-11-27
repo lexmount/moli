@@ -161,7 +161,7 @@ fn parses_explicit_fetch_command_with_compatibility_flags() {
                 log_filter_scopes: Some("http,event".to_owned()),
                 user_agent: None,
                 user_agent_suffix: Some("internal-tester".to_owned()),
-                accept_language: None,
+                accept_language: Vec::new(),
                 web_bot_auth_key_file: None,
                 web_bot_auth_keyid: None,
                 web_bot_auth_domain: None,

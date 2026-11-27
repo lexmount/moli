@@ -1,6 +1,6 @@
 use anyhow::{Context, Result, bail};
 use cidr::AnyIpCidr;
-use moli_browser_profile::{BrowserProfilePaths, DEFAULT_ACCEPT_LANGUAGE};
+use moli_browser_profile::BrowserProfilePaths;
 use moli_core::{
     LayoutPolicy, OptionalResourceFetchMask,
     page::{SubresourceJsonPathEquals, SubresourceJsonPathRegex, SubresourceResponseWaitCriteria},
@@ -9,7 +9,7 @@ use moli_core::{
 use moli_fetch::{
     FetchConfig, WebBotAuthProfile, WebBotAuthSigner, validate_http_host_resolve_entries,
 };
-use moli_system_locale::system_accept_language;
+use moli_system_locale::system_languages;
 use std::path::PathBuf;
 use std::str::FromStr;
 
@@ -137,15 +137,19 @@ fn apply_common_args(config: &mut AppConfig, common: &CommonArgs) -> Result<()> 
             .set_user_agent_suffix(user_agent_suffix);
     }
 
-    let accept_language = common
-        .accept_language
-        .clone()
-        .or_else(system_accept_language)
-        .unwrap_or_else(|| DEFAULT_ACCEPT_LANGUAGE.to_owned());
-    config
-        .browser
-        .fetch_mut()
-        .set_accept_language(accept_language);
+    let languages = if common.accept_language.is_empty() {
+        system_languages()
+    } else {
+        Some(common.accept_language.clone())
+    };
+    if let Some(languages) = languages {
+        config
+            .browser
+            .fetch_mut()
+            .set_languages(languages)
+            .map_err(anyhow::Error::msg)
+            .context("invalid browser language preferences")?;
+    }
 
     if let Some(http_timeout) = common.http_timeout {
         config
@@ -378,54 +382,47 @@ mod tests {
     use std::path::Path;
 
     #[test]
-    fn accept_language_pins_navigator_language_for_fetch_and_serve() {
-        let header = "en;q=0,fr;q=0.8,zh-CN,zh;q=0.8";
-        let flag = format!("--accept-lang={header}");
+    fn ordered_language_preferences_configure_fetch_and_serve() {
         for command in ["fetch", "serve"] {
-            let mut arguments = vec!["moli", command, flag.as_str()];
+            let mut arguments = vec!["moli", command, "--accept-lang=zh-cn, EN-us,zh-CN"];
             if command == "fetch" {
                 arguments.push("https://example.test/");
             }
             let cli = Cli::parse_from(arguments);
             let config = AppConfig::from_cli(&cli).expect("explicit language should build");
             let identity = config.browser.fetch().browser_identity();
-            assert_eq!(identity.accept_language(), header);
+            assert_eq!(
+                identity.accept_language(),
+                "zh-CN,zh;q=0.9,en-US;q=0.8,en;q=0.7"
+            );
             assert_eq!(identity.language(), "zh-CN");
-            assert_eq!(identity.languages(), ["zh-CN", "fr", "zh"]);
+            assert_eq!(identity.languages(), ["zh-CN", "en-US"]);
         }
     }
 
     #[test]
-    fn accept_language_rejects_a_malformed_value() {
+    fn accept_language_rejects_values_outside_an_ordered_language_list() {
         for value in [
             "",
             "   ",
             "zh CN",
             "zh-CN,",
-            "zh-CN;q",
+            "zh-CN,,en-US",
+            "zh_CN",
             "toolonglanguage",
             "en-abcdefghi",
             "en-a",
-            "en;q=1e-1",
-            "en;q=0.1234",
-            "en;q=0.8;q=0.2",
-            "en;q=1.01",
+            "*",
+            "en;q=0",
+            "zh-CN,zh;q=0.9",
             "en\n",
         ] {
-            let cli = Cli::try_parse_from(["moli", "serve", "--accept-lang", value]);
-            assert!(cli.is_err(), "`--accept-lang {value:?}` should be rejected");
-        }
-    }
-
-    #[test]
-    fn accept_language_requires_a_concrete_preference() {
-        for header in ["*", "en;q=0", "en;q=0,*;q=0"] {
-            let error = Cli::try_parse_from(["moli", "serve", "--accept-lang", header])
-                .expect_err("Navigator needs a concrete language preference");
+            let config = Cli::try_parse_from(["moli", "serve", "--accept-lang", value])
+                .map_err(anyhow::Error::new)
+                .and_then(|cli| AppConfig::from_cli(&cli));
             assert!(
-                error
-                    .to_string()
-                    .contains("language tag with positive weight")
+                config.is_err(),
+                "`--accept-lang {value:?}` should be rejected"
             );
         }
     }

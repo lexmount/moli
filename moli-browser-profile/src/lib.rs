@@ -9,7 +9,7 @@ mod profile_paths;
 mod user_agent_override;
 mod window_surface;
 
-pub use accept_language::{parse_accept_language, validate_accept_language};
+pub use accept_language::parse_accept_language;
 pub use identity::{BrowserBrandVersion, BrowserIdentityProfile, BrowserUserAgentMetadataOverride};
 pub use moli_cookie_cache::{load_cookie_cache, save_cookie_cache};
 pub use profile::{BrowserProfile, BrowserProfilePartition};

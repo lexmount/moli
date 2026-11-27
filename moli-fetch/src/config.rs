@@ -76,14 +76,20 @@ impl FetchConfig {
     }
 
     pub fn set_user_agent(&mut self, user_agent: impl Into<String>) {
-        self.browser_identity =
-            BrowserIdentityProfile::new(user_agent, self.browser_identity.accept_language());
+        self.browser_identity = self.browser_identity.with_user_agent(user_agent);
     }
 
-    /// Sets the browser's language preferences and default `Accept-Language`.
-    /// A language change also updates any configured default language header.
+    /// Sets a raw `Accept-Language` header and derives Navigator languages for
+    /// compatibility with callers that supply the wire value.
     pub fn set_accept_language(&mut self, accept_language: impl Into<String>) {
         self.set_browser_identity(self.browser_identity.with_accept_language(accept_language));
+    }
+
+    /// Sets ordered browser language preferences and derives `Accept-Language`.
+    pub fn set_languages(&mut self, languages: Vec<String>) -> Result<(), String> {
+        let identity = self.browser_identity.with_languages(languages)?;
+        self.set_browser_identity(identity);
+        Ok(())
     }
 
     pub fn accept_language(&self) -> &str {

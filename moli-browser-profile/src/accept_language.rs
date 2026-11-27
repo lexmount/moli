@@ -1,93 +1,86 @@
-use std::cmp::Reverse;
+use std::fmt::Write;
 
 use icu_locale_core::Locale;
 
-use crate::window_surface::DEFAULT_ACCEPT_LANGUAGE;
-
-/// Returns the concrete, positive-weight languages in preference order.
+/// Extracts languages from an explicitly supplied HTTP header in wire order.
 pub fn parse_accept_language(value: &str) -> Vec<String> {
-    let mut preferred: Vec<_> = value
+    value
         .split(',')
-        .filter_map(|entry| parse_range(entry).ok())
-        .filter(|(tag, quality)| is_preferred_language(tag, *quality))
-        .collect();
-    preferred.sort_by_key(|(_, quality)| Reverse(*quality));
-    preferred
-        .into_iter()
-        .map(|(tag, _)| tag.to_owned())
+        .filter_map(|entry| {
+            let tag = entry.split(';').next()?.trim();
+            (!tag.is_empty()).then(|| tag.to_owned())
+        })
         .collect()
 }
 
-pub(super) fn navigator_languages(value: &str) -> Vec<String> {
-    let preferred = parse_accept_language(value);
-    if preferred.is_empty() {
-        parse_accept_language(DEFAULT_ACCEPT_LANGUAGE)
+pub(super) fn navigator_languages_from_header(value: &str) -> Vec<String> {
+    let mut languages = parse_accept_language(value);
+    languages.retain(|tag| tag != "*");
+    if languages.is_empty() {
+        default_languages()
     } else {
-        preferred
+        languages
     }
 }
 
-/// Validates an explicitly configured browser language preference.
-pub fn validate_accept_language(value: &str) -> Result<(), String> {
-    if value.chars().any(|c| c.is_control() && c != '\t') {
-        return Err("Accept-Language must not contain control characters".to_owned());
-    }
-    let mut has_preferred_language = false;
-    for entry in value.split(',') {
-        let (tag, quality) = parse_range(entry)
-            .map_err(|reason| format!("invalid Accept-Language entry {entry:?}: {reason}"))?;
-        has_preferred_language |= is_preferred_language(tag, quality);
-    }
-    if !has_preferred_language {
-        return Err(
-            "Accept-Language requires at least one language tag with positive weight".to_owned(),
-        );
-    }
-    Ok(())
+pub(super) fn default_languages() -> Vec<String> {
+    ["en-US", "en"].into_iter().map(str::to_owned).collect()
 }
 
-fn is_preferred_language(tag: &str, quality: u16) -> bool {
-    tag != "*" && quality > 0
+pub(super) fn validate_languages(languages: Vec<String>) -> Result<Vec<String>, String> {
+    let mut normalized = Vec::with_capacity(languages.len());
+    for tag in &languages {
+        let tag = tag.trim_matches([' ', '\t']);
+        let invalid_tag = || format!("invalid language tag {tag:?}");
+        if tag.contains('_') {
+            return Err(invalid_tag());
+        }
+        let locale = Locale::try_from_str(tag).map_err(|_| invalid_tag())?;
+        let tag = locale.to_string();
+        if !normalized.contains(&tag) {
+            normalized.push(tag);
+        }
+    }
+    if normalized.is_empty() {
+        return Err("expected at least one language tag".to_owned());
+    }
+    Ok(normalized)
 }
 
-fn parse_range(entry: &str) -> Result<(&str, u16), &'static str> {
-    let entry = entry.trim_matches([' ', '\t']);
-    let (tag, weight) = entry
-        .split_once(';')
-        .map_or((entry, None), |(tag, weight)| {
-            (
-                tag.trim_end_matches([' ', '\t']),
-                Some(weight.trim_start_matches([' ', '\t'])),
-            )
-        });
-    if tag != "*" && (tag.contains('_') || Locale::try_from_str(tag).is_err()) {
-        return Err("expected a language tag such as zh-CN or *");
-    }
-
-    let quality = if let Some(weight) = weight {
-        weight
-            .split_once('=')
-            .filter(|(name, _)| name.eq_ignore_ascii_case("q"))
-            .and_then(|(_, value)| parse_quality(value))
-            .ok_or("expected a single q value from 0 to 1 with at most three decimal digits")?
-    } else {
-        1000
-    };
-    Ok((tag, quality))
+pub(super) fn accept_language_from_languages(languages: &[String]) -> String {
+    generate_accept_language(expand_languages(languages))
 }
 
-// RFC 9110 section 12.4.2 uses at most three fractional digits.
-fn parse_quality(value: &str) -> Option<u16> {
-    let (whole, fractional) = value.split_once('.').unwrap_or((value, ""));
-    if fractional.len() > 3 || !fractional.bytes().all(|byte| byte.is_ascii_digit()) {
-        return None;
+fn base_language(tag: &str) -> &str {
+    tag.split_once('-').map_or(tag, |(base, _)| base)
+}
+
+fn expand_languages(languages: &[String]) -> Vec<&str> {
+    let mut expanded = Vec::new();
+    for (index, tag) in languages.iter().map(String::as_str).enumerate() {
+        if !expanded.contains(&tag) {
+            expanded.push(tag);
+        }
+        let base = base_language(tag);
+        let next_base = languages.get(index + 1).map(|next| base_language(next));
+        if next_base != Some(base) && !matches!(base, "x" | "i") && !expanded.contains(&base) {
+            expanded.push(base);
+        }
     }
-    let digits = fractional.parse::<u16>().unwrap_or(0);
-    match whole {
-        "0" => Some(digits * 10u16.pow(3 - fractional.len() as u32)),
-        "1" if digits == 0 => Some(1000),
-        _ => None,
+    expanded
+}
+
+pub(super) fn generate_accept_language<'a>(languages: impl IntoIterator<Item = &'a str>) -> String {
+    let mut header = String::new();
+    for (index, tag) in languages.into_iter().enumerate() {
+        if index == 0 {
+            header.push_str(tag);
+        } else {
+            let quality = 10_usize.saturating_sub(index).max(1);
+            write!(header, ",{tag};q=0.{quality}").expect("writing to a String is infallible");
+        }
     }
+    header
 }
 
 #[cfg(test)]
@@ -95,13 +88,27 @@ mod tests {
     use super::*;
 
     #[test]
-    fn navigator_preferences_sort_by_weight_and_skip_http_only_ranges() {
-        let header = "fr;q=0.25,en;q=0,sr-Latn-RS,de;q=0.250,*;q=0.9,zh-CN;q=1.000";
-        assert_eq!(validate_accept_language(header), Ok(()));
+    fn expands_base_languages_after_each_consecutive_language_family() {
+        let languages = validate_languages(
+            ["en-us", "en-GB", "fr", "zh-TW", "en"]
+                .map(str::to_owned)
+                .to_vec(),
+        )
+        .unwrap();
+        assert_eq!(languages, ["en-US", "en-GB", "fr", "zh-TW", "en"]);
         assert_eq!(
-            parse_accept_language(header),
-            ["sr-Latn-RS", "zh-CN", "fr", "de"]
+            accept_language_from_languages(&languages),
+            "en-US,en-GB;q=0.9,en;q=0.8,fr;q=0.7,zh-TW;q=0.6,zh;q=0.5"
         );
-        assert!(parse_accept_language("en;q=0.000,*").is_empty());
+    }
+
+    #[test]
+    fn generated_quality_stays_at_one_tenth_after_the_tenth_language() {
+        assert_eq!(
+            generate_accept_language([
+                "en", "fr", "es", "de", "it", "pt", "zh", "ja", "ko", "ru", "sv"
+            ]),
+            "en,fr;q=0.9,es;q=0.8,de;q=0.7,it;q=0.6,pt;q=0.5,zh;q=0.4,ja;q=0.3,ko;q=0.2,ru;q=0.1,sv;q=0.1"
+        );
     }
 }

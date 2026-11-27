@@ -87,7 +87,7 @@ const WORKER_NAVIGATOR_BACKING_SLOT: &str = "__moliWorkerNavigatorBacking";
 
 const NAVIGATOR_STORAGE_OWNER_CHILD_HANDLE_SLOT: &str = "__moliNavigatorStorageOwnerChildHandle";
 const NAVIGATOR_STORAGE_OWNER_POPUP_ID_SLOT: &str = "__moliNavigatorStorageOwnerPopupId";
-const NAVIGATOR_ACCEPT_LANGUAGE_SLOT: &str = "__moliNavigatorAcceptLanguage";
+const NAVIGATOR_LANGUAGES_SLOT: &str = "__moliNavigatorLanguages";
 
 pub(in crate::context_bootstrap) const STORAGE_MANAGER_CHILD_HANDLE_SLOT: &str =
     "__moliStorageManagerChildHandle";
@@ -660,17 +660,17 @@ fn navigator_runtime_data_getter_callback<'s>(
                 return;
             }
             "languages" => {
-                let previous = get_private_value(scope, backing, NAVIGATOR_ACCEPT_LANGUAGE_SLOT)
+                let previous = get_private_value(scope, backing, NAVIGATOR_LANGUAGES_SLOT)
                     .and_then(|value| value.to_string(scope))
                     .map(|value| value.to_rust_string_lossy(scope));
-                if previous.as_deref() != Some(identity.accept_language()) {
-                    if let Some(value) = v8_string(scope, identity.accept_language()) {
-                        set_private_value(
-                            scope,
-                            backing,
-                            NAVIGATOR_ACCEPT_LANGUAGE_SLOT,
-                            value.into(),
-                        );
+                // Distinct Navigator lists can produce the same HTTP header.
+                if previous.as_deref().is_none_or(|previous| {
+                    previous
+                        .split(',')
+                        .ne(identity.languages().iter().map(String::as_str))
+                }) {
+                    if let Some(value) = v8_string(scope, &identity.languages().join(",")) {
+                        set_private_value(scope, backing, NAVIGATOR_LANGUAGES_SLOT, value.into());
                     }
                     let _ = backing.set(
                         scope,
@@ -1139,11 +1139,11 @@ fn navigator_identity_from_backing<'s>(
         .and_then(|value| value.to_string(scope))
         .map(|value| value.to_rust_string_lossy(scope))
         .unwrap_or_else(|| moli_browser_profile::DEFAULT_USER_AGENT.to_owned());
-    let accept_language = get_private_value(scope, backing, NAVIGATOR_ACCEPT_LANGUAGE_SLOT)
+    let languages = get_private_value(scope, backing, NAVIGATOR_LANGUAGES_SLOT)
         .and_then(|value| value.to_string(scope))
         .map(|value| value.to_rust_string_lossy(scope))
         .unwrap_or_else(|| moli_browser_profile::DEFAULT_ACCEPT_LANGUAGE.to_owned());
-    BrowserIdentityProfile::new(user_agent, accept_language)
+    BrowserIdentityProfile::new(user_agent, languages)
 }
 
 fn worker_navigator_identity<'s>(
@@ -1232,13 +1232,8 @@ fn build_window_navigator_backing_for_owner<'s>(
     .inspect(|&backing| {
         set_navigator_identity_profile(scope, backing, &identity);
         set_navigator_storage_owner(scope, backing, owner_child, owner_popup);
-        if let Some(accept_language) = v8_string(scope, identity.accept_language()) {
-            set_private_value(
-                scope,
-                backing,
-                NAVIGATOR_ACCEPT_LANGUAGE_SLOT,
-                accept_language.into(),
-            );
+        if let Some(languages) = v8_string(scope, &identity.languages().join(",")) {
+            set_private_value(scope, backing, NAVIGATOR_LANGUAGES_SLOT, languages.into());
         }
     })
 }
@@ -1284,14 +1279,9 @@ pub(super) fn update_window_navigator_identity<'s>(
     let language = v8_string(scope, identity.language())
         .ok_or_else(|| anyhow!("failed to allocate navigator.language string"))?;
     let _ = backing.set(scope, v8str(scope, "language").into(), language.into());
-    let accept_language = v8_string(scope, identity.accept_language())
-        .ok_or_else(|| anyhow!("failed to allocate navigator Accept-Language seed"))?;
-    set_private_value(
-        scope,
-        backing,
-        NAVIGATOR_ACCEPT_LANGUAGE_SLOT,
-        accept_language.into(),
-    );
+    let languages = v8_string(scope, &identity.languages().join(","))
+        .ok_or_else(|| anyhow!("failed to allocate Navigator language list"))?;
+    set_private_value(scope, backing, NAVIGATOR_LANGUAGES_SLOT, languages.into());
     let _ = backing.set(
         scope,
         v8str(scope, "languages").into(),
@@ -1351,14 +1341,9 @@ fn build_worker_navigator_backing<'s>(
         WORKER_NAVIGATOR_BACKING_SLOT,
         v8::Boolean::new(scope, true).into(),
     );
-    let accept_language = v8_string(scope, identity.accept_language())
-        .ok_or_else(|| anyhow!("failed to allocate WorkerNavigator Accept-Language seed"))?;
-    set_private_value(
-        scope,
-        backing,
-        NAVIGATOR_ACCEPT_LANGUAGE_SLOT,
-        accept_language.into(),
-    );
+    let languages = v8_string(scope, &identity.languages().join(","))
+        .ok_or_else(|| anyhow!("failed to allocate WorkerNavigator language list"))?;
+    set_private_value(scope, backing, NAVIGATOR_LANGUAGES_SLOT, languages.into());
     set_navigator_identity_profile(scope, backing, identity);
     Ok(backing)
 }
