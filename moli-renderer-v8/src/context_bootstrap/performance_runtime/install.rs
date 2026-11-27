@@ -514,7 +514,9 @@ fn update_legacy_timing<'s>(
             scope,
             timing,
             name,
-            legacy_timing_epoch_millis(time_origin + high_res_timestamp) as f64,
+            legacy_timing_epoch_millis(
+                moli_time::coarsened_dom_time_millis(time_origin) + high_res_timestamp,
+            ) as f64,
         );
     }
 }
@@ -649,8 +651,9 @@ fn performance_timing_snapshot<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     performance: v8::Local<'s, v8::Object>,
 ) -> PerformanceTimingSnapshot {
-    let time_origin =
-        performance_slot_number(scope, performance, PERFORMANCE_TIME_ORIGIN_SLOT).unwrap_or(0.0);
+    let time_origin = moli_time::coarsened_dom_time_millis(
+        performance_slot_number(scope, performance, PERFORMANCE_TIME_ORIGIN_SLOT).unwrap_or(0.0),
+    );
     let mut snapshot = PerformanceTimingSnapshot::new(time_origin);
     if let Some(timestamp) =
         performance_lifecycle_timestamp(scope, performance, DOM_CONTENT_LOADED_START_INDEX)
@@ -698,6 +701,12 @@ fn performance_attribute_getter_callback<'s>(
             Ok(value) => rv.set(value),
             Err(error) => throw_type_error(scope, &error.to_string()),
         }
+        return;
+    }
+    if slot == PERFORMANCE_TIME_ORIGIN_SLOT
+        && let Some(origin) = performance_slot_number(scope, args.this(), slot)
+    {
+        rv.set(v8::Number::new(scope, moli_time::coarsened_dom_time_millis(origin)).into());
         return;
     }
     rv.set(
