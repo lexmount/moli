@@ -5,8 +5,9 @@ use parley::{
 
 use super::{PaintProjectionMetrics, cull::rects_intersect};
 use crate::{
-    LayoutBox, LayoutBoxId, LayoutRect, LayoutTransform2D, PaintBrush, PaintColor, PaintFragment,
-    PaintGlyph, PaintGlyphRun, PaintShape, PaintSnapshot, PaintTextDecoration, PaintTextShadow,
+    LayoutBox, LayoutBoxId, LayoutPoint, LayoutRect, LayoutTransform2D, PaintBrush, PaintColor,
+    PaintFragment, PaintGlyph, PaintGlyphRun, PaintShape, PaintSnapshot, PaintTextDecoration,
+    PaintTextShadow,
     inline::{InlineFormattingContext, InlinePaintBounds, InlineSelection, glyph_cluster_ranges},
     stylo_to_parley::TextBrush,
 };
@@ -182,7 +183,11 @@ fn project_text_phase<N>(
                 usize::from(glyph_run.style_index()),
                 &glyph_run.style().brush,
             );
-            paint.project_run(&glyph_run, brush, vertical_offset, clusters, snapshot);
+            let mut offset = context
+                .fragments
+                .style_position(usize::from(glyph_run.style_index()));
+            offset.y += vertical_offset;
+            paint.project_run(&glyph_run, brush, offset, clusters, snapshot);
         }
         if line_index + 1 == visible_lines
             && !matches!(mask_scope, Some(TextClipMaskScope::InlineBox(_)))
@@ -200,7 +205,7 @@ fn project_text_phase<N>(
             let brush = layout_box.style.parley_text_style().brush;
             for item in line.items() {
                 if let PositionedLayoutItem::GlyphRun(run) = item {
-                    marker_paint.project_run(&run, &brush, 0.0, Vec::new(), snapshot);
+                    marker_paint.project_run(&run, &brush, LayoutPoint::ZERO, Vec::new(), snapshot);
                 }
             }
         }
@@ -220,7 +225,7 @@ impl TextRunPaint {
         &self,
         glyph_run: &parley::GlyphRun<'_, crate::stylo_to_parley::TextBrush>,
         brush: &TextBrush,
-        vertical_offset: f32,
+        offset: LayoutPoint,
         clusters: Vec<std::ops::Range<usize>>,
         snapshot: &mut PaintSnapshot,
     ) {
@@ -228,8 +233,8 @@ impl TextRunPaint {
             .positioned_glyphs()
             .map(|glyph| PaintGlyph {
                 id: glyph.id,
-                x: self.origin_x + glyph.x,
-                y: self.origin_y + glyph.y + vertical_offset,
+                x: self.origin_x + glyph.x + offset.x,
+                y: self.origin_y + glyph.y + offset.y,
             })
             .collect::<Vec<_>>();
         if glyphs.is_empty() {
@@ -289,8 +294,8 @@ impl TextRunPaint {
         }
 
         let metrics = run.font_metrics();
-        let baseline = self.origin_y + glyph_run.baseline() + vertical_offset;
-        let x = self.origin_x + glyph_run.offset();
+        let baseline = self.origin_y + glyph_run.baseline() + offset.y;
+        let x = self.origin_x + glyph_run.offset() + offset.x;
         let width = glyph_run.advance().max(0.0);
         let decoration = brush.decoration;
         let decoration_color = if self.phase == TextPaintPhase::ClipMask {
@@ -457,10 +462,14 @@ impl<'a> InlineTextPaint<'a> {
             .line_placements
             .get(line_index)
             .map_or(0.0, |line| line.item_offset(item_index));
+        let mut offset = context
+            .fragments
+            .style_position(usize::from(glyphs.style_index()));
+        offset.y += vertical_offset;
         paint.project_run(
             glyphs,
             context.paint_brush(usize::from(glyphs.style_index()), &glyphs.style().brush),
-            vertical_offset,
+            offset,
             if paint.text.is_some() {
                 clusters
             } else {
@@ -539,26 +548,60 @@ pub(super) fn range_selection_rects<N>(
     if range.is_empty() {
         return;
     }
-    let anchor = Cursor::from_byte_index(text_layout, range.start, Affinity::Downstream);
-    let focus = Cursor::from_byte_index(text_layout, range.end, Affinity::Downstream);
-    Selection::new(anchor, focus).geometry_with(text_layout, |rect, line_index| {
-        if line_index >= context.visible_lines(text_layout.len()) {
-            return;
+    let mut emit_range = |range: std::ops::Range<usize>, offset: LayoutPoint| {
+        let anchor = Cursor::from_byte_index(text_layout, range.start, Affinity::Downstream);
+        let focus = Cursor::from_byte_index(text_layout, range.end, Affinity::Downstream);
+        Selection::new(anchor, focus).geometry_with(text_layout, |rect, line_index| {
+            if line_index >= context.visible_lines(text_layout.len()) {
+                return;
+            }
+            let rect = selection_rect(
+                context,
+                line_index,
+                layout_box.final_layout.border.left
+                    + layout_box.final_layout.padding.left
+                    + offset.x,
+                layout_box.final_layout.border.top + layout_box.final_layout.padding.top + offset.y,
+                rect.x0 as f32,
+                rect.y0 as f32,
+                (rect.x1 - rect.x0).max(0.0) as f32,
+                (rect.y1 - rect.y0).max(0.0) as f32,
+            );
+            if rect.width > 0.0 && rect.height > 0.0 {
+                emit(rect);
+            }
+        });
+    };
+    if !context.fragments.has_relative_positions() {
+        emit_range(range, LayoutPoint::ZERO);
+        return;
+    }
+    let start = context
+        .text_units
+        .partition_point(|unit| unit.output_range.end <= range.start);
+    let mut groups: Vec<(std::ops::Range<usize>, LayoutPoint)> = Vec::new();
+    for unit in context.text_units[start..]
+        .iter()
+        .take_while(|unit| unit.output_range.start < range.end)
+    {
+        let offset = unit
+            .ancestors
+            .last()
+            .map_or(LayoutPoint::ZERO, |&id| context.fragments.box_position(id));
+        let selected =
+            range.start.max(unit.output_range.start)..range.end.min(unit.output_range.end);
+        if let Some((previous, old_offset)) = groups.last_mut()
+            && previous.end == selected.start
+            && *old_offset == offset
+        {
+            previous.end = selected.end;
+        } else {
+            groups.push((selected, offset));
         }
-        let rect = selection_rect(
-            context,
-            line_index,
-            layout_box.final_layout.border.left + layout_box.final_layout.padding.left,
-            layout_box.final_layout.border.top + layout_box.final_layout.padding.top,
-            rect.x0 as f32,
-            rect.y0 as f32,
-            (rect.x1 - rect.x0).max(0.0) as f32,
-            (rect.y1 - rect.y0).max(0.0) as f32,
-        );
-        if rect.width > 0.0 && rect.height > 0.0 {
-            emit(rect);
-        }
-    });
+    }
+    for (range, offset) in groups {
+        emit_range(range, offset);
+    }
 }
 
 /// Use the same caret ink for event culling and painting, independently of
@@ -576,6 +619,19 @@ pub(super) fn caret_rect<N>(layout_box: &LayoutBox<N>) -> Option<LayoutRect> {
         return None;
     }
     let cursor = Cursor::from_byte_index(text_layout, *offset, Affinity::Downstream);
+    let position = if context.fragments.has_relative_positions() {
+        let index = context
+            .text_units
+            .partition_point(|unit| unit.output_range.end <= *offset);
+        context
+            .text_units
+            .get(index)
+            .or_else(|| context.text_units.last())
+            .and_then(|unit| unit.ancestors.last())
+            .map_or(LayoutPoint::ZERO, |&id| context.fragments.box_position(id))
+    } else {
+        LayoutPoint::ZERO
+    };
     let rect = cursor.geometry(text_layout, 1.5);
     let line_index = text_layout
         .lines()
@@ -589,8 +645,8 @@ pub(super) fn caret_rect<N>(layout_box: &LayoutBox<N>) -> Option<LayoutRect> {
     let rect = selection_rect(
         context,
         line_index,
-        layout_box.final_layout.border.left + layout_box.final_layout.padding.left,
-        layout_box.final_layout.border.top + layout_box.final_layout.padding.top,
+        layout_box.final_layout.border.left + layout_box.final_layout.padding.left + position.x,
+        layout_box.final_layout.border.top + layout_box.final_layout.padding.top + position.y,
         rect.x0 as f32,
         rect.y0 as f32,
         (rect.x1 - rect.x0).max(1.5) as f32,

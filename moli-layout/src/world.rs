@@ -151,6 +151,7 @@ impl LayoutBoxKind {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LayoutAnonymousReason {
     MixedFlowInlineRun,
+    BlockInInlineRun,
     InlineSplitContinuation,
     FlexTextRun,
     GridTextRun,
@@ -165,6 +166,7 @@ impl LayoutAnonymousReason {
     pub(crate) const fn debug_name(self) -> &'static str {
         match self {
             Self::MixedFlowInlineRun => "mixed-flow-inline-run",
+            Self::BlockInInlineRun => "block-in-inline-run",
             Self::InlineSplitContinuation => "inline-split-continuation",
             Self::FlexTextRun => "flex-text-run",
             Self::GridTextRun => "grid-text-run",
@@ -261,6 +263,8 @@ pub struct LayoutBox<N> {
     /// Text, `<br>`, and non-atomic inline boxes are laid out by their owner IFC
     /// and therefore do not enter Taffy's child traversal independently.
     pub(crate) inline_flattened: bool,
+    /// With sliced decorations, a run interrupted by a block has no end edge.
+    pub(crate) inline_split_before_block: bool,
     /// `list-style-position: outside` marker laid out beside, rather than in,
     /// the list item's principal inline formatting context.
     pub(crate) outside_list_marker: bool,
@@ -560,6 +564,19 @@ impl Default for ViewportLayoutState {
 }
 
 impl<N> LayoutBox<N> {
+    pub(crate) fn has_inline_decoration_edge(&self, start: bool) -> bool {
+        let present = if start {
+            self.kind != LayoutBoxKind::InlineContinuation
+        } else {
+            !self.inline_split_before_block
+        };
+        present
+            || self.style.stylo_computed_values().is_some_and(|style| {
+                style.clone_box_decoration_break()
+                    == style::computed_values::box_decoration_break::T::Clone
+            })
+    }
+
     pub(crate) fn size_query_axes(&self) -> Option<Size<bool>> {
         use style::values::specified::box_::ContainerType;
 
@@ -708,6 +725,9 @@ where
     pub(crate) measure_baselines: bool,
     /// The active table cell's used height need not be a percentage guarantee.
     pub(crate) table_cell_percentage_height: Option<(LayoutBoxId, bool)>,
+    /// A split run has auto height, but resolves its children's percentages
+    /// against the same containing block as the unsplit contributions.
+    pub(crate) block_in_inline_parent_height: Option<(LayoutBoxId, Option<f32>)>,
     numeric_layout_tracking: bool,
     numeric_layout_touched: Vec<LayoutBoxId>,
     numeric_layout_touched_marks: Vec<bool>,
@@ -750,6 +770,7 @@ where
             retained_inline_fonts: None,
             measure_baselines: false,
             table_cell_percentage_height: None,
+            block_in_inline_parent_height: None,
             numeric_layout_tracking: false,
             numeric_layout_touched: Vec::new(),
             numeric_layout_touched_marks: vec![false],
@@ -938,6 +959,63 @@ where
         crate::LayoutOutputBoxId::from_index(self.boxes.index_of(id))
     }
 
+    /// Relative inline positioning is visual. A promoted block run keeps its
+    /// numeric position in the containing block's normal flow.
+    pub(crate) fn block_in_inline_offset(&self, id: LayoutBoxId) -> LayoutPoint {
+        let layout_box = &self.boxes[id];
+        if layout_box.anonymous_reason != Some(LayoutAnonymousReason::BlockInInlineRun) {
+            return LayoutPoint::ZERO;
+        }
+        layout_box
+            .layout_parent
+            .map_or(LayoutPoint::ZERO, |container| {
+                self.inline_positioning_offset(layout_box.structural_parent, container)
+            })
+    }
+
+    pub(crate) fn inline_positioning_offset(
+        &self,
+        mut inline: Option<LayoutBoxId>,
+        container: LayoutBoxId,
+    ) -> LayoutPoint {
+        let container = &self.boxes[container];
+        let layout = container.final_layout;
+        let size = taffy::Size {
+            width: (layout.size.width
+                - layout.border.left
+                - layout.border.right
+                - layout.padding.left
+                - layout.padding.right
+                - layout.scrollbar_size.width)
+                .max(0.0),
+            height: (layout.size.height
+                - layout.border.top
+                - layout.border.bottom
+                - layout.padding.top
+                - layout.padding.bottom
+                - layout.scrollbar_size.height)
+                .max(0.0),
+        };
+        let mut offset = LayoutPoint::ZERO;
+        while let Some(id) = inline {
+            let layout_box = &self.boxes[id];
+            if !layout_box.style.display().is_inline_flow() || layout_box.is_replaced() {
+                break;
+            }
+            if layout_box.style.position() == crate::LayoutPosition::Relative {
+                let delta = crate::inline::relative_atomic_inset_offset(
+                    &layout_box.style.taffy,
+                    size,
+                    container.style.direction(),
+                );
+                offset.x += delta.x;
+                offset.y += delta.y;
+            }
+            inline = layout_box.structural_parent;
+        }
+        offset
+    }
+
     pub fn len(&self) -> usize {
         self.boxes.len()
     }
@@ -1032,8 +1110,11 @@ where
             visited[self.boxes.index_of(id)] = true;
             resolved = resolved.saturating_add(1);
             let location = self.boxes[id].final_layout.location;
-            let origin =
-                LayoutPoint::new(parent_origin.x + location.x, parent_origin.y + location.y);
+            let offset = self.block_in_inline_offset(id);
+            let origin = LayoutPoint::new(
+                parent_origin.x + location.x + offset.x,
+                parent_origin.y + location.y + offset.y,
+            );
             origins[self.boxes.index_of(id)] = origin;
 
             let mut child = first_child[self.boxes.index_of(id)];
@@ -1502,6 +1583,7 @@ where
             inline_layout: None,
             inline_context_owner: None,
             inline_flattened: false,
+            inline_split_before_block: false,
             outside_list_marker: false,
             scroll_offset: LayoutPoint::ZERO,
             replaced_context: None,

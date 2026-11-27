@@ -6,7 +6,7 @@ use moli_layout::{
     LayoutQueryAnswer, LayoutQueryBatch, LayoutResolvedGridTracks, LayoutScrollIntoViewGeometry,
 };
 
-use super::client_rect::{ClientRect, union_client_rect, zero_client_rect};
+use super::client_rect::{ClientRect, zero_client_rect};
 use super::mock::{answer_queries as answer_mock_queries, answer_query as answer_mock_query};
 use crate::{
     document_runtime::DomHandle,
@@ -145,14 +145,9 @@ pub(crate) fn read_bounding_client_rect(
     runtime: &PageScriptHost,
     source: DomHandle,
 ) -> Result<ClientRect, LayoutError> {
-    let mut rects = read_client_rects(runtime, source)?.into_iter();
-    let Some(mut bounds) = rects.next() else {
-        return Ok(zero_client_rect());
-    };
-    for rect in rects {
-        bounds = union_client_rect(bounds, rect);
-    }
-    Ok(bounds)
+    Ok(ClientRect::bounding_client_rect(read_client_rects(
+        runtime, source,
+    )?))
 }
 
 pub(crate) fn observable_bounding_client_rects(
@@ -197,11 +192,9 @@ pub(crate) fn observable_bounding_client_rects(
         .answers
         .into_iter()
         .map(|answer| match answer {
-            LayoutQueryAnswer::ClientRects(rects) => Ok(rects
-                .into_iter()
-                .map(ClientRect::from)
-                .reduce(union_client_rect)
-                .unwrap_or_else(zero_client_rect)),
+            LayoutQueryAnswer::ClientRects(rects) => Ok(ClientRect::bounding_client_rect(
+                rects.into_iter().map(ClientRect::from),
+            )),
             _ => Err(provider_contract_error("bounding client rects")),
         })
         .collect()

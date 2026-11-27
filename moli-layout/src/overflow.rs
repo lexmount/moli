@@ -285,7 +285,9 @@ impl OverflowProjection {
             }
         }
         let location = child_box.final_layout.location;
-        let layout_translation = LayoutTransform2D::translation(location.x, location.y);
+        let offset = world.block_in_inline_offset(child);
+        let layout_translation =
+            LayoutTransform2D::translation(location.x + offset.x, location.y + offset.y);
         let local_to_parent = layout_translation.concatenate(geometry.resolved_transform.transform);
         let visual_bounds = local_to_parent
             .map_rect(visual_overflow.union(geometry.border_box))

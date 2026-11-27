@@ -1,9 +1,100 @@
 use super::*;
+use crate::native_bridge::document::SVG_NS;
 use crate::util::{call_object_method, object_string_property};
 
 enum NativeRangeGeometryQuery {
     Text,
     Element,
+}
+
+// Container boundaries use the positions between children. CharacterData
+// boundaries share the node's interior position and use the UTF-16 offset.
+type GeometryBoundary = (usize, u32);
+
+struct GeometryNode {
+    handle: DomHandle,
+    depth: usize,
+    before: usize,
+    inside: usize,
+    after: usize,
+}
+
+struct RangeGeometryOrder {
+    boundaries: RangeBoundaryHandles,
+    nodes: Vec<GeometryNode>,
+    next_position: usize,
+    start: Option<GeometryBoundary>,
+    end: Option<GeometryBoundary>,
+}
+
+impl RangeGeometryOrder {
+    fn collect(
+        dom: &crate::dom::native::DomHost,
+        common: DomHandle,
+        boundaries: RangeBoundaryHandles,
+    ) -> Self {
+        let mut order = Self {
+            boundaries,
+            nodes: Vec::new(),
+            next_position: 1,
+            start: None,
+            end: None,
+        };
+        order.visit(dom, common, 0, 0);
+        order
+    }
+
+    fn position(&mut self) -> usize {
+        let position = self.next_position;
+        self.next_position += 1;
+        position
+    }
+
+    fn record_boundary(&mut self, handle: DomHandle, offset: u32, position: usize) {
+        if self.boundaries.start.container == handle && self.boundaries.start.offset == offset {
+            self.start = Some((position, 0));
+        }
+        if self.boundaries.end.container == handle && self.boundaries.end.offset == offset {
+            self.end = Some((position, 0));
+        }
+    }
+
+    fn visit(
+        &mut self,
+        dom: &crate::dom::native::DomHost,
+        handle: DomHandle,
+        depth: usize,
+        before: usize,
+    ) -> usize {
+        let inside = self.position();
+        let index = self.nodes.len();
+        self.nodes.push(GeometryNode {
+            handle,
+            depth,
+            before,
+            inside,
+            after: 0,
+        });
+        let mut children = dom.child_handles(handle).enumerate().peekable();
+        if children.peek().is_none() {
+            if self.boundaries.start.container == handle {
+                self.start = Some((inside, self.boundaries.start.offset));
+            }
+            if self.boundaries.end.container == handle {
+                self.end = Some((inside, self.boundaries.end.offset));
+            }
+        } else {
+            self.record_boundary(handle, 0, inside);
+            let mut child_before = inside;
+            for (child_index, child) in children {
+                child_before = self.visit(dom, child, depth + 1, child_before);
+                self.record_boundary(handle, (child_index + 1) as u32, child_before);
+            }
+        }
+        let after = self.position();
+        self.nodes[index].after = after;
+        after
+    }
 }
 
 fn native_range_client_rects<'s>(
@@ -33,43 +124,43 @@ pub(super) fn native_range_client_rects_for_boundaries(
         };
         return Some(Ok(vec![compute_mock_client_rect(host, target)]));
     }
-    let document = host
-        .dom_host()
-        .owner_document_handle(boundaries.start.container)?;
+    let dom = host.dom_host();
+    let document = dom.owner_document_handle(boundaries.start.container)?;
     let common =
         common_ancestor_handle(scope, boundaries.start.container, boundaries.end.container)?;
-    let mut handles = Vec::new();
-    collect_range_geometry_subtree(host.dom_host(), common, &mut handles);
+    let order = RangeGeometryOrder::collect(dom, common, boundaries);
+    let range_start = order.start?;
+    let range_end = order.end?;
 
     let mut queries = Vec::new();
     let mut kinds = Vec::new();
-    for handle in handles {
-        match node_type_for_handle(scope, handle) {
-            Some(NodeType::Text | NodeType::CDataSection) => {
-                let length = character_data_utf16_units_handle(scope, handle)
+    let mut selected_element_depth = None;
+    for GeometryNode {
+        handle,
+        depth,
+        before,
+        inside,
+        after,
+    } in order.nodes
+    {
+        if selected_element_depth.is_some_and(|selected| depth <= selected) {
+            selected_element_depth = None;
+        }
+        let Some(node) = dom.node(handle) else {
+            continue;
+        };
+        match node.node_type() {
+            NodeType::Text | NodeType::CDataSection => {
+                if inside < range_start.0 || inside > range_end.0 {
+                    continue;
+                }
+                let length = host
+                    .character_data_utf16_units(handle)
                     .map(|units| units.len())
                     .unwrap_or(0);
-                let starts_before_range_end = super::ordering::point_order_handles(
-                    scope,
-                    handle,
-                    0,
-                    boundaries.end.container,
-                    boundaries.end.offset,
-                ) == Some(std::cmp::Ordering::Less)
-                    || (handle == boundaries.end.container && boundaries.end.offset == 0);
-                let ends_after_range_start = super::ordering::point_order_handles(
-                    scope,
-                    handle,
-                    u32::try_from(length).unwrap_or(u32::MAX),
-                    boundaries.start.container,
-                    boundaries.start.offset,
-                ) == Some(std::cmp::Ordering::Greater)
-                    || (handle == boundaries.start.container
-                        && boundaries.start.offset as usize == length);
-                let collapsed_here = boundaries.start.container == handle
-                    && boundaries.end.container == handle
-                    && boundaries.start.offset == boundaries.end.offset;
-                if (!starts_before_range_end || !ends_after_range_start) && !collapsed_here {
+                if (inside, 0) > range_end
+                    || (inside, u32::try_from(length).unwrap_or(u32::MAX)) < range_start
+                {
                     continue;
                 }
                 let start = if handle == boundaries.start.container {
@@ -90,13 +181,12 @@ pub(super) fn native_range_client_rects_for_boundaries(
                 if start == 0
                     && end == length
                     && length != 0
-                    && let Some(parent) = parent_handle(scope, handle)
-                    && host
-                        .dom_host()
+                    && let Some(parent) = dom.parent_node(handle)
+                    && dom
                         .node(parent)
                         .and_then(|node| node.as_element())
                         .is_some_and(|element| element.is_svg_element("text"))
-                    && host.dom_host().child_handles(parent).eq([handle])
+                    && dom.child_handles(parent).eq([handle])
                 {
                     queries.push(moli_layout::LayoutQuery::ClientRects { source: parent });
                     kinds.push(NativeRangeGeometryQuery::Element);
@@ -108,37 +198,18 @@ pub(super) fn native_range_client_rects_for_boundaries(
                 });
                 kinds.push(NativeRangeGeometryQuery::Text);
             }
-            Some(NodeType::Element) if handle != common => {
-                let Some(parent) = parent_handle(scope, handle) else {
+            NodeType::Element
+                if handle != common && (before, 0) >= range_start && (after, 0) <= range_end =>
+            {
+                // A replaced SVG scene publishes its object's quads under
+                // their own sources, separately from the selected SVG root.
+                if selected_element_depth.is_some() && node.namespace() != Some(SVG_NS) {
                     continue;
-                };
-                let Some(index) = child_index_handle(scope, parent, handle) else {
-                    continue;
-                };
-                let starts_at_or_after_range = !matches!(
-                    super::ordering::point_order_handles(
-                        scope,
-                        parent,
-                        index,
-                        boundaries.start.container,
-                        boundaries.start.offset,
-                    ),
-                    Some(std::cmp::Ordering::Less)
-                );
-                let ends_at_or_before_range = !matches!(
-                    super::ordering::point_order_handles(
-                        scope,
-                        parent,
-                        index.saturating_add(1),
-                        boundaries.end.container,
-                        boundaries.end.offset,
-                    ),
-                    Some(std::cmp::Ordering::Greater)
-                );
-                if starts_at_or_after_range && ends_at_or_before_range {
-                    queries.push(moli_layout::LayoutQuery::ClientRects { source: handle });
-                    kinds.push(NativeRangeGeometryQuery::Element);
                 }
+                queries.push(moli_layout::LayoutQuery::ClientRects { source: handle });
+                kinds.push(NativeRangeGeometryQuery::Element);
+                // Text descendants still contribute their selected ranges.
+                selected_element_depth.get_or_insert(depth);
             }
             _ => {}
         }
@@ -178,52 +249,6 @@ pub(super) fn native_range_client_rects_for_boundaries(
         }
         Ok(rects)
     }))
-}
-
-fn collect_range_geometry_subtree(
-    dom_host: &crate::dom::native::DomHost,
-    root: DomHandle,
-    out: &mut Vec<DomHandle>,
-) {
-    out.push(root);
-    for child in dom_host.child_handles(root) {
-        collect_range_geometry_subtree(dom_host, child, out);
-    }
-}
-
-fn bounding_range_rect(rects: &[ClientRect]) -> ClientRect {
-    let Some(first) = rects.first().copied() else {
-        return ClientRect {
-            left: 0.0,
-            top: 0.0,
-            right: 0.0,
-            bottom: 0.0,
-            width: 0.0,
-            height: 0.0,
-        };
-    };
-    let mut non_empty = rects
-        .iter()
-        .copied()
-        .filter(|rect| rect.width != 0.0 || rect.height != 0.0);
-    let Some(mut bounds) = non_empty.next() else {
-        return first;
-    };
-    for rect in non_empty {
-        let left = bounds.left.min(rect.left);
-        let top = bounds.top.min(rect.top);
-        let right = bounds.right.max(rect.right);
-        let bottom = bounds.bottom.max(rect.bottom);
-        bounds = ClientRect {
-            left,
-            top,
-            right,
-            bottom,
-            width: (right - left).max(0.0),
-            height: (bottom - top).max(0.0),
-        };
-    }
-    bounds
 }
 
 fn throw_range_layout_error(scope: &mut v8::PinScope<'_, '_>, error: moli_layout::LayoutError) {
@@ -327,7 +352,9 @@ pub(in crate::context_bootstrap) fn range_geometry_dom_rect<'s>(
 ) -> Option<v8::Local<'s, v8::Object>> {
     if let Some(rects) = native_range_client_rects(scope, range) {
         return match rects {
-            Ok(rects) => new_dom_rect_from_client_rect(scope, bounding_range_rect(&rects)),
+            Ok(rects) => {
+                new_dom_rect_from_client_rect(scope, ClientRect::bounding_client_rect(rects))
+            }
             Err(error) => {
                 throw_range_layout_error(scope, error);
                 None

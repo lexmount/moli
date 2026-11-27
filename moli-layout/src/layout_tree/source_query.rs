@@ -2,11 +2,14 @@
 
 use std::{collections::HashMap, fmt::Debug, hash::Hash, ops::Range};
 
-use crate::LayoutPosition;
+use crate::{
+    LayoutPosition,
+    overflow::{inset_rect, offset_rect, outset_rect},
+};
 
 use super::{
     model::{
-        LayoutBoxModel, LayoutCoordinateSpaceId, LayoutFragment, LayoutFragmentBoxModel,
+        LayoutBoxModel, LayoutCoordinateSpaceId, LayoutFragmentBoxModel, LayoutFragmentId,
         LayoutFragmentKind, LayoutOutputBoxId, LayoutPoint, LayoutQuad, LayoutRect,
         LayoutResolvedGridTracks, LayoutSize, LayoutTransform2D, LayoutUsedSize,
     },
@@ -14,7 +17,7 @@ use super::{
         LayoutElementMetrics, LayoutNodeOutput, LayoutResizeObserverMetrics,
         LayoutResizeObserverSize,
     },
-    tree::{CssSizingBox, FrozenLayoutBox, FrozenLayoutTree},
+    tree::{CssSizingBox, FrozenLayoutBox, FrozenLayoutTree, InlineSplitPart},
 };
 
 #[cfg(test)]
@@ -27,6 +30,22 @@ struct InlineOffsetGeometry {
     layout_origin_in_document: LayoutPoint,
     border_origin_in_viewport_ignoring_css_transforms: LayoutPoint,
     size: LayoutSize,
+}
+
+struct CssomFragment {
+    coordinate_space: LayoutCoordinateSpaceId,
+    rect: LayoutRect,
+    model: Option<LayoutFragmentBoxModel>,
+    inline_box: Option<LayoutOutputBoxId>,
+}
+
+#[derive(Clone, Copy)]
+struct SelectedTextRect {
+    box_id: LayoutOutputBoxId,
+    line_index: usize,
+    rtl: bool,
+    coordinate_space: LayoutCoordinateSpaceId,
+    rect: LayoutRect,
 }
 
 impl<N> FrozenLayoutTree<N>
@@ -203,6 +222,10 @@ where
                     } else {
                         parent.layout_origin_in_document
                     }
+                } else if self.inline_split_parts(parent.id).is_some()
+                    && let Some(inline) = self.inline_offset_geometry(parent.id, &parent.fragments)
+                {
+                    inline.layout_origin_in_document
                 } else {
                     LayoutPoint::new(
                         parent.layout_origin_in_document.x + parent.padding_box.x,
@@ -211,7 +234,7 @@ where
                 }
             })
             .unwrap_or(LayoutPoint::ZERO);
-        let inline_offset_geometry = self.inline_offset_geometry(&output, box_id);
+        let inline_offset_geometry = self.inline_offset_geometry(box_id, &output.fragments);
         let layout_origin = inline_offset_geometry
             .map(|geometry| geometry.layout_origin_in_document)
             .unwrap_or(geometry.layout_origin_in_document);
@@ -362,6 +385,11 @@ where
     }
 
     pub(super) fn box_model_for_output(&self, output: &LayoutNodeOutput) -> Option<LayoutBoxModel> {
+        if let Some(principal) = output.principal_box
+            && self.inline_split_parts(principal).is_some()
+        {
+            return self.split_inline_box_model(principal, &output.fragments);
+        }
         let fragment_models = output
             .fragments
             .iter()
@@ -389,25 +417,80 @@ where
         )
     }
 
+    fn split_inline_box_model(
+        &self,
+        principal: LayoutOutputBoxId,
+        fragments: &[LayoutFragmentId],
+    ) -> Option<LayoutBoxModel> {
+        let mut first = None;
+        let mut bounds = None::<LayoutRect>;
+        let mut border_edges = [0.0_f32; 4];
+        let mut padding_edges = [0.0_f32; 4];
+        let mut margin_edges = [0.0_f32; 4];
+        let source = self.boxes[principal.index()].geometry_source;
+        self.for_each_cssom_fragment(Some(principal), fragments, |fragment| {
+            let Some(model) = fragment.model else {
+                return;
+            };
+            let Some(owner) = self
+                .coordinate_space(fragment.coordinate_space)
+                .and_then(|space| space.owner)
+            else {
+                return;
+            };
+            let origin = self.boxes[owner.index()].layout_origin_in_document;
+            let rect = offset_rect(model.border, origin);
+            first.get_or_insert((fragment.coordinate_space, origin, rect));
+            if rect.width != 0.0 || rect.height != 0.0 {
+                bounds = Some(bounds.map_or(rect, |bounds| bounds.union(rect)));
+            }
+            if fragment
+                .inline_box
+                .is_some_and(|id| self.boxes[id.index()].geometry_source == source)
+            {
+                accumulate_box_insets(&mut border_edges, model.border, model.padding);
+                accumulate_box_insets(&mut padding_edges, model.padding, model.content);
+                accumulate_box_insets(&mut margin_edges, model.margin, model.border);
+            }
+        });
+        let (space, origin, first_rect) = first?;
+        // Combine in layout coordinates before applying the shared ancestor
+        // transform. Offset size and BoxModel include one-dimensional boxes.
+        let border = offset_rect(
+            bounds.unwrap_or(first_rect),
+            LayoutPoint::new(-origin.x, -origin.y),
+        );
+        let [top, right, bottom, left] = border_edges;
+        let padding = inset_rect(border, top, right, bottom, left);
+        let [top, right, bottom, left] = padding_edges;
+        let content = inset_rect(padding, top, right, bottom, left);
+        let [_, right, _, left] = margin_edges;
+        let margin = outset_rect(border, 0.0, right, 0.0, left);
+        self.project_local_box_model(
+            space,
+            LayoutFragmentBoxModel {
+                content,
+                padding,
+                border,
+                margin,
+            },
+        )
+    }
+
     pub fn client_rects_for_source(&self, source: N) -> Vec<LayoutQuad> {
         self.source_output(source)
             .map_or_else(Vec::new, |output| self.client_rects_for_output(&output))
     }
 
     pub(super) fn client_rects_for_output(&self, output: &LayoutNodeOutput) -> Vec<LayoutQuad> {
-        self.geometry_fragments(output, true)
-            .filter(|fragment| {
-                matches!(
-                    fragment.kind,
-                    LayoutFragmentKind::Box { .. } | LayoutFragmentKind::InlineBox { .. }
-                )
-            })
-            .filter_map(|fragment| {
-                self.coordinate_space(fragment.coordinate_space)
-                    .map(|space| space.local_to_viewport.map_rect(fragment.rect))
-            })
-            .chain(self.object_quads_for_output(output))
-            .collect()
+        let mut quads = Vec::new();
+        self.for_each_cssom_fragment(output.principal_box, &output.fragments, |fragment| {
+            if let Some(space) = self.coordinate_space(fragment.coordinate_space) {
+                quads.push(space.local_to_viewport.map_rect(fragment.rect));
+            }
+        });
+        quads.extend(self.object_quads_for_output(output));
+        quads
     }
 
     fn object_quads_for_output<'a>(
@@ -427,38 +510,99 @@ where
         })
     }
 
-    /// CSSOM includes empty split edges. CDP enumerates the populated inline
-    /// runs and the promoted blocks, including zero-width lines with content.
-    fn geometry_fragments<'a>(
-        &'a self,
-        output: &'a LayoutNodeOutput,
-        include_empty_inline_runs: bool,
-    ) -> impl Iterator<Item = &'a LayoutFragment> {
-        let split_parts = output.principal_box.and_then(|principal| {
-            self.inline_splits
-                .binary_search_by_key(&principal, |parts| parts[0].box_id)
-                .ok()
-                .map(|index| self.inline_splits[index].as_ref())
-        });
-        let own_fragments = if split_parts.is_some() {
-            &[]
-        } else {
-            output.fragments.as_slice()
+    fn inline_split_parts(&self, principal: LayoutOutputBoxId) -> Option<&[InlineSplitPart]> {
+        let index = self
+            .inline_splits
+            .binary_search_by_key(&principal, |parts| parts[0].box_id)
+            .ok()?;
+        Some(&self.inline_splits[index])
+    }
+
+    /// CSSOM enumerates the inline edges and their anonymous block runs.
+    fn for_each_cssom_fragment(
+        &self,
+        principal: Option<LayoutOutputBoxId>,
+        fragments: &[LayoutFragmentId],
+        mut emit: impl FnMut(CssomFragment),
+    ) {
+        let Some(parts) = principal.and_then(|id| self.inline_split_parts(id)) else {
+            self.emit_cssom_boxes(fragments, LayoutPoint::ZERO, &mut emit);
+            return;
         };
-        own_fragments
-            .iter()
-            .chain(
-                split_parts
-                    .into_iter()
-                    .flatten()
-                    .filter(move |part| include_empty_inline_runs || !part.is_empty_inline_run)
-                    .flat_map(|part| {
-                        #[cfg(test)]
-                        SOURCE_QUERY_BOX_VISITS.with(|count| count.set(count.get() + 1));
-                        self.boxes[part.box_id.index()].fragments.iter()
-                    }),
-            )
-            .filter_map(|id| self.fragment(*id))
+        for part in parts {
+            #[cfg(test)]
+            SOURCE_QUERY_BOX_VISITS.with(|count| count.set(count.get() + 1));
+            if part.use_inline_contents
+                && let Some(children) = self.box_contents.children_of(part.box_id)
+            {
+                for &child in children {
+                    let layout_box = &self.boxes[child.index()];
+                    if matches!(
+                        layout_box.position,
+                        LayoutPosition::Absolute | LayoutPosition::Fixed
+                    ) || self
+                        .box_contents
+                        .children_of(child)
+                        .is_some_and(<[_]>::is_empty)
+                    {
+                        continue;
+                    }
+                    if layout_box.display.is_inline_level() {
+                        self.emit_cssom_boxes(&layout_box.fragments, LayoutPoint::ZERO, &mut emit);
+                    }
+                    for text in self.selected_text_rects(&layout_box.fragments, 0..usize::MAX) {
+                        let rect = text.rect;
+                        emit(CssomFragment {
+                            coordinate_space: text.coordinate_space,
+                            rect,
+                            model: Some(LayoutFragmentBoxModel {
+                                content: rect,
+                                padding: rect,
+                                border: rect,
+                                margin: rect,
+                            }),
+                            inline_box: None,
+                        });
+                    }
+                }
+            } else {
+                self.emit_cssom_boxes(
+                    &self.boxes[part.box_id.index()].fragments,
+                    part.local_offset,
+                    &mut emit,
+                );
+            }
+        }
+    }
+
+    fn emit_cssom_boxes(
+        &self,
+        fragments: &[LayoutFragmentId],
+        offset: LayoutPoint,
+        emit: &mut impl FnMut(CssomFragment),
+    ) {
+        for fragment in fragments.iter().filter_map(|id| self.fragment(*id)) {
+            let inline_box = match fragment.kind {
+                LayoutFragmentKind::InlineBox { box_id, .. } => Some(box_id),
+                LayoutFragmentKind::Box { .. } => None,
+                _ => continue,
+            };
+            emit(CssomFragment {
+                coordinate_space: fragment.coordinate_space,
+                rect: offset_rect(fragment.rect, offset),
+                model: if offset == LayoutPoint::ZERO {
+                    fragment.box_model
+                } else {
+                    fragment.box_model.map(|model| LayoutFragmentBoxModel {
+                        content: offset_rect(model.content, offset),
+                        padding: offset_rect(model.padding, offset),
+                        border: offset_rect(model.border, offset),
+                        margin: offset_rect(model.margin, offset),
+                    })
+                },
+                inline_box,
+            });
+        }
     }
 
     pub fn content_quads_for_source(&self, source: N) -> Vec<LayoutQuad> {
@@ -467,26 +611,74 @@ where
     }
 
     pub(super) fn content_quads_for_output(&self, output: &LayoutNodeOutput) -> Vec<LayoutQuad> {
-        self.geometry_fragments(output, false)
-            .filter(|fragment| {
-                matches!(
-                    fragment.kind,
-                    LayoutFragmentKind::Box { .. }
-                        | LayoutFragmentKind::InlineBox { .. }
-                        | LayoutFragmentKind::Text { .. }
-                )
-            })
-            .filter_map(|fragment| {
-                // Chromium's content quads are border-box quads.
-                let rect = fragment
-                    .box_model
-                    .map(|model| model.border)
-                    .unwrap_or(fragment.rect);
-                self.coordinate_space(fragment.coordinate_space)
-                    .map(|space| space.local_to_viewport.map_rect(rect))
-            })
-            .chain(self.object_quads_for_output(output))
-            .collect()
+        let mut quads = Vec::new();
+        if let Some(parts) = output
+            .principal_box
+            .and_then(|id| self.inline_split_parts(id))
+        {
+            for part in parts.iter().filter(|part| !part.is_empty_inline_run) {
+                self.append_box_content_quads(part.box_id, &mut quads);
+            }
+        } else if let Some(id) = output
+            .principal_box
+            .filter(|id| self.box_contents.children_of(*id).is_some())
+        {
+            self.append_box_content_quads(id, &mut quads);
+        } else if output.principal_box.is_none() && !output.scroll_proxy_boxes.is_empty() {
+            for &child in &output.scroll_proxy_boxes {
+                self.append_box_content_quads(child, &mut quads);
+            }
+        } else {
+            self.append_fragment_content_quads(&output.fragments, &mut quads);
+        }
+        quads.extend(self.object_quads_for_output(output));
+        quads
+    }
+
+    fn append_box_content_quads(&self, box_id: LayoutOutputBoxId, quads: &mut Vec<LayoutQuad>) {
+        #[cfg(test)]
+        SOURCE_QUERY_BOX_VISITS.with(|count| count.set(count.get() + 1));
+        if let Some(children) = self.box_contents.children_of(box_id) {
+            for &child in children {
+                self.append_box_content_quads(child, quads);
+            }
+        } else if let Some(geometry) = self.box_geometry(box_id) {
+            self.append_fragment_content_quads(&geometry.fragments, quads);
+        }
+    }
+
+    fn append_fragment_content_quads(
+        &self,
+        fragments: &[LayoutFragmentId],
+        quads: &mut Vec<LayoutQuad>,
+    ) {
+        if fragments.iter().any(|id| {
+            self.fragment(*id)
+                .is_some_and(|fragment| matches!(fragment.kind, LayoutFragmentKind::Text { .. }))
+        }) {
+            quads.extend(self.text_range_rects_for_fragments(fragments, 0..usize::MAX));
+            return;
+        }
+        quads.extend(
+            fragments
+                .iter()
+                .filter_map(|id| self.fragment(*id))
+                .filter(|fragment| {
+                    matches!(
+                        fragment.kind,
+                        LayoutFragmentKind::Box { .. } | LayoutFragmentKind::InlineBox { .. }
+                    )
+                })
+                .filter_map(|fragment| {
+                    // Chromium's content quads are border-box quads.
+                    let rect = fragment
+                        .box_model
+                        .map(|model| model.border)
+                        .unwrap_or(fragment.rect);
+                    self.coordinate_space(fragment.coordinate_space)
+                        .map(|space| space.local_to_viewport.map_rect(rect))
+                }),
+        );
     }
 
     pub fn text_range_rects(&self, source: N, utf16_range: Range<usize>) -> Vec<LayoutQuad> {
@@ -500,17 +692,29 @@ where
         output: &LayoutNodeOutput,
         utf16_range: Range<usize>,
     ) -> Vec<LayoutQuad> {
-        #[derive(Clone, Copy)]
-        struct SelectedTextRect {
-            box_id: LayoutOutputBoxId,
-            line_index: usize,
-            rtl: bool,
-            coordinate_space: LayoutCoordinateSpaceId,
-            rect: LayoutRect,
-        }
+        self.text_range_rects_for_fragments(&output.fragments, utf16_range)
+    }
 
-        let mut selected = output
-            .fragments
+    fn text_range_rects_for_fragments(
+        &self,
+        fragments: &[LayoutFragmentId],
+        utf16_range: Range<usize>,
+    ) -> Vec<LayoutQuad> {
+        self.selected_text_rects(fragments, utf16_range)
+            .into_iter()
+            .filter_map(|fragment| {
+                self.coordinate_space(fragment.coordinate_space)
+                    .map(|space| space.local_to_viewport.map_rect(fragment.rect))
+            })
+            .collect()
+    }
+
+    fn selected_text_rects(
+        &self,
+        fragments: &[LayoutFragmentId],
+        utf16_range: Range<usize>,
+    ) -> Vec<SelectedTextRect> {
+        let mut selected = fragments
             .iter()
             .filter_map(|id| self.fragment(*id))
             .filter_map(|fragment| {
@@ -610,21 +814,7 @@ where
             }
         }
 
-        let mut quads = merged
-            .into_iter()
-            .filter_map(|fragment| {
-                self.coordinate_space(fragment.coordinate_space)
-                    .map(|space| space.local_to_viewport.map_rect(fragment.rect))
-            })
-            .collect::<Vec<_>>();
-        quads.sort_by(|left, right| {
-            let left = left.bounding_rect();
-            let right = right.bounding_rect();
-            left.y
-                .total_cmp(&right.y)
-                .then_with(|| left.x.total_cmp(&right.x))
-        });
-        quads
+        merged
     }
 }
 
@@ -762,37 +952,28 @@ where
     /// system while intentionally excluding transforms and scrolling.
     fn inline_offset_geometry(
         &self,
-        output: &LayoutNodeOutput,
         box_id: LayoutOutputBoxId,
+        fragments: &[LayoutFragmentId],
     ) -> Option<InlineOffsetGeometry> {
         let mut first_fragment = None;
         let mut bounds = None::<LayoutRect>;
+        let is_split = self.inline_split_parts(box_id).is_some();
 
-        for id in &output.fragments {
-            let Some(fragment) = self.fragment(*id) else {
-                continue;
-            };
-            let LayoutFragmentKind::InlineBox {
-                box_id: fragment_box,
-                ..
-            } = fragment.kind
-            else {
-                continue;
-            };
-            if fragment_box != box_id {
-                continue;
+        self.for_each_cssom_fragment(Some(box_id), fragments, |fragment| {
+            if !is_split && fragment.inline_box != Some(box_id) {
+                return;
             }
-            let Some(box_model) = fragment.box_model else {
-                continue;
+            let Some(box_model) = fragment.model else {
+                return;
             };
             let Some(fragment_space) = self.coordinate_space(fragment.coordinate_space) else {
-                continue;
+                return;
             };
             let Some(owner) = fragment_space.owner else {
-                continue;
+                return;
             };
             let Some(owner_geometry) = self.box_geometry(owner) else {
-                continue;
+                return;
             };
             let border = box_model.border;
             let owner_origin = owner_geometry.layout_origin_in_document;
@@ -816,10 +997,10 @@ where
             // which discards only a 0-by-0 fragment. A one-dimensional
             // fragment still contributes its non-zero axis to offset geometry.
             if document_border.width == 0.0 && document_border.height == 0.0 {
-                continue;
+                return;
             }
             bounds = Some(bounds.map_or(document_border, |current| current.union(document_border)));
-        }
+        });
 
         let (layout_origin_in_document, border_origin_in_viewport_ignoring_css_transforms) =
             first_fragment?;
@@ -938,6 +1119,18 @@ where
 
 fn axis_aligned_union(left: LayoutQuad, right: LayoutQuad) -> LayoutQuad {
     LayoutTransform2D::IDENTITY.map_rect(left.bounding_rect().union(right.bounding_rect()))
+}
+
+fn accumulate_box_insets(outsets: &mut [f32; 4], outer: LayoutRect, inner: LayoutRect) {
+    let insets = [
+        inner.y - outer.y,
+        outer.right() - inner.right(),
+        outer.bottom() - inner.bottom(),
+        inner.x - outer.x,
+    ];
+    for (outset, inset) in outsets.iter_mut().zip(insets) {
+        *outset = outset.max(inset);
+    }
 }
 
 #[cfg(test)]
@@ -1198,7 +1391,7 @@ mod tests {
         };
 
         let geometry = tree
-            .inline_offset_geometry(&output, box_id)
+            .inline_offset_geometry(box_id, &output.fragments)
             .expect("the valid fragment after the skipped entry must contribute geometry");
 
         assert_eq!(
@@ -1245,6 +1438,8 @@ mod tests {
                 InlineSplitPart {
                     box_id,
                     is_empty_inline_run: !promoted_block,
+                    use_inline_contents: false,
+                    local_offset: LayoutPoint::ZERO,
                 }
             });
             tree.inline_splits.push(Box::new(parts));
@@ -1266,8 +1461,9 @@ mod tests {
                 })
                 .collect(),
         );
-        // ClientRects visits all three parts, and ContentQuads visits the block.
-        let split_part_visits = tree.inline_splits.len() * 4;
+        // CSSOM and BoxModel visit all three parts, and ContentQuads visits
+        // the block plus the proxy-only source's nominated box.
+        let content_visits = tree.inline_splits.len() * 7 + 1;
         SOURCE_QUERY_BOX_VISITS.with(|count| count.set(0));
         let expected = queries
             .queries
@@ -1276,7 +1472,7 @@ mod tests {
             .collect::<Vec<_>>();
         assert_eq!(
             SOURCE_QUERY_BOX_VISITS.with(std::cell::Cell::get),
-            tree.boxes.len() * queries.queries.len() + split_part_visits
+            tree.boxes.len() * queries.queries.len() + content_visits
         );
         SOURCE_QUERY_BOX_VISITS.with(|count| count.set(0));
         // The metrics are pass diagnostics, copied unchanged by query batches.
@@ -1317,7 +1513,7 @@ mod tests {
         assert_eq!(answers.answers, expected);
         assert_eq!(
             SOURCE_QUERY_BOX_VISITS.with(std::cell::Cell::get),
-            tree.boxes.len() + split_part_visits
+            tree.boxes.len() + content_visits
         );
         assert_eq!(answers.metrics, metrics);
         SOURCE_QUERY_BOX_VISITS.with(|count| count.set(0));

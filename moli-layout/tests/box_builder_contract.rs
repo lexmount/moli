@@ -959,9 +959,16 @@ fn inline_with_block_descendant_is_split_into_owned_continuations() {
     let root_children = world.box_by_id(world.root()).unwrap().children();
     assert_eq!(root_children.len(), 3);
     let before_wrapper = world.box_by_id(root_children[0]).unwrap();
-    let block = world.box_by_id(root_children[1]).unwrap();
+    let block_run = world.box_by_id(root_children[1]).unwrap();
+    let block = world.box_by_id(block_run.children()[0]).unwrap();
     let after_wrapper = world.box_by_id(root_children[2]).unwrap();
     assert_eq!(before_wrapper.kind(), LayoutBoxKind::AnonymousBlock);
+    assert_eq!(block_run.kind(), LayoutBoxKind::AnonymousBlock);
+    assert_eq!(
+        block_run.anonymous_reason(),
+        Some(LayoutAnonymousReason::BlockInInlineRun)
+    );
+    assert_eq!(block_run.owner(), Some(1));
     assert_eq!(block.kind(), LayoutBoxKind::PrincipalBlock);
     assert_eq!(after_wrapper.kind(), LayoutBoxKind::AnonymousBlock);
     let first_fragment_id = before_wrapper.children()[0];
@@ -981,6 +988,7 @@ fn inline_with_block_descendant_is_split_into_owned_continuations() {
         Some(first_fragment_id),
         "formatting promotion must not erase the block's LayoutObject parent"
     );
+    assert_eq!(block_run.children(), &[world.source_box(3).unwrap()]);
     assert_eq!(continuation.structural_parent(), Some(world.root()));
     assert_eq!(world.source_box(1), Some(before_wrapper.children()[0]));
 }

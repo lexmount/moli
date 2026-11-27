@@ -2,6 +2,7 @@ use super::*;
 use moli_page_types::LayoutPolicy;
 
 mod arena_identity;
+mod block_in_inline;
 mod inline_compaction;
 mod viewport_reuse;
 

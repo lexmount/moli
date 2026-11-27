@@ -20,9 +20,9 @@ use crate::{
     inline::{
         InlineContentWidthsMemo, InlineEdgeContribution, InlineFormattingContext, InlineFragments,
         InlineLinePlacement, InlineMeasurementInputs, InlineNumericInputs, InlineObjectRole,
-        break_inline_lines, build_inline_fragments, build_inline_line_placements,
-        measure_inline_lines, position_inline_edges, relative_atomic_inset_offset,
-        reset_inline_layout_for_probe,
+        InlinePositioning, break_inline_lines, build_inline_fragments,
+        build_inline_line_placements, measure_inline_lines, position_inline_edges,
+        relative_atomic_inset_offset, reset_inline_layout_for_probe,
     },
     positioned::{
         FlexCrossAxisStaticContext, HorizontalStaticEdge, PhysicalStaticPosition,
@@ -1368,13 +1368,21 @@ fn inline_box_containing_rect<N>(
 where
     N: Copy + Debug + Eq + Hash,
 {
-    let context = world.boxes[owner].inline_layout.as_ref()?;
-    context
-        .fragments
+    let fragments = &world.boxes[owner].inline_layout.as_ref()?.fragments;
+    let split_edge = world.boxes[containing_block].inline_split_before_block;
+    fragments
         .boxes
         .iter()
         .filter(|fragment| fragment.box_id == containing_block)
-        .map(|fragment| fragment.rect)
+        .map(|fragment| {
+            // A split edge on an empty line starts at the line origin. Its
+            // font strut is not part of the positioned containing area.
+            if split_edge && let Some(origin) = fragments.empty_inline_origin(fragment) {
+                PaintRect::new(origin.x, origin.y, 0.0, 0.0)
+            } else {
+                fragment.rect
+            }
+        })
         .reduce(union_paint_rect)
 }
 
@@ -1973,7 +1981,13 @@ where
     ) -> Option<f32> {
         match self.table_cell_percentage_height {
             Some((cell, false)) if cell.to_taffy() == node_id => None,
-            _ => height,
+            _ => height.or(self
+                .block_in_inline_parent_height
+                .and_then(|(id, parent_height)| {
+                    (id.to_taffy() == node_id)
+                        .then_some(parent_height)
+                        .flatten()
+                })),
         }
     }
 
@@ -2155,7 +2169,19 @@ where
         inputs: LayoutInput,
         block_context: Option<&mut BlockContext<'_>>,
     ) -> LayoutOutput {
-        let mut output = self.compute_child_layout_for_box(node_id, inputs, block_context);
+        let id = LayoutBoxId::from_taffy(node_id);
+        let mut output = if self.boxes[id].anonymous_reason
+            == Some(crate::LayoutAnonymousReason::BlockInInlineRun)
+        {
+            let previous = self
+                .block_in_inline_parent_height
+                .replace((id, inputs.parent_size.height));
+            let output = self.compute_child_layout_for_box(node_id, inputs, block_context);
+            self.block_in_inline_parent_height = previous;
+            output
+        } else {
+            self.compute_child_layout_for_box(node_id, inputs, block_context)
+        };
         if inputs.run_mode == RunMode::PerformLayout {
             taffy::compute_oof_layout(self, node_id, &mut output);
         }
@@ -2580,11 +2606,19 @@ where
                 if let Some(clamp) = inline_context.line_clamp.as_mut() {
                     clamp.show_marker = measurement.show_clamp_marker;
                 }
-                let fragments = build_inline_fragments(
+                let direction = self.boxes[id].style.direction();
+                let positioning = InlinePositioning::for_layout(
+                    self,
+                    &inline_context,
+                    content_box_size,
+                    direction,
+                );
+                inline_context.fragments = build_inline_fragments(
                     self.boxes.order(),
                     &inline_context,
                     text_layout,
                     line_placements,
+                    positioning,
                 );
                 self.position_inline_objects(
                     &inline_context,
@@ -2595,9 +2629,8 @@ where
                         y: padding.top + border.top + scrollbar_insets.top,
                     },
                     content_box_size,
-                    self.boxes[id].style.direction(),
+                    direction,
                 );
-                inline_context.fragments = fragments;
                 inline_context.line_placements = measurement
                     .line_placements
                     .take()
@@ -2737,7 +2770,18 @@ where
                     inline_box.height = 0.0;
                 }
                 InlineObjectRole::StartEdge | InlineObjectRole::EndEdge => {
-                    let child_style = &self.boxes[object.box_id].style;
+                    let child = &self.boxes[object.box_id];
+                    let logical_start = object.role == InlineObjectRole::StartEdge;
+                    let object_index = usize::try_from(inline_box.id)
+                        .expect("Parley returned an inline object id outside usize");
+                    if !child.has_inline_decoration_edge(logical_start) {
+                        inline_box.width = 0.0;
+                        inline_box.height = 0.0;
+                        structural_edge_contributions[object_index] =
+                            InlineEdgeContribution::default();
+                        continue;
+                    }
+                    let child_style = &child.style;
                     let margins = child_style
                         .taffy
                         .margin
@@ -2750,7 +2794,6 @@ where
                         .taffy
                         .border
                         .resolve_or_zero(percentage_basis, resolve_stylo_calc_value);
-                    let logical_start = object.role == InlineObjectRole::StartEdge;
                     let physical_left =
                         logical_start == (child_style.direction() == InlineDirection::Ltr);
                     let inline_padding_border = if child_style.uses_horizontal_writing_mode() {
@@ -2770,8 +2813,6 @@ where
                     };
                     inline_box.width = (margin + padding + border).max(0.0);
                     inline_box.height = 0.0;
-                    let object_index = usize::try_from(inline_box.id)
-                        .expect("Parley returned an inline object id outside usize");
                     structural_edge_contributions[object_index] = InlineEdgeContribution {
                         creates_line: margin != 0.0 || padding != 0.0 || border != 0.0,
                         has_border_or_padding,
@@ -3328,15 +3369,25 @@ where
                     containing_block_size,
                     container_direction,
                 );
+                let ancestor_offset = self.boxes[object.box_id]
+                    .structural_parent
+                    .map_or(crate::LayoutPoint::ZERO, |parent| {
+                        context.fragments.box_position(parent)
+                    });
                 self.set_inline_child_layout(
                     object.box_id,
                     Point {
-                        x: content_offset.x + positioned.x + atomic.margins.left + inset_offset.x,
+                        x: content_offset.x
+                            + positioned.x
+                            + atomic.margins.left
+                            + inset_offset.x
+                            + ancestor_offset.x,
                         y: content_offset.y
                             + positioned.y
                             + atomic.margins.top
                             + vertical_offset
-                            + inset_offset.y,
+                            + inset_offset.y
+                            + ancestor_offset.y,
                     },
                     &atomic.output,
                     object_index,

@@ -1759,6 +1759,7 @@ pub(in crate::domains::dom) fn devtools_dom_geometry_result_from_renderer(
         (
             DevToolsDomGeometryOperation::GetContentQuads,
             RendererDocumentNodeGeometry::FoundElement { content_quads, .. }
+            | RendererDocumentNodeGeometry::FoundElementContents { content_quads }
             | RendererDocumentNodeGeometry::FoundNonElement { content_quads },
         ) => Ok(DevToolsDomGeometryResult {
             box_model: None,
@@ -1769,7 +1770,11 @@ pub(in crate::domains::dom) fn devtools_dom_geometry_result_from_renderer(
             width: None,
             height: None,
         }),
-        (_, RendererDocumentNodeGeometry::NoLayoutObject) => Err(DevToolsError::new(
+        (
+            _,
+            RendererDocumentNodeGeometry::NoLayoutObject
+            | RendererDocumentNodeGeometry::FoundElementContents { .. },
+        ) => Err(DevToolsError::new(
             DevToolsErrorKind::Internal,
             "Could not compute node geometry.",
         )),

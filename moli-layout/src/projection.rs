@@ -35,7 +35,8 @@ use std::{
 use taffy::ResolveOrZero;
 
 use crate::layout_tree::{
-    CssSizing, CssSizingBox, FrozenInlineSvgInputs, InlineSplitPart, LayoutCoordinateSpace,
+    CssSizing, CssSizingBox, FrozenBoxContents, FrozenInlineSvgInputs, InlineSplitPart,
+    LayoutCoordinateSpace,
 };
 use crate::overflow::{OverflowProjection, inset_rect, offset_rect, outset_rect};
 use crate::stacking::{PaintOrderEvent, build_paint_order};
@@ -859,8 +860,13 @@ where
             self.box_sources.push(source);
             self.hit_sources.push(layout_box.source.or_else(|| {
                 (layout_box.pseudo.is_some()
-                    || layout_box.anonymous_reason
-                        == Some(LayoutAnonymousReason::InlineSplitContinuation))
+                    || matches!(
+                        layout_box.anonymous_reason,
+                        Some(
+                            LayoutAnonymousReason::InlineSplitContinuation
+                                | LayoutAnonymousReason::BlockInInlineRun
+                        )
+                    ))
                 .then_some(layout_box.owner)
                 .flatten()
             }));
@@ -1051,10 +1057,11 @@ where
         let placements = |index: usize| {
             let node = &world.boxes[index];
             let location = node.final_layout.location;
+            let offset = world.block_in_inline_offset(world.boxes.id_at(index));
             Ok((
                 BoxPlacement {
                     parent: node.layout_parent.map(|id| world.output_id(id)),
-                    location: LayoutPoint::new(location.x, location.y),
+                    location: LayoutPoint::new(location.x + offset.x, location.y + offset.y),
                     transform: self.resolved_transforms[index],
                     fixed: node.style.is_fixed_positioned(),
                 },
@@ -1169,14 +1176,30 @@ where
             let inline_start = self.fragments.len();
             for inline in &context.fragments.boxes {
                 let target = self.world.boxes.index_of(inline.box_id);
-                let box_model = inline_fragment_box_model(self.world, index, inline);
+                let inline_box = &self.world.boxes[inline.box_id];
+                let mut box_model = inline_fragment_box_model(self.world, index, inline);
+                if box_model.border.width == 0.0
+                    && box_model.border.height == box_model.content.height
+                    && let Some(origin) = context.fragments.empty_inline_origin(inline)
+                {
+                    let rect =
+                        LayoutRect::new(box_model.border.x, content_origin.y + origin.y, 0.0, 0.0);
+                    box_model = LayoutFragmentBoxModel {
+                        content: rect,
+                        padding: rect,
+                        border: rect,
+                        margin: rect,
+                    };
+                }
                 let fragment = self.push_fragment(LayoutFragment {
                     id: LayoutFragmentId::from_index(0),
                     kind: LayoutFragmentKind::InlineBox {
                         box_id: LayoutOutputBoxId::from_index(target),
                         line_index: inline.line_index,
-                        has_start_edge: inline.has_start_edge,
-                        has_end_edge: inline.has_end_edge,
+                        has_start_edge: inline.has_start_edge
+                            && inline_box.has_inline_decoration_edge(true),
+                        has_end_edge: inline.has_end_edge
+                            && inline_box.has_inline_decoration_edge(false),
                     },
                     rect: box_model.border,
                     box_model: Some(box_model),
@@ -1188,16 +1211,40 @@ where
             }
             for text in &context.fragments.text {
                 let target = self.world.boxes.index_of(text.box_id);
+                let rect = offset_rect(text.rect, content_origin);
+                let box_id = LayoutOutputBoxId::from_index(target);
+                let (kind, box_model) =
+                    if self.world.boxes[text.box_id].kind == LayoutBoxKind::LineBreak {
+                        (
+                            LayoutFragmentKind::InlineBox {
+                                box_id,
+                                line_index: text.line_index,
+                                has_start_edge: true,
+                                has_end_edge: true,
+                            },
+                            Some(LayoutFragmentBoxModel {
+                                content: rect,
+                                padding: rect,
+                                border: rect,
+                                margin: rect,
+                            }),
+                        )
+                    } else {
+                        (
+                            LayoutFragmentKind::Text {
+                                box_id,
+                                line_index: text.line_index,
+                                source_utf16_range: text.source_utf16_range.clone(),
+                                rtl: text.rtl,
+                            },
+                            None,
+                        )
+                    };
                 let fragment = self.push_fragment(LayoutFragment {
                     id: LayoutFragmentId::from_index(0),
-                    kind: LayoutFragmentKind::Text {
-                        box_id: LayoutOutputBoxId::from_index(target),
-                        line_index: text.line_index,
-                        source_utf16_range: text.source_utf16_range.clone(),
-                        rtl: text.rtl,
-                    },
-                    rect: offset_rect(text.rect, content_origin),
-                    box_model: None,
+                    kind,
+                    rect,
+                    box_model,
                     coordinate_space,
                     clip_chain: None,
                     paint_order: None,
@@ -1506,39 +1553,125 @@ where
         )
     }
 
-    fn project_inline_splits(&self) -> Vec<Box<[InlineSplitPart]>> {
+    fn project_inline_splits(&self) -> (Vec<Box<[InlineSplitPart]>>, HashSet<LayoutBoxId>) {
         let mut empty_runs = HashSet::new();
         let mut inline_splits = Vec::with_capacity(self.world.inline_splits.len());
         for parts in &self.world.inline_splits {
+            let principal = parts[0];
+            let principal_box = &self.world.boxes[principal];
+            let uses_own_box = principal_box.style.position() != crate::LayoutPosition::Static
+                || principal_box.style.background_color().alpha > 0.0
+                || self
+                    .world
+                    .establishes_positioned_containing_block(principal)
+                || parts
+                    .iter()
+                    .copied()
+                    .filter(|&id| self.world.boxes[id].style.display().is_inline_flow())
+                    .flat_map(|id| &self.boxes[self.world.boxes.index_of(id)].fragments)
+                    .any(|id| {
+                        self.fragments[id.index()]
+                            .box_model
+                            .is_some_and(|m| m.border != m.content || m.border != m.margin)
+                    });
             // Child splits are emitted before their parents. Their empty
             // continuations don't contribute content to an enclosing run.
             let parts: Box<[_]> = parts
                 .iter()
-                .map(|&id| {
+                .enumerate()
+                .map(|(index, &id)| {
                     let layout_box = &self.world.boxes[id];
                     let is_empty_inline_run = layout_box.style.display().is_inline_flow()
                         && layout_box.children.iter().all(|child| {
                             let child_box = &self.world.boxes[*child];
-                            child_box.style.is_out_of_flow()
-                                || (child_box.kind != LayoutBoxKind::LineBreak
-                                    && (empty_runs.contains(child)
-                                        || self.boxes[self.world.boxes.index_of(*child)]
-                                            .fragments
-                                            .is_empty()))
+                            child_box.kind != LayoutBoxKind::LineBreak
+                                && (empty_runs.contains(child)
+                                    || self.boxes[self.world.boxes.index_of(*child)]
+                                        .fragments
+                                        .is_empty())
                         });
                     if is_empty_inline_run {
                         empty_runs.insert(id);
                     }
+                    let mut local_offset = if uses_own_box
+                        && layout_box.anonymous_reason
+                            == Some(LayoutAnonymousReason::BlockInInlineRun)
+                    {
+                        layout_box
+                            .layout_parent
+                            .map_or(LayoutPoint::ZERO, |container| {
+                                let physical = self.world.block_in_inline_offset(id);
+                                let queried = self
+                                    .world
+                                    .inline_positioning_offset(Some(principal), container);
+                                LayoutPoint::new(queried.x - physical.x, queried.y - physical.y)
+                            })
+                    } else {
+                        LayoutPoint::ZERO
+                    };
+                    if is_empty_inline_run && let Some(&next) = parts.get(index + 1) {
+                        local_offset.y += self.empty_inline_edge_block_offset(id, next);
+                    }
                     InlineSplitPart {
                         box_id: self.world.output_id(id),
                         is_empty_inline_run,
+                        use_inline_contents: !uses_own_box
+                            && !is_empty_inline_run
+                            && layout_box.style.display().is_inline_flow()
+                            && layout_box.children.iter().any(|&child| {
+                                let child = &self.world.boxes[child];
+                                child.style.display().is_inline_flow()
+                                    && !child.is_replaced()
+                                    && !matches!(
+                                        child.kind,
+                                        LayoutBoxKind::Text | LayoutBoxKind::LineBreak
+                                    )
+                            }),
+                        local_offset,
                     }
                 })
                 .collect();
             inline_splits.push(parts);
         }
         inline_splits.sort_unstable_by_key(|parts| parts[0].box_id);
-        inline_splits
+        (inline_splits, empty_runs)
+    }
+
+    fn empty_inline_edge_block_offset(&self, edge: LayoutBoxId, next: LayoutBoxId) -> f32 {
+        if self.world.boxes[next].anonymous_reason != Some(LayoutAnonymousReason::BlockInInlineRun)
+            || !self.world.boxes[edge].style.uses_horizontal_writing_mode()
+        {
+            return 0.0;
+        }
+        let [fragment] = self.boxes[self.world.boxes.index_of(edge)]
+            .fragments
+            .as_slice()
+        else {
+            return 0.0;
+        };
+        let fragment = &self.fragments[fragment.index()];
+        if fragment.rect.width != 0.0 || fragment.rect.height != 0.0 {
+            return 0.0;
+        }
+        let Some(owner) = self.coordinate_spaces[fragment.coordinate_space.index()]
+            .layout
+            .owner
+        else {
+            return 0.0;
+        };
+        // A collapsed leading margin moves the zero-height inline edge to
+        // the start of the block run. Its inline coordinate can still come
+        // from a preceding float's line slot.
+        let run_origin = self.boxes[self.world.boxes.index_of(next)].layout_origin_in_document;
+        let edge_origin = self.boxes[owner.index()].layout_origin_in_document;
+        let edge_position = self.world.boxes[owner.index()]
+            .inline_layout
+            .as_ref()
+            .map_or(LayoutPoint::ZERO, |context| {
+                context.fragments.box_position(edge)
+            });
+        run_origin.y - self.world.block_in_inline_offset(next).y - edge_origin.y - fragment.rect.y
+            + edge_position.y
     }
 
     fn into_frozen_tree(
@@ -1548,7 +1681,8 @@ where
         embedded_frames: Vec<crate::FrozenEmbeddedFrame<N>>,
         scroll_projection: Option<Box<ScrollProjection<N>>>,
     ) -> FrozenLayoutTree<N> {
-        let inline_splits = self.project_inline_splits();
+        let (inline_splits, empty_runs) = self.project_inline_splits();
+        let mut box_contents = FrozenBoxContents::default();
         let root_box = self.world.output_id(self.world.root);
         let mut coordinate_spaces = self
             .coordinate_spaces
@@ -1582,6 +1716,21 @@ where
                 )| {
                     let layout_box = &world.boxes[geometry.id.index()];
                     let display = layout_box.style.display();
+                    if empty_runs.contains(&world.boxes.id_at(geometry.id.index())) {
+                        box_contents.append(geometry.id, std::iter::empty());
+                    } else if !layout_box.children.is_empty()
+                        && ((display.is_inline_flow() && !layout_box.is_replaced())
+                            || layout_box.anonymous_reason
+                                == Some(LayoutAnonymousReason::BlockInInlineRun))
+                    {
+                        box_contents.append(
+                            geometry.id,
+                            layout_box
+                                .children
+                                .iter()
+                                .map(|&child| world.output_id(child)),
+                        );
+                    }
                     let css_sizing = (principal_source.is_some()
                         && !matches!(
                             display,
@@ -1631,6 +1780,7 @@ where
             self.clip_chain,
             embedded_frames,
         );
+        tree.box_contents = box_contents;
         tree.scroll_projection = scroll_projection;
         tree
     }
@@ -1695,16 +1845,10 @@ where
         crate::style::resolve_stylo_calc_value,
     );
     let ltr = style.direction() == crate::style::InlineDirection::Ltr;
-    let has_left_edge = if ltr {
-        fragment.has_start_edge
-    } else {
-        fragment.has_end_edge
-    };
-    let has_right_edge = if ltr {
-        fragment.has_end_edge
-    } else {
-        fragment.has_start_edge
-    };
+    let has_start = fragment.has_start_edge && inline_box.has_inline_decoration_edge(true);
+    let has_end = fragment.has_end_edge && inline_box.has_inline_decoration_edge(false);
+    let has_left_edge = if ltr { has_start } else { has_end };
+    let has_right_edge = if ltr { has_end } else { has_start };
     let left_margin = if has_left_edge {
         margin.left.max(0.0)
     } else {

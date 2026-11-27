@@ -56,6 +56,43 @@ pub(crate) struct CssSizing {
 pub(crate) struct InlineSplitPart {
     pub box_id: LayoutOutputBoxId,
     pub is_empty_inline_run: bool,
+    pub use_inline_contents: bool,
+    /// Adjustment in the fragment's local space for this querying inline.
+    pub local_offset: LayoutPoint,
+}
+
+/// Ordered children of boxes whose CDP geometry comes from their contents.
+/// Empty entries represent split edges with no content of their own.
+#[derive(Default)]
+pub(crate) struct FrozenBoxContents {
+    starts: Vec<(LayoutOutputBoxId, u32)>,
+    children: Vec<LayoutOutputBoxId>,
+}
+
+impl FrozenBoxContents {
+    pub(crate) fn append(
+        &mut self,
+        parent: LayoutOutputBoxId,
+        children: impl Iterator<Item = LayoutOutputBoxId>,
+    ) {
+        let start = u32::try_from(self.children.len())
+            .expect("layout content children exceeded the u32 limit");
+        self.starts.push((parent, start));
+        self.children.extend(children);
+    }
+
+    pub(super) fn children_of(&self, box_id: LayoutOutputBoxId) -> Option<&[LayoutOutputBoxId]> {
+        let index = self
+            .starts
+            .binary_search_by_key(&box_id, |&(id, _)| id)
+            .ok()?;
+        let start = self.starts[index].1 as usize;
+        let end = self
+            .starts
+            .get(index + 1)
+            .map_or(self.children.len(), |&(_, end)| end as usize);
+        Some(&self.children[start..end])
+    }
 }
 
 /// One node retained after a full layout pass. Scrolling can refresh its
@@ -225,6 +262,7 @@ where
     /// Content-order continuations and promoted blocks, sorted by principal
     /// box ID. Each sequence starts with the principal inline.
     pub(super) inline_splits: Vec<Box<[InlineSplitPart]>>,
+    pub(crate) box_contents: FrozenBoxContents,
     /// Source/box relationships for `display: contents` nodes, which own no
     /// principal box but can still nominate rendered descendants for scroll.
     pub scroll_proxy_links: Vec<(N, LayoutOutputBoxId)>,
@@ -486,6 +524,12 @@ where
             .saturating_add(self.inline_splits.iter().fold(0usize, |bytes, parts| {
                 bytes.saturating_add(allocation::<InlineSplitPart>(parts.len()))
             }))
+            .saturating_add(allocation::<(LayoutOutputBoxId, u32)>(
+                self.box_contents.starts.capacity(),
+            ))
+            .saturating_add(allocation::<LayoutOutputBoxId>(
+                self.box_contents.children.capacity(),
+            ))
             .saturating_add(allocation::<LayoutObjectGeometry<N>>(
                 self.object_geometry.capacity(),
             ))
@@ -729,6 +773,7 @@ where
             boxes,
             fragments,
             inline_splits,
+            box_contents: FrozenBoxContents::default(),
             scroll_proxy_links,
             object_geometry: Vec::new(),
             svg_viewports: HashMap::new(),

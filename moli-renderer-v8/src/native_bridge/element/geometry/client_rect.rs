@@ -50,7 +50,23 @@ impl From<LayoutQuad> for ClientRect {
     }
 }
 
-pub(super) fn union_client_rect(left: ClientRect, right: ClientRect) -> ClientRect {
+impl ClientRect {
+    /// CSSOM bounds use the first rectangle as a fallback when the list
+    /// contains only degenerate rectangles.
+    pub(crate) fn bounding_client_rect(rects: impl IntoIterator<Item = Self>) -> Self {
+        let mut rects = rects.into_iter();
+        let Some(first) = rects.next() else {
+            return zero_client_rect();
+        };
+        std::iter::once(first)
+            .chain(rects)
+            .filter(|rect| rect.width != 0.0 && rect.height != 0.0)
+            .reduce(union_client_rect)
+            .unwrap_or(first)
+    }
+}
+
+fn union_client_rect(left: ClientRect, right: ClientRect) -> ClientRect {
     let min_x = left.left.min(right.left);
     let min_y = left.top.min(right.top);
     let max_x = left.right.max(right.right);

@@ -153,7 +153,8 @@ fn paint_node(
             );
             fill_quad(snapshot, box_model.content, None, content);
         }
-        RendererDocumentNodeGeometry::FoundNonElement { content_quads } => {
+        RendererDocumentNodeGeometry::FoundNonElement { content_quads }
+        | RendererDocumentNodeGeometry::FoundElementContents { content_quads } => {
             for quad in content_quads {
                 fill_quad(snapshot, quad, None, content);
             }

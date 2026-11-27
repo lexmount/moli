@@ -2606,20 +2606,42 @@ fn inline_with_block_child_reports_the_block_geometry() {
     let block = output.client_rects_for_source(2)[0].bounding_rect();
     let rects = output.client_rects_for_source(1);
     assert_eq!(rects.len(), 3, "{rects:?}");
-    assert_eq!(rects[0].bounding_rect().width, 0.0);
-    assert_rect(rects[1].bounding_rect(), block);
-    assert_eq!(rects[2].bounding_rect().width, 0.0);
+    assert_rect(rects[0].bounding_rect(), LayoutRect::ZERO);
+    let run = LayoutRect::new(0.0, 0.0, 800.0, 20.0);
+    assert_rect(rects[1].bounding_rect(), run);
+    assert_rect(
+        rects[2].bounding_rect(),
+        LayoutRect::new(0.0, 20.0, 0.0, 0.0),
+    );
     assert_eq!(block.width, 120.0);
     let quads = output.content_quads_for_source(1);
     assert_eq!(quads.len(), 1, "{quads:?}");
     assert_rect(quads[0].bounding_rect(), block);
+    assert_rect(
+        output
+            .box_model_for_source(1)
+            .unwrap()
+            .border
+            .bounding_rect(),
+        run,
+    );
+    let metrics = output.element_metrics_for_source(1).unwrap();
+    assert_eq!(
+        metrics.offset_size,
+        moli_layout::LayoutSize::new(800.0, 20.0)
+    );
+    assert_eq!(
+        output
+            .hit_test(LayoutPoint::new(200.0, 10.0), false)
+            .unwrap()
+            .source,
+        1
+    );
 }
 
 #[test]
-fn inline_with_nested_inline_block_child_reports_the_block_geometry() {
+fn inline_with_nested_inline_reports_the_run_and_its_actual_contents() {
     // <root><a><span><div 120x20/><inline-block/><abspos/></span></a></root>
-    // Only the block split out of the inlines is their geometry; atomic and
-    // out-of-flow boxes inside the nested inline are not.
     let source = Source(vec![
         Node::element("root", vec![1]),
         Node::element("a", vec![2]),
@@ -2661,16 +2683,20 @@ fn inline_with_nested_inline_block_child_reports_the_block_geometry() {
         // The empty leading edge, the promoted block, and the inline run.
         assert_eq!(rects.len(), 3, "{inline}: {rects:?}");
         assert_eq!(rects[0].width, 0.0);
-        assert_rect(rects[1], block);
+        assert_rect(
+            rects[1],
+            LayoutRect::new(block.x, block.y, 800.0, block.height),
+        );
         assert!(rects[2].width > 0.0);
         assert!(
             !rects.contains(&inline_block) && !rects.contains(&abspos),
             "{inline}: {rects:?}"
         );
         let quads = output.content_quads_for_source(inline);
-        assert_eq!(quads.len(), 2, "{inline}: {quads:?}");
+        assert_eq!(quads.len(), 3, "{inline}: {quads:?}");
         assert_rect(quads[0].bounding_rect(), block);
-        assert_rect(quads[1].bounding_rect(), rects[2]);
+        assert_rect(quads[1].bounding_rect(), inline_block);
+        assert_rect(quads[2].bounding_rect(), abspos);
     }
 }
 
@@ -2700,12 +2726,12 @@ fn split_inline_preserves_empty_lines_in_client_rects_and_content_quads() {
 
     let output = build(&source, &mut styles);
     let block = output.client_rects_for_source(3)[0].bounding_rect();
-    for quads in [
-        output.client_rects_for_source(1),
-        output.content_quads_for_source(1),
+    for (quads, width) in [
+        (output.client_rects_for_source(1), 800.0),
+        (output.content_quads_for_source(1), block.width),
     ] {
         assert_eq!(quads.len(), 5, "{quads:?}");
-        assert_rect(quads[1].bounding_rect(), block);
+        assert_rect(quads[1].bounding_rect(), LayoutRect { width, ..block });
         for quad in &quads[2..4] {
             let line = quad.bounding_rect();
             assert_eq!(line.width, 0.0, "{line:?}");
@@ -3263,7 +3289,7 @@ fn split_inline_continuations_remain_mapped_to_the_originating_element() {
     let block = rects[1].bounding_rect();
     let second = rects[2].bounding_rect();
     assert!(first.width > 0.0 && second.width > 0.0);
-    assert_eq!(block.width, 50.0);
+    assert_eq!(block.width, 200.0);
     assert!(block.y > first.y && second.y > block.y, "{rects:?}");
     let union = output
         .box_model_for_source(1)
@@ -3278,13 +3304,19 @@ fn split_inline_continuations_remain_mapped_to_the_originating_element() {
             .with_2d_transform(LayoutTransform2D::scale(1.0, -1.0)),
     );
     let flipped = build(&source, &mut styles);
-    let flipped_block = flipped.client_rects_for_source(3)[0];
-    for rects in [
-        flipped.client_rects_for_source(1),
-        flipped.content_quads_for_source(1),
+    let flipped_block = flipped.client_rects_for_source(3)[0].bounding_rect();
+    for (rects, width) in [
+        (flipped.client_rects_for_source(1), 200.0),
+        (flipped.content_quads_for_source(1), flipped_block.width),
     ] {
         assert_eq!(rects.len(), 3, "{rects:?}");
-        assert_eq!(rects[1], flipped_block);
+        assert_rect(
+            rects[1].bounding_rect(),
+            LayoutRect {
+                width,
+                ..flipped_block
+            },
+        );
         assert!(
             rects
                 .windows(2)

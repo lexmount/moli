@@ -165,16 +165,10 @@ pub(super) fn project_inline_box_fragments<N>(
             crate::style::resolve_stylo_calc_value,
         );
         let ltr = style.direction() == InlineDirection::Ltr;
-        let has_left_edge = if ltr {
-            fragment.has_start_edge
-        } else {
-            fragment.has_end_edge
-        };
-        let has_right_edge = if ltr {
-            fragment.has_end_edge
-        } else {
-            fragment.has_start_edge
-        };
+        let has_start = fragment.has_start_edge && inline_box.has_inline_decoration_edge(true);
+        let has_end = fragment.has_end_edge && inline_box.has_inline_decoration_edge(false);
+        let has_left_edge = if ltr { has_start } else { has_end };
+        let has_right_edge = if ltr { has_end } else { has_start };
         let left_margin = if has_left_edge {
             margin.left.max(0.0)
         } else {

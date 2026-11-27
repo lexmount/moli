@@ -23,7 +23,7 @@ use taffy::{MaybeResolve as _, Point, Size};
 use crate::text_normalization::{TextCharacter, TextTransformState, classify_text_character};
 
 use crate::{
-    LayoutBoxId, LayoutBoxKind, LayoutWorld, PaintColor, PaintRect,
+    LayoutBoxId, LayoutBoxKind, LayoutPoint, LayoutPosition, LayoutWorld, PaintColor, PaintRect,
     style::{
         InlineDirection, InlineTextTransform, InlineUnicodeBidi, InlineVerticalAlign,
         InlineWhiteSpaceCollapse, LayoutInlineAlignment,
@@ -620,6 +620,80 @@ pub(crate) struct InlineFragments {
     pub(crate) lines: Vec<InlineLineFragment>,
     pub(crate) text: Vec<InlineSourceFragment>,
     pub(crate) boxes: Vec<InlineBoxFragment>,
+    positioning: Option<Box<InlinePositioning>>,
+}
+
+impl InlineFragments {
+    pub(crate) fn has_relative_positions(&self) -> bool {
+        self.positioning.is_some()
+    }
+
+    pub(crate) fn box_position(&self, id: LayoutBoxId) -> LayoutPoint {
+        self.positioning
+            .as_deref()
+            .and_then(|positioning| positioning.boxes.get(&id).copied())
+            .unwrap_or(LayoutPoint::ZERO)
+    }
+
+    pub(crate) fn style_position(&self, style_index: usize) -> LayoutPoint {
+        self.positioning
+            .as_deref()
+            .and_then(|positioning| positioning.styles.get(style_index).copied())
+            .unwrap_or(LayoutPoint::ZERO)
+    }
+
+    pub(crate) fn empty_inline_origin(&self, fragment: &InlineBoxFragment) -> Option<LayoutPoint> {
+        let line = self.lines.get(fragment.line_index)?.rect;
+        (line.height == 0.0 && fragment.rect.width == 0.0).then(|| {
+            LayoutPoint::new(
+                fragment.rect.x,
+                line.y + self.box_position(fragment.box_id).y,
+            )
+        })
+    }
+}
+
+/// Shifts within one shared IFC after line breaking. The positions are shared
+/// by geometry, text painting, and the placement of atomic inline children.
+#[derive(Clone, Debug)]
+pub(crate) struct InlinePositioning {
+    boxes: HashMap<LayoutBoxId, LayoutPoint>,
+    styles: Vec<LayoutPoint>,
+}
+
+impl InlinePositioning {
+    pub(crate) fn for_layout<N: Copy + Debug + Eq + Hash>(
+        world: &LayoutWorld<N>,
+        context: &InlineFormattingContext,
+        size: Size<f32>,
+        direction: InlineDirection,
+    ) -> Option<Box<Self>> {
+        let mut boxes = HashMap::new();
+        for state in &context.structural_boxes {
+            let mut offset = boxes
+                .get(&state.parent)
+                .copied()
+                .unwrap_or(LayoutPoint::ZERO);
+            let style = &world.boxes[state.box_id].style;
+            if style.position() == LayoutPosition::Relative {
+                let delta = relative_atomic_inset_offset(&style.taffy, size, direction);
+                offset.x += delta.x;
+                offset.y += delta.y;
+            }
+            if offset != LayoutPoint::ZERO {
+                boxes.insert(state.box_id, offset);
+            }
+        }
+        if boxes.is_empty() {
+            return None;
+        }
+        let styles = context
+            .style_parents
+            .iter()
+            .map(|id| boxes.get(id).copied().unwrap_or(LayoutPoint::ZERO))
+            .collect();
+        Some(Box::new(Self { boxes, styles }))
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -689,13 +763,17 @@ pub(crate) fn build_inline_fragments(
     context: &InlineFormattingContext,
     layout: &Layout<TextBrush>,
     line_placements: &[InlineLinePlacement],
+    positioning: Option<Box<InlinePositioning>>,
 ) -> InlineFragments {
     // Binary overlap lookup relies on both endpoints being monotonic. Validate
     // each immutable normalization product once, rather than rescanning the
     // complete maps for every visual glyph cluster in debug and test builds.
     debug_assert!(output_ranges_are_monotonic(&context.text_units));
     debug_assert!(output_ranges_are_monotonic(&context.source_map));
-    let mut fragments = InlineFragments::default();
+    let mut fragments = InlineFragments {
+        positioning,
+        ..InlineFragments::default()
+    };
     let mut box_fragments = HashMap::<(usize, usize), FragmentAccumulator>::new();
     let mut source_fragments = HashMap::<SourceFragmentKey, FragmentAccumulator>::new();
     let style_paint_outsets = layout
@@ -767,6 +845,8 @@ pub(crate) fn build_inline_fragments(
                 cluster.advance().max(0.0),
                 (ascent + descent).max(0.0),
             );
+            let visual_rect =
+                crate::overflow::offset_rect(rect, fragments.style_position(style_index));
             if let Some(style) = layout.styles().get(style_index)
                 && style.brush.paint
             {
@@ -779,7 +859,9 @@ pub(crate) fn build_inline_fragments(
                 let glyph_guard = run.font_size().max(0.0) * 2.0 + 1.0;
                 let line = &mut fragments.lines[line_index];
                 match style_paint_outsets.get(style_index).copied().flatten() {
-                    Some(outsets) => line.paint_bounds.include(outsets.outset(rect, glyph_guard)),
+                    Some(outsets) => line
+                        .paint_bounds
+                        .include(outsets.outset(visual_rect, glyph_guard)),
                     None => line.paint_bounds = InlinePaintBounds::Unbounded,
                 }
             }
@@ -803,7 +885,7 @@ pub(crate) fn build_inline_fragments(
                         rtl: cluster.is_rtl(),
                     })
                     .or_default();
-                accumulator.include(rect);
+                accumulator.include(visual_rect);
                 accumulator.output_range = Some(match accumulator.output_range {
                     Some((start, end)) => (
                         start.min(source.output_range.start),
@@ -885,10 +967,15 @@ pub(crate) fn build_inline_fragments(
         .into_iter()
         .filter_map(|((box_index, line_index), accumulator)| {
             let line_rect = fragments.lines.get(line_index)?.rect;
+            let box_id = order.id_at(box_index);
+            let rect = crate::overflow::offset_rect(
+                accumulator.rect(line_rect)?,
+                fragments.box_position(box_id),
+            );
             Some(InlineBoxFragment {
                 line_index,
-                box_id: order.id_at(box_index),
-                rect: accumulator.rect(line_rect)?,
+                box_id,
+                rect,
                 has_start_edge: accumulator.has_start_edge,
                 has_end_edge: accumulator.has_end_edge,
             })
@@ -3116,7 +3203,15 @@ impl InlineNormalizer {
     fn hard_break(&mut self, box_id: LayoutBoxId, ancestors: &[LayoutBoxId]) {
         self.flush_pending_carriage_return();
         self.pending = None;
-        self.append_forced_break(box_id, ancestors, Vec::new());
+        self.append_forced_break(
+            box_id,
+            ancestors,
+            vec![SourceOrigin {
+                box_id,
+                byte_range: 0..1,
+                utf16_range: 0..1,
+            }],
+        );
     }
 
     fn append_forced_break(
@@ -3991,6 +4086,7 @@ mod tests {
                     &context,
                     &layout,
                     &[],
+                    None,
                 );
                 assert!(!fragments.text.is_empty());
                 for fragment in fragments.text {

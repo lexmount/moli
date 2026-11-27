@@ -731,31 +731,72 @@ where
             .and_then(|layout_box| layout_box.element_semantics.clone());
         let mut output = Vec::new();
         let mut current = Some(principal);
-        let mut run = Vec::new();
+        let mut inline_run = Vec::new();
+        let mut block_run = Vec::new();
+        // Vertical block layout currently preserves the original child stream
+        // and adjusts physical anchors after Taffy's horizontal block pass.
+        // Sizing a vertical run needs a block pass in the actual writing mode.
+        let can_group_blocks = style.uses_horizontal_writing_mode();
 
         for child in children {
             if self.is_block_in_flow(world, child) {
                 if let Some(fragment) = current.take() {
+                    world.boxes[fragment].inline_split_before_block = true;
                     self.replace_children_and_mark_context(
                         world,
                         fragment,
-                        std::mem::take(&mut run),
+                        std::mem::take(&mut inline_run),
                     )?;
                     output.push(fragment);
                 }
-                output.push(child);
+                if !can_group_blocks
+                    || world.boxes[child].anonymous_reason
+                        == Some(LayoutAnonymousReason::BlockInInlineRun)
+                {
+                    // Keep already formed runs owned by their original inline.
+                    self.flush_block_in_inline_run(
+                        world,
+                        principal,
+                        owner,
+                        style,
+                        &mut output,
+                        &mut block_run,
+                    )?;
+                    output.push(child);
+                } else {
+                    block_run.push(child);
+                }
                 continue;
             }
 
+            if !block_run.is_empty() && self.is_ignorable_whitespace_text(world, child) {
+                continue;
+            }
+            self.flush_block_in_inline_run(
+                world,
+                principal,
+                owner,
+                style,
+                &mut output,
+                &mut block_run,
+            )?;
             if current.is_none() {
                 current =
                     Some(self.allocate_inline_continuation(world, owner, style, semantics.clone()));
             }
-            run.push(child);
+            inline_run.push(child);
         }
 
+        self.flush_block_in_inline_run(
+            world,
+            principal,
+            owner,
+            style,
+            &mut output,
+            &mut block_run,
+        )?;
         if let Some(fragment) = current {
-            self.replace_children_and_mark_context(world, fragment, run)?;
+            self.replace_children_and_mark_context(world, fragment, inline_run)?;
             output.push(fragment);
         } else {
             let continuation = self.allocate_inline_continuation(world, owner, style, semantics);
@@ -764,6 +805,42 @@ where
         }
         world.inline_splits.push(output.clone());
         Ok(output)
+    }
+
+    fn flush_block_in_inline_run(
+        &mut self,
+        world: &mut LayoutWorld<S::NodeId>,
+        principal: LayoutBoxId,
+        owner: S::NodeId,
+        style: &ResolvedLayoutStyle,
+        output: &mut Vec<LayoutBoxId>,
+        children: &mut Vec<LayoutBoxId>,
+    ) -> Result<(), LayoutError> {
+        if children.is_empty() {
+            return Ok(());
+        }
+        let style = self.styles.anonymous_style(
+            LayoutAnonymousStyleContext::new(owner, style),
+            LayoutDisplay::Block,
+        )?;
+        let label = self.source.label(owner);
+        let mut wrapper = LayoutWorld::new_box(
+            None,
+            Some(owner),
+            None,
+            format!("block-in-inline({label})"),
+            Some(label),
+            None,
+            Some(LayoutAnonymousReason::BlockInInlineRun),
+            LayoutBoxKind::AnonymousBlock,
+            style,
+            None,
+        );
+        wrapper.structural_parent = Some(principal);
+        let id = world.allocate(wrapper);
+        world.replace_children(id, std::mem::take(children))?;
+        output.push(id);
+        Ok(())
     }
 
     fn allocate_inline_continuation(

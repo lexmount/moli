@@ -5288,6 +5288,9 @@ pub enum RendererDocumentNodeGeometry {
         box_model: Box<RendererDocumentBoxModel>,
         content_quads: Vec<RendererGeometryQuad>,
     },
+    FoundElementContents {
+        content_quads: Vec<RendererGeometryQuad>,
+    },
     FoundNonElement {
         content_quads: Vec<RendererGeometryQuad>,
     },

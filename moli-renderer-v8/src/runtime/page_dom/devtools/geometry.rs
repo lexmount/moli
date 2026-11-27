@@ -123,7 +123,11 @@ impl PageVm {
             return Ok(RendererDocumentNodeGeometry::FoundNonElement { content_quads });
         }
         let (Some(_), Some(element_metrics)) = (box_model, element_metrics) else {
-            return Ok(RendererDocumentNodeGeometry::NoLayoutObject);
+            return Ok(if content_quads.is_empty() {
+                RendererDocumentNodeGeometry::NoLayoutObject
+            } else {
+                RendererDocumentNodeGeometry::FoundElementContents { content_quads }
+            });
         };
         let [content, padding, border, margin] = composed_quads[..model_quad_count] else {
             return Err(anyhow::anyhow!(
