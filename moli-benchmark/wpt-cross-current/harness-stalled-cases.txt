@@ -1,3 +1,4 @@
+navigation-api/navigate-event/intercept-cross-origin.html
 payment-method-basic-card/apply_the_modifiers.html
 payment-method-basic-card/steps_for_selecting_the_payment_handler.html
 svg/linking/scripted/a.rel-noreferrer-policy.html
