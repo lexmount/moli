@@ -389,19 +389,15 @@ where
 {
     let mut adjusted_locations = Vec::new();
 
-    for parent_index in 0..world.boxes.len() {
-        let parent = world.boxes.id_at(parent_index);
-        let Some(block_start_is_right) = world.boxes[parent_index]
-            .style
-            .vertical_block_start_is_right()
-        else {
+    for (parent, parent_box) in world.boxes.keyed() {
+        let Some(block_start_is_right) = parent_box.style.vertical_block_start_is_right() else {
             continue;
         };
         if !original_parent_uses_block_layout(world, parent) {
             continue;
         }
 
-        let parent_layout = world.boxes[parent_index].unrounded_layout;
+        let parent_layout = parent_box.unrounded_layout;
         let scrollbar = world.get_scrollbar_insets(parent.to_taffy());
         let content_left = parent_layout.border.left + parent_layout.padding.left + scrollbar.left;
         let content_right = parent_layout.size.width
@@ -413,11 +409,10 @@ where
             - parent_layout.border.bottom
             - parent_layout.padding.bottom
             - scrollbar.bottom;
-        let direction = world.boxes[parent_index].style.direction();
-        let taffy_anchored_right =
-            world.boxes[parent_index].style.taffy.direction == taffy::Direction::Rtl;
+        let direction = parent_box.style.direction();
+        let taffy_anchored_right = parent_box.style.taffy.direction == taffy::Direction::Rtl;
 
-        for child in world.boxes[parent_index].layout_children.iter().copied() {
+        for &child in &parent_box.layout_children {
             let child_box = &world.boxes[child];
             if child_box.style.is_absolute_positioned()
                 || child_box.style.is_fixed_positioned()
