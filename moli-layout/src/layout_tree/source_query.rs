@@ -6,7 +6,7 @@ use crate::LayoutPosition;
 
 use super::{
     model::{
-        LayoutBoxModel, LayoutCoordinateSpaceId, LayoutFragmentBoxModel, LayoutFragmentId,
+        LayoutBoxModel, LayoutCoordinateSpaceId, LayoutFragment, LayoutFragmentBoxModel,
         LayoutFragmentKind, LayoutOutputBoxId, LayoutPoint, LayoutQuad, LayoutRect,
         LayoutResolvedGridTracks, LayoutSize, LayoutTransform2D, LayoutUsedSize,
     },
@@ -19,7 +19,7 @@ use super::{
 
 #[cfg(test)]
 thread_local! {
-    static SOURCE_OUTPUT_BOX_VISITS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static SOURCE_QUERY_BOX_VISITS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -42,7 +42,7 @@ where
         let mut output = LayoutNodeOutput::default();
         for layout_box in &self.boxes {
             #[cfg(test)]
-            SOURCE_OUTPUT_BOX_VISITS.with(|count| count.set(count.get() + 1));
+            SOURCE_QUERY_BOX_VISITS.with(|count| count.set(count.get() + 1));
             if layout_box.principal_source == Some(source) {
                 output.principal_box = Some(layout_box.id);
                 found = true;
@@ -84,7 +84,7 @@ where
         }
         for layout_box in &self.boxes {
             #[cfg(test)]
-            SOURCE_OUTPUT_BOX_VISITS.with(|count| count.set(count.get() + 1));
+            SOURCE_QUERY_BOX_VISITS.with(|count| count.set(count.get() + 1));
             if let Some(output) = layout_box
                 .principal_source
                 .and_then(|source| outputs.get_mut(&source))
@@ -395,9 +395,7 @@ where
     }
 
     pub(super) fn client_rects_for_output(&self, output: &LayoutNodeOutput) -> Vec<LayoutQuad> {
-        self.geometry_fragment_ids(output)
-            .iter()
-            .filter_map(|id| self.fragment(*id))
+        self.geometry_fragments(output, true)
             .filter(|fragment| {
                 matches!(
                     fragment.kind,
@@ -429,93 +427,38 @@ where
         })
     }
 
-    /// The element's own fragments, plus the block boxes that block-in-inline
-    /// splitting moved out of an inline element (e.g. `<a><div>..</div></a>`).
-    /// Those blocks are part of the inline's geometry; its zero-width edge
-    /// fragments around them are dropped.
-    fn geometry_fragment_ids<'a>(
-        &self,
+    /// CSSOM includes empty split edges. CDP enumerates the populated inline
+    /// runs and the promoted blocks, including zero-width lines with content.
+    fn geometry_fragments<'a>(
+        &'a self,
         output: &'a LayoutNodeOutput,
-    ) -> std::borrow::Cow<'a, [LayoutFragmentId]> {
-        let is_inline = |id: &LayoutFragmentId| {
-            self.fragment(*id).is_some_and(|fragment| {
-                matches!(fragment.kind, LayoutFragmentKind::InlineBox { .. })
-            })
+        include_empty_inline_runs: bool,
+    ) -> impl Iterator<Item = &'a LayoutFragment> {
+        let split_parts = output.principal_box.and_then(|principal| {
+            self.inline_splits
+                .binary_search_by_key(&principal, |parts| parts[0].box_id)
+                .ok()
+                .map(|index| self.inline_splits[index].as_ref())
+        });
+        let own_fragments = if split_parts.is_some() {
+            &[]
+        } else {
+            output.fragments.as_slice()
         };
-        // Only a block-in-inline split creates continuation boxes, so ordinary
-        // inlines do no extra work.
-        let Some(principal) = output.principal_box.filter(|principal| {
-            output.fragments.iter().any(|id| {
-                self.fragment(*id).is_some_and(|fragment| {
-                    matches!(fragment.kind, LayoutFragmentKind::InlineBox { box_id, .. } if box_id != *principal)
-                })
-            })
-        }) else {
-            return output.fragments.as_slice().into();
-        };
-        let has_inline_fragment =
-            |layout_box: &FrozenLayoutBox<N>| layout_box.geometry.fragments.iter().any(is_inline);
-        // The box's source ancestry reaches this inline through non-atomic
-        // inlines only (e.g. `<a><span><div>`).
-        let split_from_principal = |layout_box: &FrozenLayoutBox<N>| {
-            let mut parent = layout_box.geometry.structural_parent;
-            while let Some(id) = parent {
-                if id == principal {
-                    return true;
-                }
-                match self.boxes.get(id.index()) {
-                    Some(ancestor) if has_inline_fragment(ancestor) => {
-                        parent = ancestor.geometry.structural_parent;
-                    }
-                    _ => return false,
-                }
-            }
-            false
-        };
-        let split_blocks = self
-            .boxes
+        own_fragments
             .iter()
-            .filter(|layout_box| {
-                !has_inline_fragment(layout_box)
-                    && split_from_principal(layout_box)
-                    && layout_box
-                        .geometry
-                        .parent
-                        .and_then(|parent| self.boxes.get(parent.index()))
-                        .is_some_and(|parent| !has_inline_fragment(parent))
-            })
-            .flat_map(|layout_box| layout_box.geometry.fragments.iter().copied())
-            .filter(|id| {
-                self.fragment(*id)
-                    .is_some_and(|fragment| matches!(fragment.kind, LayoutFragmentKind::Box { .. }))
-            })
-            .collect::<Vec<_>>();
-        if split_blocks.is_empty() {
-            return output.fragments.as_slice().into();
-        }
-        let top = |id: &LayoutFragmentId| {
-            self.fragment(*id)
-                .and_then(|fragment| {
-                    self.coordinate_space(fragment.coordinate_space)
-                        .map(|space| {
-                            space
-                                .local_to_viewport
-                                .map_rect(fragment.rect)
-                                .bounding_rect()
-                                .y
-                        })
-                })
-                .unwrap_or_default()
-        };
-        let mut ids = output
-            .fragments
-            .iter()
-            .copied()
-            .filter(|id| !is_inline(id) || self.fragment(*id).is_some_and(|f| f.rect.width > 0.0))
-            .chain(split_blocks)
-            .collect::<Vec<_>>();
-        ids.sort_by(|a, b| top(a).total_cmp(&top(b)));
-        ids.into()
+            .chain(
+                split_parts
+                    .into_iter()
+                    .flatten()
+                    .filter(move |part| include_empty_inline_runs || !part.is_empty_inline_run)
+                    .flat_map(|part| {
+                        #[cfg(test)]
+                        SOURCE_QUERY_BOX_VISITS.with(|count| count.set(count.get() + 1));
+                        self.boxes[part.box_id.index()].fragments.iter()
+                    }),
+            )
+            .filter_map(|id| self.fragment(*id))
     }
 
     pub fn content_quads_for_source(&self, source: N) -> Vec<LayoutQuad> {
@@ -524,9 +467,7 @@ where
     }
 
     pub(super) fn content_quads_for_output(&self, output: &LayoutNodeOutput) -> Vec<LayoutQuad> {
-        self.geometry_fragment_ids(output)
-            .iter()
-            .filter_map(|id| self.fragment(*id))
+        self.geometry_fragments(output, false)
             .filter(|fragment| {
                 matches!(
                     fragment.kind,
@@ -1003,7 +944,7 @@ fn axis_aligned_union(left: LayoutQuad, right: LayoutQuad) -> LayoutQuad {
 mod tests {
     use super::*;
     use crate::layout_tree::{
-        FrozenCoordinateSpace, FrozenLayoutBox, LayoutBoxGeometry, LayoutFragment,
+        FrozenCoordinateSpace, FrozenLayoutBox, InlineSplitPart, LayoutBoxGeometry, LayoutFragment,
         LayoutFragmentId, LayoutScrollExtent, LayoutViewport,
     };
 
@@ -1102,6 +1043,7 @@ mod tests {
                 fragment(skipped_fragment, None),
                 fragment(valid_fragment, Some(valid_box_model)),
             ],
+            Vec::new(),
             Vec::new(),
             identity_space(None),
             Vec::new(),
@@ -1274,12 +1216,38 @@ mod tests {
         use crate::{LayoutFlushReason, LayoutQuery, LayoutQueryBatch};
         let mut tree = inline_fragment_tree();
         for source in 2..=64 {
-            let mut layout_box = tree.boxes[0].clone();
-            layout_box.geometry.id = LayoutOutputBoxId::from_index(tree.boxes.len());
-            layout_box.geometry.fragments.clear();
-            layout_box.geometry_source = Some(source);
-            layout_box.principal_source = Some(source);
-            tree.boxes.push(layout_box);
+            let parts = [
+                (source, true, false),
+                (source + 128, true, true),
+                (source, false, false),
+            ]
+            .map(|(part_source, principal, promoted_block)| {
+                let box_id = LayoutOutputBoxId::from_index(tree.boxes.len());
+                let mut fragment = tree.fragments[1].clone();
+                fragment.id = LayoutFragmentId::from_index(tree.fragments.len());
+                fragment.kind = if promoted_block {
+                    LayoutFragmentKind::Box { box_id }
+                } else {
+                    LayoutFragmentKind::InlineBox {
+                        box_id,
+                        line_index: 0,
+                        has_start_edge: true,
+                        has_end_edge: true,
+                    }
+                };
+                let mut layout_box = tree.boxes[0].clone();
+                layout_box.geometry.id = box_id;
+                layout_box.geometry.fragments = vec![fragment.id];
+                layout_box.geometry_source = Some(part_source);
+                layout_box.principal_source = principal.then_some(part_source);
+                tree.boxes.push(layout_box);
+                tree.fragments.push(fragment);
+                InlineSplitPart {
+                    box_id,
+                    is_empty_inline_run: !promoted_block,
+                }
+            });
+            tree.inline_splits.push(Box::new(parts));
         }
         // Include proxy-only and missing sources as well as repeated queries.
         tree.scroll_proxy_links.push((100, tree.boxes[0].id));
@@ -1298,17 +1266,19 @@ mod tests {
                 })
                 .collect(),
         );
-        SOURCE_OUTPUT_BOX_VISITS.with(|count| count.set(0));
+        // ClientRects visits all three parts, and ContentQuads visits the block.
+        let split_part_visits = tree.inline_splits.len() * 4;
+        SOURCE_QUERY_BOX_VISITS.with(|count| count.set(0));
         let expected = queries
             .queries
             .iter()
             .map(|query| tree.answer_query(query))
             .collect::<Vec<_>>();
         assert_eq!(
-            SOURCE_OUTPUT_BOX_VISITS.with(std::cell::Cell::get),
-            tree.boxes.len() * queries.queries.len()
+            SOURCE_QUERY_BOX_VISITS.with(std::cell::Cell::get),
+            tree.boxes.len() * queries.queries.len() + split_part_visits
         );
-        SOURCE_OUTPUT_BOX_VISITS.with(|count| count.set(0));
+        SOURCE_QUERY_BOX_VISITS.with(|count| count.set(0));
         // The metrics are pass diagnostics, copied unchanged by query batches.
         let metrics = crate::LayoutPassMetrics {
             reason: LayoutFlushReason::Test,
@@ -1346,15 +1316,15 @@ mod tests {
         let answers = tree.answer_queries(&queries, metrics);
         assert_eq!(answers.answers, expected);
         assert_eq!(
-            SOURCE_OUTPUT_BOX_VISITS.with(std::cell::Cell::get),
-            tree.boxes.len()
+            SOURCE_QUERY_BOX_VISITS.with(std::cell::Cell::get),
+            tree.boxes.len() + split_part_visits
         );
         assert_eq!(answers.metrics, metrics);
-        SOURCE_OUTPUT_BOX_VISITS.with(|count| count.set(0));
+        SOURCE_QUERY_BOX_VISITS.with(|count| count.set(0));
         let one = LayoutQueryBatch::new(vec![LayoutQuery::ClientRects { source: 1 }]);
         tree.answer_queries(&one, metrics);
         assert_eq!(
-            SOURCE_OUTPUT_BOX_VISITS.with(std::cell::Cell::get),
+            SOURCE_QUERY_BOX_VISITS.with(std::cell::Cell::get),
             tree.boxes.len()
         );
     }

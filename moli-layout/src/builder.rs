@@ -762,6 +762,7 @@ where
             self.replace_children_and_mark_context(world, continuation, Vec::new())?;
             output.push(continuation);
         }
+        world.inline_splits.push(output.clone());
         Ok(output)
     }
 

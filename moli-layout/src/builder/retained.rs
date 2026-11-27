@@ -239,6 +239,9 @@ where
     }
     world.source_mapping.reserve(retained.sources.len());
     world.display_contents_mapping.clear();
+    // Previously split inlines rebuild their full contribution to the
+    // parent stream, so their ordered parts are recorded again.
+    world.inline_splits.clear();
     builder.refresh_box(
         world,
         root,

@@ -34,14 +34,16 @@ use std::{
 
 use taffy::ResolveOrZero;
 
-use crate::layout_tree::{CssSizing, CssSizingBox, FrozenInlineSvgInputs, LayoutCoordinateSpace};
+use crate::layout_tree::{
+    CssSizing, CssSizingBox, FrozenInlineSvgInputs, InlineSplitPart, LayoutCoordinateSpace,
+};
 use crate::overflow::{OverflowProjection, inset_rect, offset_rect, outset_rect};
 use crate::stacking::{PaintOrderEvent, build_paint_order};
 use crate::style::ResolvedLayoutTransform;
 use crate::{
     FrozenCoordinateSpace, FrozenLayoutBox, FrozenLayoutTree, LayoutAnonymousReason,
-    LayoutBoxGeometry, LayoutBoxId, LayoutClipChainId, LayoutClipKind, LayoutClipNode,
-    LayoutCoordinateSpaceId, LayoutError, LayoutFlushReason, LayoutFragment,
+    LayoutBoxGeometry, LayoutBoxId, LayoutBoxKind, LayoutClipChainId, LayoutClipKind,
+    LayoutClipNode, LayoutCoordinateSpaceId, LayoutError, LayoutFlushReason, LayoutFragment,
     LayoutFragmentBoxModel, LayoutFragmentId, LayoutFragmentKind, LayoutOutputBoxId,
     LayoutPassMetrics, LayoutPassResult, LayoutPoint, LayoutRect, LayoutScrollExtent,
     LayoutScrollbarAxis, LayoutScrollbarGeometry, LayoutSize, LayoutTransform2D, LayoutViewport,
@@ -1504,6 +1506,41 @@ where
         )
     }
 
+    fn project_inline_splits(&self) -> Vec<Box<[InlineSplitPart]>> {
+        let mut empty_runs = HashSet::new();
+        let mut inline_splits = Vec::with_capacity(self.world.inline_splits.len());
+        for parts in &self.world.inline_splits {
+            // Child splits are emitted before their parents. Their empty
+            // continuations don't contribute content to an enclosing run.
+            let parts: Box<[_]> = parts
+                .iter()
+                .map(|&id| {
+                    let layout_box = &self.world.boxes[id];
+                    let is_empty_inline_run = layout_box.style.display().is_inline_flow()
+                        && layout_box.children.iter().all(|child| {
+                            let child_box = &self.world.boxes[*child];
+                            child_box.style.is_out_of_flow()
+                                || (child_box.kind != LayoutBoxKind::LineBreak
+                                    && (empty_runs.contains(child)
+                                        || self.boxes[self.world.boxes.index_of(*child)]
+                                            .fragments
+                                            .is_empty()))
+                        });
+                    if is_empty_inline_run {
+                        empty_runs.insert(id);
+                    }
+                    InlineSplitPart {
+                        box_id: self.world.output_id(id),
+                        is_empty_inline_run,
+                    }
+                })
+                .collect();
+            inline_splits.push(parts);
+        }
+        inline_splits.sort_unstable_by_key(|parts| parts[0].box_id);
+        inline_splits
+    }
+
     fn into_frozen_tree(
         self,
         source_root: N,
@@ -1511,7 +1548,8 @@ where
         embedded_frames: Vec<crate::FrozenEmbeddedFrame<N>>,
         scroll_projection: Option<Box<ScrollProjection<N>>>,
     ) -> FrozenLayoutTree<N> {
-        let root_box = LayoutOutputBoxId::from_index(self.world.boxes.index_of(self.world.root));
+        let inline_splits = self.project_inline_splits();
+        let root_box = self.world.output_id(self.world.root);
         let mut coordinate_spaces = self
             .coordinate_spaces
             .into_iter()
@@ -1587,6 +1625,7 @@ where
             root_box,
             boxes,
             self.fragments,
+            inline_splits,
             self.scroll_proxy_links,
             viewport_coordinate_space,
             self.clip_chain,
