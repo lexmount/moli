@@ -168,3 +168,31 @@ fn main_dynamic_inline_script_errors_from_isolated_world_use_document_realm() {
         r#"[["SyntaxError",true,"syntax"],["TypeError",true,"runtime"]]"#
     );
 }
+
+#[tokio::test]
+async fn empty_src_assignment_prepares_a_connected_html_script_once() {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
+    let mut vm = new_parsed_page_task_executor_test_vm(
+        "https://empty-script-source.test/",
+        "<!doctype html><body></body>",
+        &loader,
+    );
+    vm.eval(
+        r#"
+        globalThis.emptySourceErrors = 0;
+        const script = document.createElement('script');
+        script.onerror = () => emptySourceErrors++;
+        document.body.append(script);
+        script.src = '';
+    "#,
+    )
+    .unwrap();
+    advance_page_task_executor_until_eval_equals(
+        &mut vm,
+        &loader,
+        "emptySourceErrors",
+        "1",
+        "empty src reports its preparation error",
+    )
+    .await;
+}
