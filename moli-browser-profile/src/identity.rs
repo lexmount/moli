@@ -1,6 +1,6 @@
 use crate::accept_language::{
-    accept_language_from_languages, default_languages, navigator_languages_from_header,
-    validate_languages,
+    accept_language_from_languages, default_languages, generate_accept_language,
+    navigator_languages_from_header, validate_languages,
 };
 use crate::window_surface::{
     DEFAULT_NAVIGATOR_PLATFORM, DEFAULT_SEC_CH_UA_ARCH, DEFAULT_SEC_CH_UA_BITNESS,
@@ -149,17 +149,23 @@ impl BrowserIdentityProfile {
         } else {
             base.user_agent.clone()
         };
-        let (accept_language, languages) = match accept_language {
-            Some(accept_language) if !accept_language.is_empty() => {
-                let languages = accept_language
-                    .split(',')
-                    .map(str::trim)
-                    .filter(|value| !value.is_empty())
-                    .map(str::to_owned)
-                    .collect();
-                (accept_language, languages)
-            }
-            Some(_) | None => (base.accept_language.clone(), base.languages.clone()),
+        let accept_language = accept_language.unwrap_or_default();
+        let languages: Vec<_> = accept_language
+            .split(',')
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_owned)
+            .collect();
+        let (accept_language, languages) = if languages.is_empty() {
+            (base.accept_language.clone(), base.languages.clone())
+        } else {
+            let accept_language = if accept_language.contains(';') {
+                // Preserve callers supplying an already weighted header.
+                accept_language
+            } else {
+                generate_accept_language(languages.iter().map(String::as_str))
+            };
+            (accept_language, languages)
         };
         let navigator_platform = navigator_platform
             .filter(|platform| !platform.is_empty())
@@ -478,6 +484,7 @@ mod tests {
 
         assert_eq!(identity.user_agent(), "CustomAgent/1.0");
         assert_eq!(identity.navigator_platform(), "Linux x86_64");
+        assert_eq!(identity.accept_language(), "fr-CA,fr;q=0.9");
         assert_eq!(identity.languages(), ["fr-CA", "fr;q=0.9"]);
         assert!(identity.brands().is_empty());
         assert_eq!(identity.platform(), "");
