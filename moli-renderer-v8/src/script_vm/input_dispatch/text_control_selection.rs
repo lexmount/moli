@@ -217,7 +217,6 @@ fn caret_hit(
             LayoutTextControlCaret {
                 offset: 0,
                 source_start: 0,
-                at_source_start: true,
             },
         )));
     }
@@ -228,39 +227,10 @@ fn caret_hit(
     let point = transform.map_point(position.layout_point());
     Ok(host
         .with_latest_layout_tree_for_document(document.handle, |tree| {
-            tree.text_control_caret(control, point)
+            tree.text_control_caret(control, point, &value)
         })
         .flatten()
-        .map(|caret| {
-            let caret = snap_caret_to_grapheme(&value, caret);
-            (value, caret)
-        }))
-}
-
-fn snap_caret_to_grapheme(
-    value: &str,
-    mut caret: LayoutTextControlCaret,
-) -> LayoutTextControlCaret {
-    if value.is_ascii() {
-        return caret;
-    }
-    // Several source fragments can share the same shaped cluster rectangle.
-    // Resolve an interior offset to the grapheme edge on the hit side.
-    let mut start = 0;
-    for grapheme in value.graphemes(true) {
-        let end = start + grapheme.encode_utf16().count();
-        if start < caret.source_start && caret.source_start < end {
-            caret.source_start = start;
-        }
-        if start < caret.offset && caret.offset < end {
-            caret.offset = if caret.at_source_start { start } else { end };
-        }
-        if caret.offset <= end && caret.source_start <= end {
-            break;
-        }
-        start = end;
-    }
-    caret
+        .map(|caret| (value, caret)))
 }
 
 fn set_mouse_selection(

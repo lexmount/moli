@@ -1152,31 +1152,11 @@ where
             let form_content =
                 layout_box.anonymous_reason == Some(LayoutAnonymousReason::FormControlContent);
             let password_offsets = form_content
-                .then_some(layout_box.parent)
+                .then_some(layout_box.owner)
                 .flatten()
-                .and_then(|id| {
-                    let control = &self.world.boxes[id.index()];
-                    let semantics = control.element_semantics()?;
-                    let crate::LayoutElementCategory::FormControl(
-                        crate::LayoutFormControlKind::Input(
-                            crate::LayoutInputControlKind::Password,
-                        ),
-                    ) = semantics.category
-                    else {
-                        return None;
-                    };
-                    let value = &semantics.metadata.form_control.as_ref()?.value;
-                    Some(crate::form::password_value_offsets(
-                        value,
-                        control.style.text_transform(),
-                    ))
-                });
-            let value_offset = |offset| {
-                password_offsets
-                    .as_ref()
-                    .and_then(|offsets| offsets.get(offset).or_else(|| offsets.last()).copied())
-                    .unwrap_or(offset)
-            };
+                .and_then(|owner| self.world.password_offsets.get(&owner));
+            let value_offset =
+                |offset| password_offsets.map_or(offset, |offsets| offsets.source_offset(offset));
             for line in &context.fragments.lines {
                 let text_control_start = if form_content {
                     let output_start = context

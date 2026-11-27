@@ -687,6 +687,8 @@ where
     /// Native track positions and names read by Taffy's out-of-flow pass.
     pub(crate) native_grid_details: HashMap<LayoutBoxId, DetailedLayoutInfo<Atom>>,
     pub(crate) source_mapping: HashMap<N, LayoutBoxId>,
+    /// Password shadows share their mask offsets between selection and projection.
+    pub(crate) password_offsets: HashMap<N, crate::form::PasswordOffsetMap>,
     pub(crate) display_contents_mapping: HashMap<N, Vec<LayoutBoxId>>,
     pub(crate) root: LayoutBoxId,
     /// The root is the document element only for a complete document source.
@@ -732,6 +734,7 @@ where
             resolved_grid_tracks: HashMap::new(),
             native_grid_details: HashMap::new(),
             source_mapping: HashMap::new(),
+            password_offsets: HashMap::new(),
             display_contents_mapping: HashMap::new(),
             root,
             root_is_document_element,

@@ -464,6 +464,14 @@ document.body.innerHTML = '<input id=field placeholder="Example">';
                 None,
             ),
             (
+                "ZWJ selection after uppercase expansion",
+                "Aß👩‍💻e\u{0301}Z",
+                "••••••",
+                "uppercase",
+                Some((2, 7)),
+                Some((3, 4)),
+            ),
+            (
                 "caret inside a surrogate pair after uppercase expansion",
                 "Aß😀e\u{0301}Z",
                 "••••••",
