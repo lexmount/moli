@@ -141,41 +141,103 @@ fn retained_container_display_switches_match_fresh_after_warming_numeric_layout(
     }
 }
 
-#[test]
-fn reordered_box_storage_preserves_the_nested_scroll_projection() {
-    let mut vm = realtime_vm(concat!(
-        "<!doctype html><style>body{margin:0;overflow:hidden;font:16px sans-serif}",
-        "#frame{overflow:auto;width:210px;height:140px}",
-        "#scroller{overflow:auto;width:160px;height:90px}",
-        "#deleted,#spacer{height:24px}#sticky{position:sticky;top:0;height:20px;background:lime}",
-        "#fixed{position:fixed;top:7px;left:165px;width:14px;height:16px;background:blue}",
-        "#tall{height:320px;background:yellow}</style><div id=deleted></div>",
-        "<div id=frame><div id=spacer></div><div id=scroller><div id=sticky></div>",
-        "<div id=tall>scroll content</div><div id=fixed></div></div></div>",
-        "<section id=holding><p id=moving>reparent me</p></section>",
-    ));
-    vm.publish_layout_for_test().unwrap();
-    vm.eval("deleted.remove()").unwrap();
-    vm.publish_layout_for_test().unwrap();
-    vm.eval("frame.prepend(document.createElement('hr'));scroller.prepend(moving)")
-        .unwrap();
-    vm.publish_layout_for_test().unwrap();
+#[tokio::test(flavor = "current_thread")]
+async fn reordered_box_storage_preserves_the_nested_scroll_projection() {
+    tokio::task::LocalSet::new()
+        .run_until(async {
+            let mut vm = realtime_vm(concat!(
+                "<!doctype html><style>body{margin:0;overflow:hidden;font:16px sans-serif}",
+                "#frame{overflow:auto;width:210px;height:140px}",
+                "#scroller{overflow:auto;width:160px;height:90px}",
+                "#deleted,#spacer{height:24px}#sticky{position:sticky;top:0;height:20px;background:lime}",
+                "#fixed{position:fixed;top:7px;left:165px;width:14px;height:16px;background:blue}",
+                "#tall{height:320px;background:yellow}</style><div id=deleted></div>",
+                "<div id=frame><div id=spacer></div><div id=scroller><div id=sticky></div>",
+                "<div id=tall>scroll content</div><div id=fixed></div></div></div>",
+                "<section id=holding><p id=moving>reparent me</p></section>",
+            ));
+            let host = vm.context_host_weak_for_test().upgrade().unwrap();
+            let (document, viewport) = {
+                let host = host.borrow();
+                let document = host.document_handle();
+                (document, host.layout_viewport_for_document(document))
+            };
+            #[cfg(feature = "devtools")]
+            let session = crate::runtime::RendererScreencastPaintSession::default();
+            #[cfg(feature = "devtools")]
+            let paint = |vm: &mut super::StandaloneScriptVmHarness, consumer| {
+                vm.paint_current_screen_layout(
+                    consumer,
+                    viewport,
+                    moli_layout::PaintCaptureRequest::viewport(),
+                    moli_layout::LayoutFlushReason::RenderingOpportunity,
+                )
+                .unwrap()
+                .unwrap()
+            };
+            #[cfg(feature = "devtools")]
+            paint(&mut vm, Some(&session));
+            #[cfg(not(feature = "devtools"))]
+            vm.publish_layout_for_test().unwrap();
+            vm.eval("deleted.remove()").unwrap();
+            vm.publish_layout_for_test().unwrap();
+            vm.eval("frame.prepend(document.createElement('hr'));scroller.prepend(moving)")
+                .unwrap();
+            vm.publish_layout_for_test().unwrap();
 
-    for offset in [18, 61, 4] {
-        let builds = vm.layout_pass_observability_for_test().1;
-        let scroll_top = vm
-            .eval(&format!(
-                "scroller.scrollTop={offset};sticky.getBoundingClientRect();String(scroller.scrollTop)"
-            ))
-            .unwrap();
-        assert_eq!(scroll_top, offset.to_string());
-        assert_eq!(vm.layout_pass_observability_for_test().1, builds);
-        assert_published_layout_matches_fresh(
-            &mut vm,
-            &["frame", "scroller", "sticky", "fixed", "moving", "tall"],
-            &format!("scrollTop={offset}"),
-        );
-    }
+            let nodes = ["frame", "scroller", "sticky", "fixed", "moving", "tall"]
+                .map(|name| (name, vm.document_runtime.get_element_by_id(name).unwrap()));
+            for offset in [18, 61, 4] {
+                let builds = vm.layout_pass_observability_for_test().1;
+                let scroll_top = vm
+                    .eval(&format!("scroller.scrollTop={offset};String(scroller.scrollTop)"))
+                    .unwrap();
+                assert_eq!(scroll_top, offset.to_string());
+
+                // Sample the scroll projection before preparing the independent reference.
+                let projected = {
+                    let host = host.borrow();
+                    host.ensure_observable_layout().unwrap();
+                    host.with_latest_layout_tree_for_document(document, |tree| {
+                        nodes.map(|(_, node)| tree.client_rects_for_source(node))
+                    })
+                    .unwrap()
+                };
+                #[cfg(feature = "devtools")]
+                let projected_paint = paint(&mut vm, None);
+                assert_eq!(
+                    vm.layout_pass_observability_for_test().1,
+                    builds,
+                    "scrollTop={offset} must reuse the current layout"
+                );
+
+                let fresh = host
+                    .borrow()
+                    .build_layout_pass_for_document(
+                        document,
+                        moli_layout::LayoutPassRequest::with_paint(
+                            viewport,
+                            moli_layout::LayoutFlushReason::Screenshot,
+                        ),
+                    )
+                    .unwrap()
+                    .unwrap();
+                for ((name, node), rects) in nodes.iter().zip(projected) {
+                    assert_eq!(
+                        rects,
+                        fresh.client_rects_for_source(*node),
+                        "scrollTop={offset}: {name}"
+                    );
+                }
+                #[cfg(feature = "devtools")]
+                assert_eq!(
+                    Some(&projected_paint),
+                    fresh.paint_snapshot(),
+                    "scrollTop={offset}"
+                );
+            }
+        })
+        .await;
 }
 
 #[test]
