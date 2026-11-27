@@ -2076,34 +2076,31 @@ impl PageScriptHost {
         changed
     }
 
-    pub(crate) fn note_focus_style_activity(
+    pub(crate) fn set_element_focus(
         &mut self,
         previous: Option<DomHandle>,
         next: Option<DomHandle>,
-    ) {
-        if previous != next {
-            self.note_realtime_layout_input_change();
-        }
-        let dom_host = self.dom_host() as *const _;
-        self.style_engine
-            .invalidate_focus_change(unsafe { &*dom_host }, previous, next);
-    }
-
-    pub(crate) fn note_focus_style_activity_with_previous_focus_within(
-        &mut self,
-        previous: Option<DomHandle>,
-        next: Option<DomHandle>,
+        focus_within_root: Option<DomHandle>,
         previous_focus_within: Option<Vec<DomHandle>>,
     ) {
+        let previous_root = self.dom_host().focus_within_root();
+        self.set_dom_element_focus(next, focus_within_root);
+        if previous == next && previous_root == focus_within_root {
+            return;
+        }
+        let previous_focus_within = previous_focus_within.unwrap_or_else(|| {
+            self.dom_host()
+                .focus_within_ancestors(previous_root)
+                .collect()
+        });
         self.note_realtime_layout_input_change();
         let dom_host = self.dom_host() as *const _;
-        self.style_engine
-            .invalidate_focus_change_with_previous_focus_within(
-                unsafe { &*dom_host },
-                previous,
-                next,
-                previous_focus_within,
-            );
+        self.style_engine.invalidate_focus_change(
+            unsafe { &*dom_host },
+            previous,
+            next,
+            previous_focus_within,
+        );
     }
 
     pub(crate) fn note_target_style_activity(

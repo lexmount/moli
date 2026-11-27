@@ -784,9 +784,13 @@ impl DocumentRuntime {
         })
     }
 
-    pub(crate) fn set_active_element_handle(&mut self, handle: Option<DomHandle>) {
+    pub(crate) fn set_dom_element_focus(
+        &mut self,
+        handle: Option<DomHandle>,
+        focus_within_root: Option<DomHandle>,
+    ) {
         self.document.set_active_element(handle);
-        self.dom_host.set_active_element_handle(handle);
+        self.dom_host.set_element_focus(handle, focus_within_root);
     }
 
     pub(crate) fn document_focus_fallback_handle(&self) -> Option<DomHandle> {

@@ -68,6 +68,9 @@ impl PageScriptHost {
         &mut self,
         handle: DomHandle,
     ) -> Option<ChildBrowsingContextEntry> {
+        self.clear_focused_window(super::super::PendingWindowMessageEndpoint::ChildWindow(
+            handle,
+        ));
         self.session_histories
             .detach(super::super::OwnerDispatchScope::Child(handle));
         self.child_browsing_contexts.shift_remove(&handle)

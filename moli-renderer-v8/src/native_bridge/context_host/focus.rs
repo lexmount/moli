@@ -12,22 +12,59 @@ impl PageScriptHost {
             Some(PendingWindowMessageEndpoint::ChildWindow(container)) => container,
             None => return false,
         };
-        // Main retains one active element for this native document tree.
-        // Walk its embedding chain instead of reading author-visible getters.
-        let Some(mut focused) = self.active_element_handle() else {
+        let Some(focused) = self.focused_frame_owner() else {
             return false;
         };
-        loop {
-            if focused == container {
-                return true;
-            }
-            let Some(owner) = self.dom_host().owner_document_handle(focused) else {
-                return false;
-            };
-            let Some(parent) = self.child_browsing_context_host_for_document_handle(owner) else {
-                return false;
-            };
-            focused = parent;
+        focused == container
+            || self
+                .dom_host()
+                .owner_document_handle(focused)
+                .is_some_and(|owner| {
+                    self.child_browsing_context_host_is_ancestor_of_document(container, owner)
+                })
+    }
+
+    pub(crate) fn focused_frame_owner(&self) -> Option<DomHandle> {
+        let PendingWindowMessageEndpoint::ChildWindow(handle) = self.focused_window else {
+            return None;
+        };
+        (self.dom_host().is_connected(handle)
+            && self
+                .dom_host()
+                .owner_document_handle(handle)
+                .is_some_and(|document| self.document_is_fully_active(document)))
+        .then_some(handle)
+    }
+
+    pub(crate) fn focus_window_for_element(
+        &mut self,
+        handle: DomHandle,
+    ) -> Option<(PendingWindowMessageEndpoint, PendingWindowMessageEndpoint)> {
+        let dom = self.dom_host();
+        let next = if dom.is_html_element_named(handle, "iframe")
+            || dom.is_html_element_named(handle, "frame")
+        {
+            PendingWindowMessageEndpoint::ChildWindow(handle)
+        } else {
+            self.window_endpoint_for_document(dom.owner_document_handle(handle)?)?
+        };
+        let previous = std::mem::replace(&mut self.focused_window, next);
+        (previous != next).then_some((previous, next))
+    }
+
+    pub(crate) fn unfocus_frame_owner(&mut self, handle: DomHandle) {
+        if self.focused_window == PendingWindowMessageEndpoint::ChildWindow(handle) {
+            self.focused_window = self
+                .dom_host()
+                .owner_document_handle(handle)
+                .and_then(|document| self.window_endpoint_for_document(document))
+                .unwrap_or(PendingWindowMessageEndpoint::TopWindow);
+        }
+    }
+
+    pub(super) fn clear_focused_window(&mut self, endpoint: PendingWindowMessageEndpoint) {
+        if self.focused_window == endpoint {
+            self.focused_window = PendingWindowMessageEndpoint::TopWindow;
         }
     }
 

@@ -52,6 +52,26 @@ fn focus_callbacks_can_redirect_or_cancel_a_transition() {
             "b.disabled = true",
             "a:blur:BODY:b,a:focusout:BODY:b,active=BODY",
         ),
+        (
+            "a, 'blur'",
+            "b.style.display = 'none'",
+            "a:blur:BODY:b,a:focusout:BODY:b,active=BODY",
+        ),
+        (
+            "a, 'focusout'",
+            "b.style.visibility = 'hidden'",
+            "a:blur:BODY:b,a:focusout:BODY:b,active=BODY",
+        ),
+        (
+            "a, 'blur'",
+            "b.parentElement.style.visibility = 'hidden'; b.style.visibility = 'visible'",
+            "a:blur:BODY:b,a:focusout:BODY:b,b:focus:b:a,b:focusin:b:a,active=b",
+        ),
+        (
+            "a, 'blur'",
+            "b.parentElement.inert = true",
+            "a:blur:BODY:b,a:focusout:BODY:b,active=BODY",
+        ),
     ] {
         let mut vm = new_storage_html_test_vm("https://example.com/");
         let result = vm
@@ -79,6 +99,64 @@ fn focus_callbacks_can_redirect_or_cancel_a_transition() {
             .unwrap();
         assert_eq!(result, expected, "{listener}: {action}");
     }
+}
+
+#[test]
+fn blur_callbacks_keep_focus_within_on_common_flat_tree_ancestors() {
+    let mut vm = new_storage_html_test_vm("https://example.com/");
+    let result = vm
+        .eval(
+            r#"(() => {
+  document.body.innerHTML = `<div id=host>
+    <button slot=from id=a>A</button><button slot=to id=b>B</button>
+  </div>`;
+  const host = document.getElementById('host');
+  const [a, b] = host.children;
+  const shadow = host.attachShadow({mode: 'open'});
+  shadow.innerHTML = `
+    <style>
+      #common:focus-within { background-color: rgb(0, 128, 0) }
+      #leaving:focus-within { background-color: rgb(255, 0, 0) }
+    </style>
+    <div id=common>
+      <div id=leaving><slot name=from></slot></div><slot name=to></slot>
+    </div>`;
+  const common = shadow.getElementById('common');
+  const leaving = shadow.getElementById('leaving');
+  const log = [];
+  const read = stage => log.push([
+    stage, a.matches(':focus'), common.matches(':focus-within'),
+    leaving.matches(':focus-within'), getComputedStyle(common).backgroundColor,
+    getComputedStyle(leaving).backgroundColor,
+  ].join(':'));
+
+  a.focus({preventScroll: true});
+  read('focused');
+  a.addEventListener('blur', () => read('blur'));
+  a.addEventListener('focusout', () => read('focusout'));
+  b.focus({preventScroll: true});
+  read('switched');
+
+  a.focus({preventScroll: true});
+  a.addEventListener('blur', () => { b.style.display = 'none'; }, {once: true});
+  b.focus({preventScroll: true});
+  read('canceled');
+  return log.join('|');
+})()"#,
+        )
+        .unwrap();
+    assert_eq!(
+        result,
+        concat!(
+            "focused:true:true:true:rgb(0, 128, 0):rgb(255, 0, 0)|",
+            "blur:false:true:false:rgb(0, 128, 0):rgba(0, 0, 0, 0)|",
+            "focusout:false:true:false:rgb(0, 128, 0):rgba(0, 0, 0, 0)|",
+            "switched:false:true:false:rgb(0, 128, 0):rgba(0, 0, 0, 0)|",
+            "blur:false:true:false:rgb(0, 128, 0):rgba(0, 0, 0, 0)|",
+            "focusout:false:true:false:rgb(0, 128, 0):rgba(0, 0, 0, 0)|",
+            "canceled:false:false:false:rgba(0, 0, 0, 0):rgba(0, 0, 0, 0)"
+        )
+    );
 }
 
 #[test]

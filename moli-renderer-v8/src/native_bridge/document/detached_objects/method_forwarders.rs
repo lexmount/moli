@@ -541,9 +541,8 @@ fn sync_detached_native_focus_for_style<'s>(
         return;
     }
     let runtime = unsafe { &mut *runtime_ptr };
-    runtime.set_active_element_handle(next_handle);
     runtime.mark_focus_changed();
-    runtime.note_focus_style_activity(previous_handle, next_handle);
+    runtime.set_element_focus(previous_handle, next_handle, next_handle, None);
 }
 
 pub(in crate::native_bridge) fn detached_focus_method_callback<'s>(

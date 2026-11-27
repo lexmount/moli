@@ -66,6 +66,99 @@ fn document_has_focus_uses_the_branded_receiver_without_reading_author_propertie
 }
 
 #[test]
+fn changing_elements_inside_a_frame_preserves_document_focus_during_blur() {
+    let mut vm = new_storage_html_test_vm("https://document-focus-transition.test/");
+    let result = vm
+        .eval(
+            r#"(() => {
+  const outer = document.body.appendChild(document.createElement('iframe'));
+  const middle = outer.contentDocument;
+  const inner = middle.body.appendChild(middle.createElement('iframe'));
+  const deep = inner.contentDocument;
+  deep.body.innerHTML = '<input id=a><input id=b>';
+  const [a, b] = deep.body.children;
+  const states = [];
+  const read = () => states.push([
+    document.hasFocus(), middle.hasFocus(), deep.hasFocus(),
+    document.activeElement === outer, middle.activeElement === inner,
+    deep.activeElement.id || deep.activeElement.tagName,
+  ].join(','));
+
+  outer.focus({preventScroll: true});
+  if (!middle.hasFocus()) throw new Error('frame owner did not focus its Window');
+  outer.blur();
+  if (middle.hasFocus() || document.activeElement === outer) {
+    throw new Error('blurring a frame owner left its Window focused');
+  }
+
+  a.focus({preventScroll: true});
+  a.addEventListener('blur', read);
+  a.addEventListener('focusout', read);
+  b.focus({preventScroll: true});
+  read();
+  b.blur();
+  read();
+  outer.remove();
+  read();
+  return states.join('|');
+})()"#,
+        )
+        .unwrap();
+    assert_eq!(
+        result,
+        concat!(
+            "true,true,true,true,true,BODY|true,true,true,true,true,BODY|",
+            "true,true,true,true,true,b|true,true,true,true,true,BODY|",
+            "true,false,false,false,false,BODY"
+        )
+    );
+}
+
+#[test]
+fn reentrant_focus_dispatches_window_events_from_the_focused_frame() {
+    let mut vm = new_storage_html_test_vm("https://window-focus-transition.test/");
+    let result = vm
+        .eval(
+            r#"(() => {
+  document.body.innerHTML = '<input id=top><iframe id=first></iframe><iframe id=second></iframe>';
+  const [topInput, first, second] = document.body.children;
+  const addInput = frame => {
+    const child = frame.contentDocument;
+    return child.body.appendChild(child.createElement('input'));
+  };
+  const a = addInput(first);
+  const b = addInput(second);
+  const states = [];
+  const read = stage => states.push([
+    stage, first.contentDocument.hasFocus(), second.contentDocument.hasFocus(),
+    document.activeElement.id,
+  ].join(','));
+
+  a.focus({preventScroll: true});
+  first.contentWindow.addEventListener('blur', () => read('first window blur'));
+  second.contentWindow.addEventListener('focus', () => read('second window focus'));
+  window.addEventListener('blur', () => read('top window blur'));
+  window.addEventListener('focus', () => read('top window focus'));
+  a.addEventListener('blur', () => {
+    read('first input blur');
+    b.focus({preventScroll: true});
+  });
+  topInput.focus({preventScroll: true});
+  read('after redirect');
+  return states.join('|');
+})()"#,
+        )
+        .unwrap();
+    assert_eq!(
+        result,
+        concat!(
+            "first input blur,true,false,first|first window blur,false,true,second|",
+            "second window focus,false,true,second|after redirect,false,true,second"
+        )
+    );
+}
+
+#[test]
 fn window_focus_and_blur_validate_the_receiver_in_the_callee_realm() {
     let mut vm = new_storage_test_vm("https://window-focus-native.test/");
     vm.eval(r#"(() => {
