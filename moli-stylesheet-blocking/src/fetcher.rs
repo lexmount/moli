@@ -377,6 +377,7 @@ struct StylesheetFetchRequest {
     start_unix_millis: f64,
     terminal: OnceLock<Arc<StylesheetFetchTerminal>>,
     physical_observation_emitted: AtomicBool,
+    render_blocking: AtomicBool,
 }
 
 impl StylesheetFetch {
@@ -394,11 +395,20 @@ impl StylesheetFetch {
             start_unix_millis,
             terminal: OnceLock::new(),
             physical_observation_emitted: AtomicBool::new(false),
+            render_blocking: AtomicBool::new(false),
         }))
     }
 
     pub fn ptr_eq(&self, other: &Self) -> bool {
         Arc::ptr_eq(&self.0, &other.0)
+    }
+
+    pub fn mark_render_blocking(&self) {
+        self.0.render_blocking.store(true, Ordering::Relaxed);
+    }
+
+    pub fn render_blocking(&self) -> bool {
+        self.0.render_blocking.load(Ordering::Relaxed)
     }
 
     pub fn identity(&self) -> StylesheetFetchIdentity {

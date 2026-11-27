@@ -153,6 +153,31 @@ impl DocumentRuntime {
             document_url,
             inputs.iter(),
         );
+        let dom = self.dom_host.dom();
+        for input in &inputs {
+            let node = DomHandle::new(input.node_id().index());
+            let Some(document) = dom
+                .node(node)
+                .and_then(crate::dom::native::Node::owner_document)
+            else {
+                continue;
+            };
+            if input.blocks_scripts()
+                && dom
+                    .node(document)
+                    .and_then(crate::dom::native::Node::as_document)
+                    .is_some_and(|record| {
+                        record.content_type() == "text/html"
+                            && record.body_or_frameset_handle(dom, document).is_none()
+                    })
+                && let Some(fetch) = self
+                    .stylesheet_lifecycle
+                    .fetches
+                    .owner_link_fetch(input.node_id(), input.signature())
+            {
+                fetch.mark_render_blocking();
+            }
+        }
         inputs
     }
 

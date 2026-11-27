@@ -6842,3 +6842,28 @@ async fn windowless_media_tasks_use_their_documents_owning_window() -> Result<()
     assert_eq!(value["value"], "true");
     Ok(())
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn parser_linked_stylesheet_timing_reports_admission_render_blocking() -> Result<()> {
+    let server = FixtureServer::spawn().await?;
+    let browser = Browser::new(AppConfig::default())?;
+    for (route, expected) in [
+        (
+            "/compat/blocking-stylesheet-parser-blocking-external",
+            "blocking",
+        ),
+        (
+            "/compat/blocking-stylesheet-alternate-non-blocking",
+            "non-blocking",
+        ),
+    ] {
+        let mut page = browser.fetch(&server.url(route)).await?;
+        let result = page.evaluate_runtime_expression_with_await_async(
+            r#"performance.getEntriesByType('resource').find(entry => new URL(entry.name).pathname.endsWith('.css'))?.renderBlockingStatus"#,
+            false,
+        ).await?;
+        assert_eq!(result["value"], expected, "{route}");
+    }
+    server.shutdown().await;
+    Ok(())
+}
