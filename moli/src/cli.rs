@@ -625,12 +625,15 @@ pub struct CommonArgs {
     #[arg(long)]
     pub disable_subframes: bool,
 
+    /// Use deterministic compatibility geometry, the default for fetch and serve.
+    /// Conflicts with --lazy and --realtime.
+    #[arg(long)]
+    pub mock: bool,
+
     /// Enable lazy layout for on-demand geometry and screenshots.
     /// Native scrollbars are hidden unless --scrollbars or MOLI_SCROLLBARS is enabled.
     /// With `fetch --eval` or `--eval-file`, refresh layout once before running
     /// the script so geometry APIs can read it. Script mutations do not refresh it.
-    ///
-    /// The default mode provides deterministic compatibility geometry.
     #[arg(
         short,
         long,
@@ -954,11 +957,12 @@ mod tests {
     }
 
     #[test]
-    fn layout_help_shows_lazy_and_realtime() {
+    fn layout_help_shows_mock_lazy_and_realtime() {
         for command in ["fetch", "serve"] {
             let help = Cli::try_parse_from(["moli", command, "--help"])
                 .unwrap_err()
                 .to_string();
+            assert!(help.contains("--mock"));
             assert!(help.contains("-l, --lazy"));
             assert!(help.contains("--realtime"));
             assert!(!help.contains("--layout"));

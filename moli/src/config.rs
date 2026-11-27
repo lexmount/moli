@@ -115,6 +115,11 @@ fn apply_common_args(config: &mut AppConfig, common: &CommonArgs) -> Result<()> 
     } else {
         LayoutPolicy::Mock
     };
+    if common.mock && layout_policy.uses_real_layout() {
+        bail!(
+            "--mock cannot be combined with --lazy or --realtime (including MOLI_LAYOUT=true or MOLI_REALTIME=true)"
+        );
+    }
     if common.scrollbars && !layout_policy.uses_real_layout() {
         bail!(
             "--scrollbars requires --lazy or --realtime (MOLI_LAYOUT=true or MOLI_REALTIME=true)"
