@@ -455,6 +455,46 @@ async fn touch_coordinates_share_the_frame_projection_and_release_restores_hit_r
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn captured_touch_refreshes_frame_geometry_before_dispatch() {
+    for (touch, pointer) in [
+        ("touchmove", "pointermove"),
+        ("touchend", "pointerup"),
+        ("touchcancel", "pointercancel"),
+    ] {
+        let mut vm = captured_child_vm(false, false).await;
+        vm.eval(&format!(
+            r#"
+            const style = document.createElement('style');
+            style.textContent = 'iframe[data-moved] {{ margin-left: 100px }}';
+            document.head.append(style);
+            globalThis.samples = [];
+            for (const type of ['{touch}', '{pointer}']) {{
+                captured.addEventListener(type, event => {{
+                    const point = event.changedTouches?.[0] ?? event;
+                    samples.push([event.type, point.clientX, point.clientY, point.screenX, point.screenY]);
+                }});
+            }}
+            "#,
+        ))
+        .unwrap();
+        vm.publish_layout_for_test().unwrap();
+        vm.dispatch_touch_event_at_point(130.0, 90.0, "touchstart", false)
+            .unwrap();
+        let builds = vm.layout_pass_observability_for_test().1;
+        vm.eval("frame.setAttribute('data-moved', '')").unwrap();
+        vm.dispatch_touch_event_at_point(140.0, 100.0, touch, false)
+            .unwrap();
+
+        let samples = vm.eval("JSON.stringify(samples)").unwrap();
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&samples).unwrap(),
+            serde_json::json!([[pointer, -60, 40, 140, 100], [touch, -60, 40, 140, 100]]),
+        );
+        assert_eq!(vm.layout_pass_observability_for_test().1, builds + 1);
+    }
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn capture_projects_through_a_frame_box_without_a_child_layout_tree() {
     let mut vm = captured_child_vm(false, false).await;
     dispatch(&mut vm, "mousedown", 130.0, 90.0, 1);

@@ -58,6 +58,10 @@ pub(crate) type FrameOwnerStyles = HashMap<DomHandle, ServoArc<ComputedValues>>;
 impl LayoutPassFeedback<'_> {
     pub(crate) fn commit(mut self) -> HashMap<DomHandle, ScreenStyleCoverage> {
         self.previous.clear();
+        self.take_screen_style_coverage()
+    }
+
+    pub(crate) fn take_screen_style_coverage(&mut self) -> HashMap<DomHandle, ScreenStyleCoverage> {
         self.screen_style_coverage.take().unwrap_or_default()
     }
 
@@ -95,7 +99,7 @@ pub(crate) fn build_native_layout_pass<'a>(
     let mut feedback = LayoutPassFeedback {
         host: runtime,
         previous: HashMap::new(),
-        screen_style_coverage: (inputs == LayoutInputRetention::Realtime).then(HashMap::new),
+        screen_style_coverage: (inputs != LayoutInputRetention::Transient).then(HashMap::new),
         frame_owner_styles: (inputs == LayoutInputRetention::Frozen).then(HashMap::new),
     };
     let css_images = request

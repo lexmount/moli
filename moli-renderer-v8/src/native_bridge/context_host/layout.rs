@@ -21,7 +21,10 @@ use crate::{
         CompletedStylesheetWebFont, StylesheetLoadBlockingResource, StylesheetSubresourceRequest,
     },
     document_runtime::DomHandle,
-    layout_renderer::{FrameOwnerStyles, LayoutPassFeedback, layout_viewport_for_surface},
+    layout_renderer::{
+        FrameOwnerStyles, LayoutPassFeedback, layout_viewport_for_surface,
+        screen_targets_allow_layout_reuse,
+    },
     native_bridge::element::{ComputedStyleRead, iframe_handle_viewport},
     script_vm::web_fonts::DocumentWebFontCompletion,
     style_engine::{StyleViewport, StyloStyleEnvironment},
@@ -343,10 +346,15 @@ impl PageScriptHost {
                 .changed_owners,
         );
         let host = self.dom_host();
-        if changed_owners.into_iter().any(|frame| {
-            if !host.is_connected(frame) {
+        let mut owner_documents = HashSet::new();
+        let owner_needs_layout = changed_owners.into_iter().any(|frame| {
+            let Some(document) = host
+                .owner_document_handle(frame)
+                .filter(|_| host.is_connected(frame))
+            else {
                 return true;
-            }
+            };
+            owner_documents.insert(document);
             let previous = self.document_layout_state.borrow().frame_owner_style(frame);
             let current = ComputedStyleRead::new(self, frame).computed_values();
             previous.zip(current).is_none_or(|(previous, current)| {
@@ -361,11 +369,46 @@ impl PageScriptHost {
                     || previous.clone_pointer_events() != current.clone_pointer_events()
                     || previous.clone_visibility() != current.clone_visibility()
             })
-        }) {
-            let mut state = self.document_layout_state.borrow_mut();
-            state.clear_latest_layout();
-            state.on_demand_frames.needs_layout = true;
+        });
+        if owner_needs_layout
+            || owner_documents
+                .iter()
+                .any(|&document| !self.on_demand_restyles_allow_layout_reuse(document))
+        {
+            // Snapshot readers can still use the published projection until
+            // the replacement pass succeeds.
+            self.document_layout_state
+                .borrow_mut()
+                .on_demand_frames
+                .needs_layout = true;
+        } else {
+            for document in owner_documents {
+                self.style_engine.consume_screen_style_work(document);
+            }
         }
+    }
+
+    fn on_demand_restyles_allow_layout_reuse(&self, document: DomHandle) -> bool {
+        // An owner's attribute can restyle its containing block or siblings
+        // without changing the owner's computed dimensions.
+        let repaint = ServoRestyleDamage::REPAINT;
+        let Some(restyles) =
+            self.style_engine
+                .screen_restyle_targets(self.dom_host(), document, repaint)
+        else {
+            return false;
+        };
+        (restyles.targets.is_empty()
+            || screen_targets_allow_layout_reuse(
+                self,
+                document,
+                restyles.targets,
+                restyles.after,
+                repaint,
+            ))
+            && self
+                .style_engine
+                .screen_style_damage_is_within(document, repaint)
     }
 
     pub(crate) fn invalidate_mock_frame_viewports(
@@ -480,13 +523,11 @@ impl PageScriptHost {
         }
         self.validate_on_demand_frame_layout();
         let document = self.document_handle();
-        if self
-            .document_layout_state
-            .borrow()
-            .latest_layout(document)
-            .is_some()
         {
-            return Ok(());
+            let state = self.document_layout_state.borrow();
+            if state.latest_layout(document).is_some() && !state.on_demand_frames.needs_layout {
+                return Ok(());
+            }
         }
         let request = LayoutPassRequest::new(
             self.layout_viewport_for_document(document),
@@ -825,7 +866,6 @@ impl PageScriptHost {
 
     #[cfg(feature = "devtools")]
     pub(crate) fn published_frame_geometry(&self) -> Option<std::rc::Rc<PublishedFrameGeometry>> {
-        self.validate_on_demand_frame_layout();
         self.document_layout_state
             .borrow()
             .frame_geometry()
