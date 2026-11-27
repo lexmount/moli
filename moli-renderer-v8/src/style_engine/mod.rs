@@ -922,25 +922,14 @@ impl MoliStyleEngine {
         host: &DomHost,
         owner_document: DomHandle,
         document_context: StyleSourceDocumentContext<'_>,
-        mut observe_frame_attributes: impl FnMut(&[DomHandle]),
     ) {
         for document in document_context.documents_with_owner(owner_document) {
-            observe_frame_attributes(
-                &self.drain_pending_style_invalidations_for_document_read(host, document),
+            self.drain_pending_style_invalidations_for_document_and_boundary(
+                host,
+                document,
+                StyleInvalidationDrainBoundary::ComputedStyleRead,
             );
         }
-    }
-
-    pub(crate) fn drain_pending_style_invalidations_for_document_read(
-        &self,
-        host: &DomHost,
-        document: DomHandle,
-    ) -> Vec<DomHandle> {
-        self.drain_pending_style_invalidations_for_document_and_boundary(
-            host,
-            document,
-            StyleInvalidationDrainBoundary::ComputedStyleRead,
-        )
     }
 
     pub(crate) fn drain_pending_style_invalidations_for_turn_exit_with_document_context(
@@ -948,15 +937,12 @@ impl MoliStyleEngine {
         host: &DomHost,
         document_context: StyleSourceDocumentContext<'_>,
         boundary: StyleInvalidationTurnExitBoundary,
-        mut observe_frame_attributes: impl FnMut(&[DomHandle]),
     ) {
         for document in document_context.documents() {
-            observe_frame_attributes(
-                &self.drain_pending_style_invalidations_for_document_and_boundary(
-                    host,
-                    document,
-                    boundary.into(),
-                ),
+            self.drain_pending_style_invalidations_for_document_and_boundary(
+                host,
+                document,
+                boundary.into(),
             );
         }
     }
@@ -966,17 +952,14 @@ impl MoliStyleEngine {
         host: &DomHost,
         document: DomHandle,
         boundary: StyleInvalidationDrainBoundary,
-    ) -> Vec<DomHandle> {
-        let Some(world) = self.document_worlds.active_world(document) else {
-            return Vec::new();
-        };
+    ) {
+        let world = self.world_for_document(document);
         let pending = world.pending_invalidations.take();
         if !pending.is_empty() && moli_trace::style_invalidation_trace_enabled() {
             tracing::info!(target: "moli_style_invalidation", ?document, ?boundary, "drain DOM invalidation");
         }
-        let frame_attribute_changes = pending.drain(self, &world, host);
+        pending.drain(self, &world, host);
         world.document_state.finish_screen_style_invalidation();
-        frame_attribute_changes
     }
 
     #[cfg(test)]
