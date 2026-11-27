@@ -1,4 +1,6 @@
-use super::auxiliary_page_identity::{open_auxiliary, open_auxiliary_with_url, resume_auxiliary};
+use super::auxiliary_page_identity::{
+    open_auxiliary, open_auxiliary_target, open_auxiliary_with_url, resume_auxiliary,
+};
 use super::*;
 
 async fn wait_for_value(page: &mut TestCdpSocket, expression: &str, expected: serde_json::Value) {
@@ -86,17 +88,34 @@ async fn popup_document_access_keeps_retained_functions_and_checks_borrowed_rece
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn initial_popup_retirement_rejects_frames_created_by_navigation_cancellation() {
     let release = Arc::new(tokio::sync::Notify::new());
-    let response = Arc::clone(&release);
+    let wait_for_release = Arc::clone(&release);
+    let committed = Arc::new(tokio::sync::Notify::new());
+    let notify_committed = Arc::clone(&committed);
     let (fixture_addr, _fixture) = spawn_dedicated_fixture_server(
-        Router::new().fallback(get(move |uri: axum::http::Uri| {
-            let response = Arc::clone(&response);
-            async move {
-                if uri.path() == "/child" {
-                    response.notified().await;
-                }
-                axum::response::Html("<p>loaded</p>")
-            }
-        })),
+        Router::new()
+            .route(
+                "/child",
+                get(move || {
+                    let wait_for_release = Arc::clone(&wait_for_release);
+                    async move {
+                        wait_for_release.notified().await;
+                        axum::response::Html(
+                            "<script>fetch('/child-committed')</script><p>loaded</p>",
+                        )
+                    }
+                }),
+            )
+            .route(
+                "/child-committed",
+                get(move || {
+                    let notify_committed = Arc::clone(&notify_committed);
+                    async move {
+                        notify_committed.notify_one();
+                        axum::http::StatusCode::NO_CONTENT
+                    }
+                }),
+            )
+            .fallback(get(|| async { axum::response::Html("<p>loaded</p>") })),
         "popup-retirement-reentry",
     );
     let base = format!("http://{fixture_addr}");
@@ -112,19 +131,38 @@ async fn initial_popup_retirement_rejects_frames_created_by_navigation_cancellat
     let mut opener = connect_dynamic_page(addr, &opener_id).await;
     send_cdp_command(&mut opener, 1, "Page.enable", None, json!({})).await;
     navigate_dynamic_page_and_wait_for_load(&mut opener, 2, &format!("{base}/opener")).await;
-    let (_child_id, mut child) = open_auxiliary_with_url(
+    // Attach CDP to the popup after releasing its deliberately stalled request.
+    let child_id = open_auxiliary_target(
         addr,
         &mut opener,
         "/child",
         "p.document.body.innerHTML='<iframe src=/frame></iframe>'",
     )
     .await;
-    wait_for_value(
+    let frame_loaded = send_cdp_command(
         &mut opener,
-        "p.document.querySelector('iframe').contentDocument.URL.endsWith('/frame') && p.document.querySelector('iframe').contentDocument.readyState==='complete'",
-        json!(true),
+        4,
+        "Runtime.evaluate",
+        None,
+        json!({
+            "expression": r#"(() => {
+                const frame = p.document.querySelector('iframe');
+                const ready = () => frame.contentDocument?.URL.endsWith('/frame')
+                    && frame.contentDocument.readyState === 'complete';
+                if (ready()) return true;
+                return new Promise(resolve => frame.addEventListener('load', () => {
+                    if (ready()) resolve(true);
+                }));
+            })()"#,
+            "awaitPromise": true,
+            "returnByValue": true,
+        }),
     )
     .await;
+    assert_eq!(
+        response_by_id(&frame_loaded, 4)["result"]["result"]["value"],
+        true
+    );
     assert_eq!(
         evaluate_window_name_probe(
             &mut opener,
@@ -150,15 +188,18 @@ async fn initial_popup_retirement_rejects_frames_created_by_navigation_cancellat
         true
     );
     release.notify_one();
-    wait_for_value(&mut child, "document.URL", json!(format!("{base}/child"))).await;
+    timeout(Duration::from_secs(60), committed.notified())
+        .await
+        .expect("the popup replacement document runs its startup script");
+    let mut child = connect_dynamic_page(addr, &child_id).await;
     assert_eq!(
         evaluate_window_name_probe(
             &mut child,
             3,
-            "[window.canceled,window.saved===null,document.querySelectorAll('iframe').length]",
+            "[document.URL,window.canceled,window.saved===null,document.querySelectorAll('iframe').length]",
         )
         .await,
-        json!([true, true, 0])
+        json!([format!("{base}/child"), true, true, 0])
     );
     assert_eq!(
         evaluate_window_name_probe(&mut opener, 3, "p.closed").await,
