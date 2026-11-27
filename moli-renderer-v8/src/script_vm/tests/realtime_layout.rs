@@ -392,6 +392,7 @@ fn realtime_hit_testing_follows_pointer_events_and_visibility_changes() {
     }
 }
 
+#[cfg(feature = "devtools")]
 #[tokio::test(flavor = "current_thread")]
 async fn realtime_repaints_native_color_damage_without_rebuilding_geometry() {
     tokio::task::LocalSet::new()
