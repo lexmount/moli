@@ -10,7 +10,8 @@ use moli_layout::{
 };
 use style::Atom;
 use taffy::{
-    AlignContent, BoxSizing, Dimension, Display, FlexDirection, FlexWrap, Line, Rect, Size, Style,
+    AlignContent, AlignItems, BoxSizing, Dimension, Display, FlexDirection, FlexWrap, Line, Rect,
+    Size, Style,
     style_helpers::{fr, length, line, percent},
 };
 
@@ -926,6 +927,116 @@ fn grid_container_justify_items_center_shrink_wraps_an_auto_sized_item() {
         solid_rect(&snapshot, RED),
         PaintRect::new(140.0, 95.0, 20.0, 10.0),
     );
+}
+
+#[test]
+fn intrinsic_width_counts_replaced_percentage_height_against_the_content_box() {
+    let source = FixtureSource {
+        nodes: vec![
+            FixtureNode::div("root", vec![1]),
+            FixtureNode::div("container", vec![2]),
+            FixtureNode::svg("image", 200.0, 200.0),
+        ],
+    };
+    let mut styles = FixtureStyles::default();
+    styles.0.insert(
+        0,
+        fixed_box(LayoutDisplay::Block, 640.0, 480.0, PaintColor::TRANSPARENT),
+    );
+    styles.0.insert(
+        1,
+        resolved(
+            LayoutDisplay::Block,
+            Style {
+                box_sizing: BoxSizing::ContentBox,
+                size: Size {
+                    width: Dimension::fit_content(),
+                    height: length(80.0),
+                },
+                min_size: Size {
+                    width: Dimension::min_content().into(),
+                    height: Dimension::auto().into(),
+                },
+                padding: Rect::length(10.0),
+                ..Style::default()
+            },
+            GREEN,
+        ),
+    );
+    styles.0.insert(
+        2,
+        resolved(
+            LayoutDisplay::Inline,
+            Style {
+                size: Size {
+                    width: Dimension::auto(),
+                    height: percent(1.0),
+                },
+                ..Style::default()
+            },
+            RED,
+        ),
+    );
+
+    let snapshot = render(&source, &mut styles, PaintViewport::new(640, 480, 1.0));
+    assert_eq!(solid_rect(&snapshot, GREEN).width, 100.0);
+    assert_eq!(solid_rect(&snapshot, RED).width, 80.0);
+}
+
+#[test]
+fn wrapping_flex_column_counts_the_image_before_shrinking_it() {
+    let source = FixtureSource {
+        nodes: vec![
+            FixtureNode::div("root", vec![1]),
+            FixtureNode::div("flex", vec![2]),
+            FixtureNode::svg("image", 100.0, 100.0),
+        ],
+    };
+    let mut styles = FixtureStyles::default();
+    styles.0.insert(
+        0,
+        fixed_box(LayoutDisplay::Block, 640.0, 480.0, PaintColor::TRANSPARENT),
+    );
+    styles.0.insert(
+        1,
+        resolved(
+            LayoutDisplay::Flex,
+            Style {
+                display: Display::Flex,
+                flex_direction: FlexDirection::Column,
+                flex_wrap: FlexWrap::Wrap,
+                align_items: AlignItems::FLEX_START,
+                size: Size {
+                    width: Dimension::min_content(),
+                    height: length(50.0),
+                },
+                max_size: Size {
+                    width: length(200.0),
+                    height: Dimension::auto().into(),
+                },
+                ..Style::default()
+            },
+            GREEN,
+        ),
+    );
+    styles.0.insert(
+        2,
+        resolved(
+            LayoutDisplay::Block,
+            Style {
+                min_size: Size {
+                    width: Dimension::auto().into(),
+                    height: length(0.0),
+                },
+                ..Style::default()
+            },
+            RED,
+        ),
+    );
+
+    let snapshot = render(&source, &mut styles, PaintViewport::new(640, 480, 1.0));
+    assert_eq!(solid_rect(&snapshot, GREEN).width, 100.0);
+    assert_eq!(solid_rect(&snapshot, RED).width, 50.0);
 }
 
 #[test]
