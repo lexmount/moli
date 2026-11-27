@@ -2,11 +2,12 @@ use std::{collections::HashMap, fmt::Debug, hash::Hash, mem::size_of, num::NonZe
 
 use crate::{
     FrozenLayoutBox, LayoutBoxGeometry, LayoutError, LayoutOutputBoxId, LayoutPoint,
-    LayoutScrollExtent, LayoutScrollbarGeometry, LayoutWorld, style::ResolvedLayoutTransform,
+    LayoutScrollExtent, LayoutScrollbarGeometry, LayoutWorld, PaintPixelGrid,
+    style::ResolvedLayoutTransform,
 };
 
 use super::{
-    coordinates::{BoxPlacement, resolve_coordinate_spaces},
+    coordinates::{BoxPlacement, ResolvedCoordinates, resolve_coordinate_spaces},
     sticky::StickyConstraints,
 };
 
@@ -43,47 +44,43 @@ pub(crate) struct ScrollTranslation {
 }
 
 impl LocalScrollSpaces {
-    fn new<N>(
-        root: LayoutOutputBoxId,
-        placements: &[BoxPlacement],
-        extents: &[LayoutScrollExtent],
-        scroll_sources: &[(LayoutOutputBoxId, N)],
-    ) -> Option<Self> {
-        let mut sources = scroll_sources
-            .iter()
-            .map(|&(id, _)| id)
-            .filter(|&id| id != root)
-            .peekable();
-        sources.peek()?;
-        let mut child_spaces = Vec::with_capacity(placements.len());
-        let mut spaces = Vec::new();
-        for (index, placement) in placements.iter().enumerate() {
-            let parent = placement.parent.and_then(|id| child_spaces[id.index()]);
-            let own = sources
-                .next_if(|id| id.index() == index)
-                .map(|box_id| {
-                    spaces.push(LocalScrollSpace {
-                        box_id,
-                        parent,
-                        published_offset: extents[index].applied_offset,
-                        translation: ScrollTranslation::default(),
-                    });
-                    let index = u32::try_from(spaces.len()).expect("scroll space fits box ID");
-                    NonZeroU32::new(index).expect("one-based scroll space")
-                })
-                .or(parent);
-            child_spaces.push(own);
-        }
-        // For a box's own coordinates use its parent's space. Descending
-        // order keeps each parent's child space available until its own turn.
-        for (index, placement) in placements.iter().enumerate().rev() {
-            child_spaces[index] = placement.parent.and_then(|id| child_spaces[id.index()]);
-        }
-        Some(Self {
-            box_spaces: child_spaces,
-            spaces,
+    fn new(box_count: usize) -> Self {
+        Self {
+            box_spaces: vec![None; box_count],
+            spaces: Vec::new(),
             has_translation: false,
-        })
+        }
+    }
+
+    fn resolve_box(
+        &mut self,
+        index: usize,
+        parent: Option<LayoutOutputBoxId>,
+        own_offset: Option<LayoutPoint>,
+    ) {
+        // Coordinate resolution visits the parent before any of its children.
+        let parent = parent.and_then(|id| self.box_spaces[id.index()]);
+        self.box_spaces[index] = if let Some(published_offset) = own_offset {
+            self.spaces.push(LocalScrollSpace {
+                box_id: LayoutOutputBoxId::from_index(index),
+                parent,
+                published_offset,
+                translation: ScrollTranslation::default(),
+            });
+            let space = u32::try_from(self.spaces.len()).expect("scroll space fits box ID");
+            Some(NonZeroU32::new(space).expect("one-based scroll space"))
+        } else {
+            parent
+        };
+    }
+
+    fn finish(mut self) -> Self {
+        // A scroll container translates its descendants. Its own coordinates
+        // use the space inherited from its parent.
+        for space in &self.spaces {
+            self.box_spaces[space.box_id.index()] = space.parent;
+        }
+        self
     }
 
     fn refresh<N>(
@@ -147,10 +144,8 @@ impl<N: Copy + Debug + Eq + Hash> ScrollProjection<N> {
             scroll_sources: Vec::new(),
             local: None,
         };
-        let mut parents_precede_children = true;
         for index in 0..boxes.len() {
             let (base, constraints) = placement(index)?;
-            parents_precede_children &= base.parent.is_none_or(|parent| parent.index() < index);
             projection.placements.push(base);
             if let Some(constraints) = constraints {
                 projection.sticky.insert(index, constraints);
@@ -169,15 +164,41 @@ impl<N: Copy + Debug + Eq + Hash> ScrollProjection<N> {
                 .map(|geometry| geometry.layout_origin_in_document)
                 .collect();
         }
-        if parents_precede_children && projection.sticky.is_empty() {
-            projection.local = LocalScrollSpaces::new(
-                projection.root,
-                &projection.placements,
-                extents,
-                &projection.scroll_sources,
-            );
-        }
         Ok(projection)
+    }
+
+    pub(super) fn resolve_initial(
+        &mut self,
+        world: &LayoutWorld<N>,
+        viewport_scroll: LayoutPoint,
+        extents: &[LayoutScrollExtent],
+        paint_grid: Option<PaintPixelGrid>,
+    ) -> Result<ResolvedCoordinates, LayoutError> {
+        let mut local = (self.sticky.is_empty()
+            && self.scroll_sources.iter().any(|&(id, _)| id != self.root))
+        .then(|| LocalScrollSpaces::new(self.placements.len()));
+        let coordinates = resolve_coordinate_spaces(
+            self.root,
+            viewport_scroll,
+            self.placements.len(),
+            paint_grid,
+            |index| Ok(self.placement(index)),
+            |id| {
+                let extent = &extents[id.index()];
+                extent.is_scroll_container.then_some(extent.applied_offset)
+            },
+            |index, parent| {
+                if let Some(local) = &mut local {
+                    let extent = &extents[index];
+                    let owns_space = index != self.root.index()
+                        && extent.is_scroll_container
+                        && world.boxes[index].source().is_some();
+                    local.resolve_box(index, parent, owns_space.then_some(extent.applied_offset));
+                }
+            },
+        )?;
+        self.local = local.map(LocalScrollSpaces::finish);
+        Ok(coordinates)
     }
 
     pub(super) fn placement(&self, index: usize) -> (BoxPlacement, Option<StickyConstraints>) {
@@ -251,6 +272,7 @@ impl<N: Copy + Debug + Eq + Hash> ScrollProjection<N> {
                         .is_scroll_container
                         .then(|| offsets.get(&id).copied().unwrap_or(extent.applied_offset))
                 },
+                |_, _| {},
             )?;
             for (index, ((layout_box, coordinate), adjustment)) in boxes
                 .iter_mut()
@@ -318,6 +340,51 @@ fn apply_scroll_offset(extent: &mut LayoutScrollExtent, offset: LayoutPoint) {
             offset.y,
             extent.scrollport.height,
             extent.scroll_size.height,
+        );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn nested_local_scroll_spaces_follow_parents_with_later_indices() {
+        let id = LayoutOutputBoxId::from_index;
+        // The target is in the inner scroller. Neither scroller appears before
+        // its descendants in storage.
+        let parents = [None, Some(id(2)), Some(id(3)), Some(id(0))];
+        let mut local = LocalScrollSpaces::new(parents.len());
+        resolve_coordinate_spaces(
+            id(0),
+            LayoutPoint::ZERO,
+            parents.len(),
+            None,
+            |index| {
+                Ok((
+                    BoxPlacement {
+                        parent: parents[index],
+                        location: LayoutPoint::ZERO,
+                        transform: ResolvedLayoutTransform::IDENTITY,
+                        fixed: false,
+                    },
+                    None,
+                ))
+            },
+            |_| None,
+            |index, parent| {
+                let offset = (index >= 2).then_some(LayoutPoint::ZERO);
+                local.resolve_box(index, parent, offset);
+            },
+        )
+        .unwrap();
+        let local = local.finish();
+        assert_eq!(local.spaces[0].box_id, id(3));
+        assert_eq!(local.spaces[1].box_id, id(2));
+        assert_eq!(local.spaces[1].parent, NonZeroU32::new(1));
+        assert_eq!(
+            local.box_spaces,
+            vec![None, NonZeroU32::new(2), NonZeroU32::new(1), None]
         );
     }
 }

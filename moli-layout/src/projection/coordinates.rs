@@ -111,6 +111,7 @@ pub(super) fn resolve_coordinate_spaces(
     paint_grid: Option<PaintPixelGrid>,
     placements: impl Fn(usize) -> Result<(BoxPlacement, Option<StickyConstraints>), LayoutError>,
     scroll_offset: impl Fn(LayoutOutputBoxId) -> Option<LayoutPoint>,
+    box_resolved: impl FnMut(usize, Option<LayoutOutputBoxId>),
 ) -> Result<ResolvedCoordinates, LayoutError> {
     let mut resolver = CoordinateSpaceResolver {
         root,
@@ -118,6 +119,7 @@ pub(super) fn resolve_coordinate_spaces(
         paint_grid,
         placements,
         scroll_offset,
+        box_resolved,
         spaces: vec![None; box_count + 1],
         state: vec![0; box_count],
         position_adjustments: vec![LayoutPoint::ZERO; box_count],
@@ -156,21 +158,23 @@ pub(super) fn resolve_coordinate_spaces(
 
 // Resolve dependencies before projecting a box. Sticky scroll ancestry can
 // differ from numeric parentage, so both dependencies need the same cycle check.
-struct CoordinateSpaceResolver<Placement, Offset> {
+struct CoordinateSpaceResolver<Placement, Offset, Visit> {
     root: LayoutOutputBoxId,
     viewport_scroll: LayoutPoint,
     paint_grid: Option<PaintPixelGrid>,
     placements: Placement,
     scroll_offset: Offset,
+    box_resolved: Visit,
     spaces: Vec<Option<ProjectedCoordinateSpace>>,
     state: Vec<u8>,
     position_adjustments: Vec<LayoutPoint>,
 }
 
-impl<Placement, Offset> CoordinateSpaceResolver<Placement, Offset>
+impl<Placement, Offset, Visit> CoordinateSpaceResolver<Placement, Offset, Visit>
 where
     Placement: Fn(usize) -> Result<(BoxPlacement, Option<StickyConstraints>), LayoutError>,
     Offset: Fn(LayoutOutputBoxId) -> Option<LayoutPoint>,
+    Visit: FnMut(usize, Option<LayoutOutputBoxId>),
 {
     fn resolve(&mut self, index: usize) -> Result<(), LayoutError> {
         let Some(state) = self.state.get_mut(index) else {
@@ -242,6 +246,7 @@ where
             LayoutPoint::new(inherited.x + local_delta.x, inherited.y + local_delta.y);
         self.spaces[index + 1] = Some(projected);
         self.state[index] = 2;
+        (self.box_resolved)(index, base.parent);
         Ok(())
     }
 
