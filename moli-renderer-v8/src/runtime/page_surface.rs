@@ -5141,7 +5141,15 @@ pub enum RendererPageCommand {
     #[cfg(feature = "molio")]
     ReadViewportSelection(RendererDocumentLifecycleIdentity),
     #[cfg(feature = "molio")]
+    CopyViewportSelection(RendererDocumentLifecycleIdentity),
+    #[cfg(feature = "molio")]
     CutViewportSelection(RendererDocumentLifecycleIdentity),
+    #[cfg(feature = "molio")]
+    PasteViewportText {
+        document: RendererDocumentLifecycleIdentity,
+        text: Option<String>,
+        sequence: Option<u64>,
+    },
     #[cfg(feature = "molio")]
     ApplyViewportEdit(super::RendererViewportEdit),
     #[cfg(feature = "molio")]

@@ -77,18 +77,50 @@ impl Page {
         }
     }
 
-    /// Runs the default cut action for the focused editor in this document.
+    /// Dispatches a native copy action and returns the clipboard's plain text.
+    pub async fn copy_viewport_selection(
+        &mut self,
+        document: crate::RendererDocumentLifecycleIdentity,
+    ) -> Result<Option<String>> {
+        self.write_viewport_clipboard(RendererPageCommand::CopyViewportSelection(document))
+            .await
+    }
+
+    /// Dispatches a native cut action and returns the clipboard's plain text.
     pub async fn cut_viewport_selection(
         &mut self,
         document: crate::RendererDocumentLifecycleIdentity,
     ) -> Result<Option<String>> {
-        match self
-            .dispatch_page_command_async(RendererPageCommand::CutViewportSelection(document))
-            .await?
-        {
+        self.write_viewport_clipboard(RendererPageCommand::CutViewportSelection(document))
+            .await
+    }
+
+    async fn write_viewport_clipboard(
+        &mut self,
+        command: RendererPageCommand,
+    ) -> Result<Option<String>> {
+        match self.dispatch_page_command_async(command).await? {
             RendererPageReply::OptionalString(text) => Ok(text),
-            _ => anyhow::bail!("unexpected viewport cut reply"),
+            _ => anyhow::bail!("unexpected viewport clipboard reply"),
         }
+    }
+
+    /// Dispatches a native paste action with the plain text supplied by the browser.
+    /// The optional sequence acknowledges the platform editor's predicted edit.
+    pub async fn paste_viewport_text(
+        &mut self,
+        document: crate::RendererDocumentLifecycleIdentity,
+        text: Option<String>,
+        sequence: Option<u64>,
+    ) -> Result<bool> {
+        let reply = self
+            .dispatch_page_command_async(RendererPageCommand::PasteViewportText {
+                document,
+                text,
+                sequence,
+            })
+            .await?;
+        Self::decode_bool_page_reply(reply, "paste viewport text")
     }
 
     pub async fn drop_viewport_files(
