@@ -273,25 +273,26 @@ fn apply_common_args(config: &mut AppConfig, common: &CommonArgs) -> Result<()> 
 /// non-`C`/`POSIX` value wins.
 const LOCALE_ENV_VARS: [&str; 3] = ["LC_ALL", "LC_MESSAGES", "LANG"];
 
-/// Reads the host locale, preferring the platform source Chromium itself reads.
+/// Reads the operating system's display language, which is the language a real
+/// browser reports through `navigator.language`.
 ///
-/// macOS keeps the user's choice in the `defaults` domain, not in the POSIX
-/// environment: a Terminal session normally exports `LANG=C.UTF-8` while the
-/// system locale is `zh_CN`. Falling back to `LANG` alone would therefore
-/// report "no preference" on a Chinese Mac.
+/// The order mirrors what the platform itself calls "the user's language":
+///
+/// 1. macOS display language (`AppleLanguages`, e.g. `zh-Hans-CN`). This is the
+///    value chosen in System Settings and the one Chromium reports. `AppleLocale`
+///    is only the region format, and the POSIX environment is unrelated: a
+///    Terminal session normally exports `LANG=C.UTF-8` on a Chinese Mac.
+/// 2. macOS region (`AppleLocale`, e.g. `zh_CN`), for a host that defines no
+///    language list.
+/// 3. POSIX locale variables, on every other platform and as a last resort.
 fn host_locale() -> Option<String> {
     #[cfg(target_os = "macos")]
     {
-        let output = std::process::Command::new("defaults")
-            .args(["read", "-g", "AppleLocale"])
-            .output()
-            .ok()?;
-        if output.status.success() {
-            let value = String::from_utf8(output.stdout).ok()?;
-            let value = value.trim();
-            if !value.is_empty() {
-                return Some(value.to_owned());
-            }
+        if let Some(language) = macos_display_language() {
+            return Some(language);
+        }
+        if let Some(locale) = macos_default_string("AppleLocale") {
+            return Some(locale);
         }
     }
     LOCALE_ENV_VARS
@@ -300,11 +301,49 @@ fn host_locale() -> Option<String> {
         .find(|value| !value.trim().is_empty())
 }
 
-/// Derives an `Accept-Language` value from the host locale.
+/// Reads the first entry of macOS `AppleLanguages`, the ordered display-language
+/// preference list.
+#[cfg(target_os = "macos")]
+fn macos_display_language() -> Option<String> {
+    let raw = macos_default_value("AppleLanguages")?;
+    // The value is a property list array: `(\n    "zh-Hans-CN"\n)`.
+    raw.lines()
+        .map(|line| {
+            line.trim()
+                .trim_matches(|c: char| c == '(' || c == ')' || c == ',' || c == '"')
+                .trim()
+        })
+        .find(|token| !token.is_empty())
+        .map(str::to_owned)
+}
+
+/// Reads one string default from the macOS global domain.
+#[cfg(target_os = "macos")]
+fn macos_default_string(key: &str) -> Option<String> {
+    macos_default_value(key).map(|value| value.trim().to_owned())
+}
+
+/// Reads one default from the macOS global domain as UTF-8.
+#[cfg(target_os = "macos")]
+fn macos_default_value(key: &str) -> Option<String> {
+    let output = std::process::Command::new("defaults")
+        .args(["read", "-g", key])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let value = String::from_utf8(output.stdout).ok()?;
+    (!value.trim().is_empty()).then_some(value)
+}
+
+/// Derives an `Accept-Language` value from the operating system's display
+/// language.
 ///
-/// `zh_CN.UTF-8` becomes `zh-CN,zh;q=0.9`, the same shape Chromium sends when
-/// the host locale is Chinese. `C`, `POSIX`, and an unset locale mean "no
-/// preference", so the documented [`DEFAULT_ACCEPT_LANGUAGE`] stays in effect.
+/// `zh_CN.UTF-8` and `zh-Hans-CN` both become `zh-CN,zh;q=0.9`, the same shape
+/// Chromium sends when the host language is Chinese. `C`, `POSIX`, and an unset
+/// locale mean "no preference", so the documented [`DEFAULT_ACCEPT_LANGUAGE`]
+/// stays in effect.
 fn system_accept_language() -> String {
     if let Some(accept_language) = host_locale()
         .as_deref()
@@ -315,8 +354,13 @@ fn system_accept_language() -> String {
     DEFAULT_ACCEPT_LANGUAGE.to_owned()
 }
 
-/// Converts a POSIX locale such as `en_US.UTF-8@euro` into an Accept-Language
+/// Converts a POSIX locale or a BCP 47 language tag into an Accept-Language
 /// value, or `None` when the locale expresses no preference.
+///
+/// Both platform spellings are accepted: POSIX `en_US.UTF-8@euro`, and the
+/// macOS display-language form `zh-Hans-CN` whose optional script subtag is
+/// dropped from the primary range because a browser reports a language-region
+/// tag such as `zh-CN`.
 fn accept_language_from_locale(locale: &str) -> Option<String> {
     let base = locale.split('.').next()?.split('@').next()?.trim();
     if base.is_empty() || base.eq_ignore_ascii_case("C") || base.eq_ignore_ascii_case("POSIX") {
@@ -328,16 +372,27 @@ fn accept_language_from_locale(locale: &str) -> Option<String> {
     if language.is_empty() || !language.chars().all(|c| c.is_ascii_alphabetic()) {
         return None;
     }
-    let Some(region) = parts.next() else {
-        return Some(language.to_owned());
-    };
-    if region.len() != 2 || !region.chars().all(|c| c.is_ascii_alphabetic()) {
-        return Some(language.to_owned());
+    let mut script = None;
+    let mut region = None;
+    for part in parts {
+        let alphabetic = !part.is_empty() && part.chars().all(|c| c.is_ascii_alphabetic());
+        if alphabetic && part.len() == 4 {
+            script = Some(part.to_owned());
+        } else if (alphabetic && part.len() == 2)
+            || (!part.is_empty() && part.len() == 3 && part.chars().all(|c| c.is_ascii_digit()))
+        {
+            region = Some(part.to_ascii_uppercase());
+        }
     }
-    Some(format!(
-        "{language}-{},{language};q=0.9",
-        region.to_ascii_uppercase()
-    ))
+    let primary = match (&script, &region) {
+        (_, Some(region)) => format!("{language}-{region}"),
+        (Some(script), None) => format!("{language}-{script}"),
+        (None, None) => language.to_owned(),
+    };
+    if primary == language {
+        return Some(primary);
+    }
+    Some(format!("{primary},{language};q=0.9"))
 }
 
 fn configure_web_bot_auth(fetch: &mut FetchConfig, common: &CommonArgs) -> Result<()> {
@@ -501,6 +556,25 @@ mod tests {
         assert_eq!(super::accept_language_from_locale("C"), None);
         assert_eq!(super::accept_language_from_locale("POSIX"), None);
         assert_eq!(super::accept_language_from_locale(""), None);
+    }
+
+    #[test]
+    fn display_language_with_a_script_subtag_keeps_the_region() {
+        // macOS `AppleLanguages` reports the display language as `zh-Hans-CN`;
+        // a browser reports the language-region tag, so the script is dropped.
+        assert_eq!(
+            super::accept_language_from_locale("zh-Hans-CN"),
+            Some("zh-CN,zh;q=0.9".to_owned())
+        );
+        assert_eq!(
+            super::accept_language_from_locale("sr-Latn-RS"),
+            Some("sr-RS,sr;q=0.9".to_owned())
+        );
+        // A script without a region still names a usable range.
+        assert_eq!(
+            super::accept_language_from_locale("zh-Hans"),
+            Some("zh-Hans,zh;q=0.9".to_owned())
+        );
     }
 
     #[test]

@@ -771,11 +771,12 @@ pub struct CommonArgs {
     /// Set the outgoing `Accept-Language` header and `navigator.language`.
     ///
     /// Accepts a full Accept-Language value such as `zh-CN,zh;q=0.9,en;q=0.8`.
-    /// When omitted, Moli derives the value from the host locale (`LC_ALL`,
-    /// `LC_MESSAGES`, then `LANG`) and falls back to `en-US,en;q=0.9` when the
-    /// host does not define one. Pass this whenever a page localizes itself
-    /// from `navigator.language`, because a wrong default changes UI copy,
-    /// element text width, and therefore button geometry.
+    /// When omitted, Moli sends the operating system's display language (macOS
+    /// `AppleLanguages`, otherwise `LC_ALL`, `LC_MESSAGES`, then `LANG`), the
+    /// same value a real browser reports, and falls back to `en-US,en;q=0.9`
+    /// when the host defines no preference. Pass this only when a request names
+    /// a language, or when a baseline pins one, because a mismatch changes UI
+    /// copy, element text width, and therefore button geometry.
     #[arg(
         long,
         value_name = "LANGUAGES",
