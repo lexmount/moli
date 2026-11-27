@@ -21,7 +21,6 @@ mod websocket_transport;
 
 use anyhow::{Context, Result};
 use curl::easy::Handler;
-use moli_browser_profile::DEFAULT_ACCEPT_LANGUAGE;
 use moli_cookie_jar::{NetworkCookieRequestContext, new_shared_browser_cookie_store};
 use moli_http_cache::{HttpCacheEntryMetadata, HttpCacheStore};
 use std::{
@@ -3057,6 +3056,7 @@ fn fetch_client_cache_vary_accept_language_records_effective_header() {
 
     let mut config = FetchConfig::default();
     config.set_http_cache_dir(Some(cache_dir.display().to_string()));
+    config.set_accept_language("zh-CN,zh;q=0.9");
 
     let response =
         fetch_with_config_for_test(&config, Request::get(&server.url()).unwrap()).unwrap();
@@ -3074,7 +3074,7 @@ fn fetch_client_cache_vary_accept_language_records_effective_header() {
         "metadata should record Accept-Language vary key: {metadata}"
     );
     assert!(
-        metadata.contains(DEFAULT_ACCEPT_LANGUAGE),
+        metadata.contains(config.accept_language()),
         "metadata should record effective Accept-Language value: {metadata}"
     );
 

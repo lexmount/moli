@@ -4820,6 +4820,7 @@ dependencies = [
  "cidr",
  "clap",
  "futures-util",
+ "icu_locale_core",
  "libc",
  "lopdf",
  "moli-browser-profile",
@@ -4845,6 +4846,7 @@ dependencies = [
  "tracing-subscriber",
  "url",
  "wait-timeout",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -4880,6 +4882,7 @@ name = "moli-browser-profile"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "icu_locale_core",
  "moli-cookie-cache",
  "serde",
  "serde_json",
