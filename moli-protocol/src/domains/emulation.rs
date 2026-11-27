@@ -877,7 +877,7 @@ fn start_scrollbars_hidden_command(
     if !conn.layout_policy().uses_real_layout() {
         return EmulationCommandTaskStep::Complete(CommandOutputPlan::error(
             -32000,
-            "Emulation.setScrollbarsHidden requires --layout",
+            "Emulation.setScrollbarsHidden requires layout. Start Moli with --lazy or --realtime.",
         ));
     }
     let mut changed = false;
