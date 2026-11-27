@@ -4,10 +4,10 @@ use style::Atom;
 use taffy::{Cache, DetailedLayoutInfo, Layout, Point, Size, Style};
 
 use crate::{
-    LayoutCssImageReference, LayoutElementSemantics, LayoutError, LayoutPoint, LayoutPseudo,
-    LayoutResolvedGridTracks, LayoutScrollbarAxis, LayoutScrollbarColors, LayoutScrollbarGutter,
-    LayoutScrollbarWidth, ResolvedLayoutStyle, inline::InlineFormattingContext,
-    replaced::ReplacedContext, style::LayoutOverflowMode,
+    LayoutCssImageReference, LayoutElementSemantics, LayoutError, LayoutOutputBoxId, LayoutPoint,
+    LayoutPseudo, LayoutResolvedGridTracks, LayoutScrollbarAxis, LayoutScrollbarColors,
+    LayoutScrollbarGutter, LayoutScrollbarWidth, ResolvedLayoutStyle,
+    inline::InlineFormattingContext, replaced::ReplacedContext, style::LayoutOverflowMode,
 };
 
 mod storage;
@@ -998,44 +998,42 @@ where
         let count = self.boxes.len();
         let mut first_child = vec![None; count];
         let mut next_sibling = vec![None; count];
-        let mut roots = Vec::new();
-        for index in (0..count).rev() {
-            let id = self.boxes.id_at(index);
-            if let Some(parent) = self.boxes[index].layout_parent {
+        let mut stack = Vec::new();
+        for (index, layout_box) in self.boxes.ordered().enumerate().rev() {
+            let id = LayoutOutputBoxId::from_index(index);
+            if let Some(parent) = layout_box.layout_parent {
+                let parent_index = self.boxes.index_of(parent);
                 assert!(
-                    self.boxes.index_of(parent) < count,
+                    parent_index < count,
                     "numeric layout parent must belong to this world"
                 );
-                next_sibling[index] = first_child[self.boxes.index_of(parent)];
-                first_child[self.boxes.index_of(parent)] = Some(id);
+                next_sibling[index] = first_child[parent_index];
+                first_child[parent_index] = Some(id);
             } else {
-                roots.push(id);
+                stack.push((id, LayoutPoint::ZERO));
             }
         }
 
         let mut origins = vec![LayoutPoint::ZERO; count];
         let mut visited = vec![false; count];
-        let mut stack = roots
-            .into_iter()
-            .map(|root| (root, LayoutPoint::ZERO))
-            .collect::<Vec<_>>();
         let mut resolved = 0usize;
         while let Some((id, parent_origin)) = stack.pop() {
+            let index = id.index();
             assert!(
-                !visited[self.boxes.index_of(id)],
+                !visited[index],
                 "numeric layout parents must form an acyclic forest"
             );
-            visited[self.boxes.index_of(id)] = true;
+            visited[index] = true;
             resolved = resolved.saturating_add(1);
-            let location = self.boxes[id].final_layout.location;
+            let location = self.boxes[index].final_layout.location;
             let origin =
                 LayoutPoint::new(parent_origin.x + location.x, parent_origin.y + location.y);
-            origins[self.boxes.index_of(id)] = origin;
+            origins[index] = origin;
 
-            let mut child = first_child[self.boxes.index_of(id)];
+            let mut child = first_child[index];
             while let Some(child_id) = child {
                 stack.push((child_id, origin));
-                child = next_sibling[self.boxes.index_of(child_id)];
+                child = next_sibling[child_id.index()];
             }
         }
         assert_eq!(
