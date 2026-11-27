@@ -1,6 +1,114 @@
 use super::*;
 
 #[test]
+fn focus_callbacks_can_redirect_or_cancel_a_transition() {
+    for (listener, action, expected) in [
+        (
+            "a, 'blur'",
+            "c.focus()",
+            "a:blur:BODY:b,c:focus:c:-,c:focusin:c:-,a:focusout:c:-,active=c",
+        ),
+        (
+            "a, 'focusout'",
+            "c.focus()",
+            "a:blur:BODY:b,a:focusout:BODY:b,c:focus:c:-,c:focusin:c:-,active=c",
+        ),
+        (
+            "b, 'focus'",
+            "c.focus()",
+            concat!(
+                "a:blur:BODY:b,a:focusout:BODY:b,b:focus:b:a,",
+                "b:blur:BODY:c,b:focusout:BODY:c,c:focus:c:b,c:focusin:c:b,active=c",
+            ),
+        ),
+        (
+            "a, 'blur'",
+            "b.focus()",
+            "a:blur:BODY:b,b:focus:b:-,b:focusin:b:-,a:focusout:b:-,active=b",
+        ),
+        (
+            "a, 'blur'",
+            "c.focus(); c.blur()",
+            concat!(
+                "a:blur:BODY:b,c:focus:c:-,c:focusin:c:-,c:blur:BODY:-,c:focusout:BODY:-,",
+                "a:focusout:BODY:b,b:focus:b:a,b:focusin:b:a,active=b",
+            ),
+        ),
+        (
+            "a, 'blur'",
+            "c.focus(); a.addEventListener('focusout', () => c.blur())",
+            concat!(
+                "a:blur:BODY:b,c:focus:c:-,c:focusin:c:-,",
+                "a:focusout:c:-,c:blur:BODY:-,c:focusout:BODY:-,active=BODY",
+            ),
+        ),
+        (
+            "a, 'blur'",
+            "b.remove()",
+            "a:blur:BODY:b,a:focusout:BODY:b,active=BODY",
+        ),
+        (
+            "a, 'blur'",
+            "b.disabled = true",
+            "a:blur:BODY:b,a:focusout:BODY:b,active=BODY",
+        ),
+    ] {
+        let mut vm = new_storage_html_test_vm("https://example.com/");
+        let result = vm
+            .eval(&format!(
+                r#"(() => {{
+  document.body.innerHTML = '<input id=a><button id=b>B</button><button id=c>C</button>';
+  const [a, b, c] = document.body.children;
+  const log = [];
+  const active = () => document.activeElement.id || document.activeElement.tagName;
+  a.focus();
+  for (const element of [a, b, c]) {{
+    for (const type of ['blur', 'focusout', 'focus', 'focusin']) {{
+      element.addEventListener(type, event => log.push(
+        [element.id, type, active(), event.relatedTarget?.id ?? '-'].join(':')
+      ));
+    }}
+  }}
+  const listen = (element, type) => element.addEventListener(type, () => {{ {action}; }});
+  listen({listener});
+  b.focus();
+  log.push('active=' + active());
+  return log.join(',');
+}})()"#,
+            ))
+            .unwrap();
+        assert_eq!(result, expected, "{listener}: {action}");
+    }
+}
+
+#[test]
+fn superseded_focus_request_does_not_scroll_the_target() {
+    let mut vm = new_rendered_test_vm(
+        "https://example.com/",
+        r#"<!doctype html>
+<button id="first">first</button>
+<div id="scroller" style="width:100px;height:100px;overflow:auto">
+  <div style="height:400px"></div>
+  <button id="target">target</button>
+</div>"#,
+    );
+    vm.eval(
+        r#"
+first.focus();
+first.addEventListener('blur', () => target.focus({preventScroll: true}));
+target.focus();
+"#,
+    )
+    .unwrap();
+    publish_layout_for_test(&mut vm);
+    assert_eq!(
+        vm.eval("String(document.activeElement === target && scroller.scrollTop === 0)")
+            .unwrap(),
+        "true"
+    );
+}
+
+#[test]
 fn editing_focus_initializes_selection_before_events_and_preserves_existing_ranges() {
     let mut vm = new_storage_html_test_vm("https://example.com/");
     let result = vm.eval(r#"(() => {

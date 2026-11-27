@@ -456,7 +456,7 @@ pub(crate) fn update_focus(
     scope: &mut v8::PinScope<'_, '_>,
     runtime_ptr: *mut PageScriptHost,
     next: Option<DomHandle>,
-) {
+) -> bool {
     let runtime = unsafe { &mut *runtime_ptr };
     let previous = runtime.active_element_handle();
     update_focus_from_previous_with_previous_focus_within(
@@ -466,7 +466,7 @@ pub(crate) fn update_focus(
         next,
         None,
         FocusSelection::Initialize,
-    );
+    )
 }
 
 #[cfg(feature = "devtools")]
@@ -523,72 +523,104 @@ fn update_focus_from_previous_with_previous_focus_within(
     scope: &mut v8::PinScope<'_, '_>,
     runtime_ptr: *mut PageScriptHost,
     previous: Option<DomHandle>,
-    next: Option<DomHandle>,
+    mut next: Option<DomHandle>,
     previous_focus_within: Option<Vec<DomHandle>>,
     selection: FocusSelection,
-) {
+) -> bool {
     if previous == next {
-        return;
+        return true;
     }
-    let next_value = wrap_handle_value(scope, runtime_ptr, next);
     let runtime = unsafe { &mut *runtime_ptr };
-    runtime.set_active_element_handle(next);
+    let next_document = next.and_then(|handle| runtime.dom_host().owner_document_handle(handle));
     runtime.mark_focus_changed();
-    if let Some(previous_focus_within) = previous_focus_within {
+    if let Some(previous_handle) = previous {
+        // Blur callbacks run with the old focus cleared. A callback can give
+        // focus to another element before this transition installs its target.
+        runtime.set_active_element_handle(None);
         runtime.note_focus_style_activity_with_previous_focus_within(
             previous,
-            next,
-            Some(previous_focus_within),
+            None,
+            previous_focus_within,
         );
-    } else {
-        runtime.note_focus_style_activity(previous, next);
-    }
-    if let Some(previous_handle) = previous {
+        let next_value = wrap_handle_value(scope, runtime_ptr, next);
         dispatch_pending_text_control_change_if_needed(scope, runtime_ptr, previous_handle);
         if let Some(event) = construct_focus_event(scope, "blur", next_value, false) {
             let _ = dispatch_public_event(scope, runtime_ptr, previous_handle, event);
         }
-        if let Some(event) = construct_focus_event(scope, "focusout", next_value, true) {
+        if unsafe { &*runtime_ptr }.active_element_handle().is_some() {
+            next = None;
+        }
+        let related_target = next_value.filter(|_| next.is_some());
+        if let Some(event) = construct_focus_event(scope, "focusout", related_target, true) {
             let _ = dispatch_public_event(scope, runtime_ptr, previous_handle, event);
+        }
+        if unsafe { &*runtime_ptr }.active_element_handle().is_some() {
+            next = None;
         }
         dispatch_interest_event_if_needed(scope, runtime_ptr, previous_handle, "loseinterest");
     }
+    let Some(next_handle) = next else {
+        return false;
+    };
+    let runtime = unsafe { &mut *runtime_ptr };
+    if runtime.active_element_handle().is_some()
+        || runtime.dom_host().owner_document_handle(next_handle) != next_document
+        || (previous.is_some() && !is_focusable(runtime, next_handle))
+    {
+        return false;
+    }
+    runtime.set_active_element_handle(next);
+    runtime.note_focus_style_activity(None, next);
+
+    let still_focused = || unsafe { &*runtime_ptr }.active_element_handle() == Some(next_handle);
     let window_focus_transition =
         window_focus_transition_for_handles(scope, runtime_ptr, previous, next);
     if let Some((previous_window, _)) = window_focus_transition {
         dispatch_window_focus_event(scope, runtime_ptr, previous_window, "blur");
+        if !still_focused() {
+            return false;
+        }
     }
     let previous_value = wrap_handle_value(scope, runtime_ptr, previous);
-    if let Some(next_handle) = next {
-        if selection == FocusSelection::Initialize
-            && unsafe { &*runtime_ptr }.active_element_handle() == Some(next_handle)
-            && contenteditable_editing_host(unsafe { &*runtime_ptr }, next_handle)
-                == Some(next_handle)
-            && let Some(context) = crate::native_bridge::node_owner_document_relevant_context(
-                scope,
-                runtime_ptr,
-                next_handle,
-            )
-        {
-            let scope = &mut v8::ContextScope::new(scope, context);
-            crate::context_bootstrap::focus_editing_host_selection(scope, next_handle);
-        }
-        if let Some(event) = construct_focus_event(scope, "focus", previous_value, false) {
-            let _ = dispatch_public_event(scope, runtime_ptr, next_handle, event);
-        }
-        if let Some(event) = construct_focus_event(scope, "focusin", previous_value, true) {
-            let _ = dispatch_public_event(scope, runtime_ptr, next_handle, event);
-        }
-        if let Some(target) =
-            dispatch_interest_event_if_needed(scope, runtime_ptr, next_handle, "interest")
-        {
-            show_interest_popover_if_needed(scope, runtime_ptr, next_handle, target);
-        }
-        schedule_focus_blur_if_needed(scope, runtime_ptr, next_handle);
+    if selection == FocusSelection::Initialize
+        && contenteditable_editing_host(unsafe { &*runtime_ptr }, next_handle) == Some(next_handle)
+        && let Some(context) = crate::native_bridge::node_owner_document_relevant_context(
+            scope,
+            runtime_ptr,
+            next_handle,
+        )
+    {
+        let scope = &mut v8::ContextScope::new(scope, context);
+        crate::context_bootstrap::focus_editing_host_selection(scope, next_handle);
     }
-    if let Some((_, next_window)) = window_focus_transition {
+    if let Some(event) = construct_focus_event(scope, "focus", previous_value, false) {
+        let _ = dispatch_public_event(scope, runtime_ptr, next_handle, event);
+    }
+    if !still_focused() {
+        return false;
+    }
+    if let Some(event) = construct_focus_event(scope, "focusin", previous_value, true) {
+        let _ = dispatch_public_event(scope, runtime_ptr, next_handle, event);
+    }
+    if !still_focused() {
+        return false;
+    }
+    if let Some(target) =
+        dispatch_interest_event_if_needed(scope, runtime_ptr, next_handle, "interest")
+        && still_focused()
+    {
+        show_interest_popover_if_needed(scope, runtime_ptr, next_handle, target);
+    }
+    if !still_focused() {
+        return false;
+    }
+    schedule_focus_blur_if_needed(scope, runtime_ptr, next_handle);
+    if let Some((_, next_window)) = window_focus_transition
+        && still_focused()
+    {
         dispatch_window_focus_event(scope, runtime_ptr, next_window, "focus");
     }
+    still_focused()
 }
 
 fn window_focus_transition_for_handles(
@@ -1428,11 +1460,11 @@ fn focus_element_with_options(
     } else {
         is_focusable(runtime, handle).then_some(handle)
     };
-    if let Some(target) = target {
-        update_focus(scope, runtime_ptr, Some(target));
-        if !prevent_scroll {
-            scroll_node_into_view_if_needed(scope, runtime_ptr, target, None)?;
-        }
+    if let Some(target) = target
+        && update_focus(scope, runtime_ptr, Some(target))
+        && !prevent_scroll
+    {
+        scroll_node_into_view_if_needed(scope, runtime_ptr, target, None)?;
     }
     Ok(())
 }
