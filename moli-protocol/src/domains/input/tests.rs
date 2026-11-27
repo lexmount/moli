@@ -3284,6 +3284,37 @@ async fn dispatch_key_event_text_controls_preserve_surrogate_pairs() {
                 "{control} {key} value={initial:?} modifiers={modifiers} with selection [{start}, {end}]"
             );
         }
+
+        evaluate_string(
+            &mut ctx,
+            "__utf16Control.value='A😀B'; __utf16Control.setSelectionRange(2,2); 'ready'",
+        )
+        .await;
+        ctx.process_async(json!({
+            "id": command_id,
+            "method": "Input.dispatchKeyEvent",
+            "params": {"type": "keyDown", "key": "ArrowLeft", "code": "ArrowLeft", "modifiers": 8}
+        }))
+        .await;
+        ctx.expect_result(command_id, json!({}), None);
+        command_id += 1;
+        ctx.process_async(json!({
+            "id": command_id,
+            "method": "Input.insertText",
+            "params": {"text": "X"}
+        }))
+        .await;
+        ctx.expect_result(command_id, json!({}), None);
+        command_id += 1;
+        assert_eq!(
+            evaluate_string(
+                &mut ctx,
+                "JSON.stringify([__utf16Control.value, __utf16Control.selectionStart, __utf16Control.selectionEnd])"
+            )
+            .await,
+            json!(["AXB", 2, 2]).to_string(),
+            "{control} replacing the keyboard selection must remove the whole surrogate pair"
+        );
     }
 }
 

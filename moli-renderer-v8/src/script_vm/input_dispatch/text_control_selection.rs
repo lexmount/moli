@@ -13,6 +13,7 @@ use crate::{
             text_control_value,
         },
     },
+    util::{utf16_scalar_boundary_at_or_after, utf16_units},
 };
 
 #[derive(Clone, Copy)]
@@ -332,7 +333,13 @@ pub(super) fn move_text_control_selection(
         _ => return false,
     };
     let runtime = unsafe { &*host };
+    let value = text_control_value(runtime, control);
+    let value_units = utf16_units(&value);
     let (start, end, direction) = current_selection_state(runtime, control);
+    // Script selection APIs accept UTF-16 code unit offsets. Normalize both
+    // endpoints before one can become the anchor or a collapsed selection.
+    let start = utf16_scalar_boundary_at_or_after(&value_units, start as usize) as u32;
+    let end = utf16_scalar_boundary_at_or_after(&value_units, end as usize) as u32;
     let shift = modifiers.contains(InputModifiers::SHIFT);
     let (anchor, focus) = if shift {
         if direction == "backward" || (direction == "none" && !forward) {
@@ -344,18 +351,21 @@ pub(super) fn move_text_control_selection(
         let edge = if forward { end } else { start };
         (edge, edge)
     };
-    let next = if !shift && start != end && unit == KeyboardMovementUnit::Grapheme {
+    let collapse_range = !shift && start != end && unit == KeyboardMovementUnit::Grapheme;
+    let next = if collapse_range {
         focus
     } else {
-        let value = text_control_value(runtime, control);
         match unit {
             KeyboardMovementUnit::Grapheme => grapheme_boundary(&value, focus, forward),
             KeyboardMovementUnit::Word => word_boundary(&value, focus, forward),
             KeyboardMovementUnit::Line => line_boundary(&value, focus, forward),
-            KeyboardMovementUnit::Value if forward => value.encode_utf16().count() as u32,
+            KeyboardMovementUnit::Value if forward => value_units.len() as u32,
             KeyboardMovementUnit::Value => 0,
         }
     };
+    if unit == KeyboardMovementUnit::Grapheme && !collapse_range && next == focus {
+        return true;
+    }
     let crosses_anchor = (focus < anchor && next > anchor) || (focus > anchor && next < anchor);
     // Reversing a word extension on macOS first returns to the original caret.
     let next = if mac && shift && unit == KeyboardMovementUnit::Word && crosses_anchor {
