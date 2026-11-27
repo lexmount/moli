@@ -5470,6 +5470,10 @@ dependencies = [
  "lopdf",
  "moli-image",
  "moli-layout",
+ "moli-system-fonts",
+ "objc2-core-foundation",
+ "objc2-core-graphics",
+ "objc2-core-text",
  "peniko",
  "skrifa",
 ]
@@ -5910,7 +5914,10 @@ name = "moli-system-fonts"
 version = "0.1.0"
 dependencies = [
  "fontique 0.11.0",
+ "objc2-core-foundation",
+ "objc2-core-text",
  "parking_lot",
+ "write-fonts",
  "yeslogic-fontconfig-sys",
 ]
 
@@ -6245,6 +6252,23 @@ dependencies = [
  "tokio",
  "unicode-segmentation",
  "url",
+]
+
+[[package]]
+name = "molio-ios"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "moli-core",
+ "moli-fetch",
+ "moli-v8-init",
+ "parking_lot",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "url",
+ "v8",
 ]
 
 [[package]]
@@ -6764,6 +6788,7 @@ checksum = "0cde0dfb48d25d2b4862161a4d5fcc0e3c24367869ad306b0c9ec0073bfed92d"
 dependencies = [
  "bitflags",
  "objc2-core-foundation",
+ "objc2-core-graphics",
 ]
 
 [[package]]

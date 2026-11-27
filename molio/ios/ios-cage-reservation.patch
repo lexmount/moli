@@ -1,0 +1,47 @@
+diff --git a/src/base/platform/platform-posix.cc b/src/base/platform/platform-posix.cc
+index 7f36d7fc..8063ff04 100644
+--- a/src/base/platform/platform-posix.cc
++++ b/src/base/platform/platform-posix.cc
+@@ -468,6 +468,20 @@ void* OS::Allocate(void* hint, size_t size, size_t alignment,
+   size_t page_size = AllocatePageSize();
+   DCHECK_EQ(0, size % page_size);
+   DCHECK_EQ(0, alignment % page_size);
++#if V8_OS_IOS && !TARGET_OS_SIMULATOR
++  if (alignment > page_size && access == MemoryPermission::kNoAccess &&
++      !handle.has_value()) {
++    // Ask Darwin for alignment directly. Over-reserving by alignment minus
++    // one page can exceed an iPhone application's virtual address space.
++    vm_address_t address = 0;
++    kern_return_t result =
++        vm_map(mach_task_self(), &address, size, alignment - 1,
++               VM_FLAGS_ANYWHERE | VM_MAKE_TAG(255), MACH_PORT_NULL, 0,
++               FALSE, VM_PROT_NONE, VM_PROT_READ | VM_PROT_WRITE,
++               VM_INHERIT_DEFAULT);
++    return result == KERN_SUCCESS ? reinterpret_cast<void*>(address) : nullptr;
++  }
++#endif
+   hint = AlignedAddress(hint, alignment);
+   // Add the maximum misalignment so we are guaranteed an aligned base address.
+   size_t request_size = size + (alignment - page_size);
+diff --git a/src/init/isolate-group.cc b/src/init/isolate-group.cc
+index 21f4929f..408688c5 100644
+--- a/src/init/isolate-group.cc
++++ b/src/init/isolate-group.cc
+@@ -209,7 +209,16 @@ void IsolateGroup::Initialize(bool process_wide) {
+   DCHECK(!reservation_.IsReserved());
+   process_wide_ = process_wide;
+   PtrComprCageReservationParams params;
+-  if (!reservation_.InitReservation(params)) {
++  bool reserved = reservation_.InitReservation(params);
++#if V8_OS_IOS && !TARGET_OS_SIMULATOR
++  if (!reserved && v8_flags.jitless) {
++    // Keep the 4 GiB base alignment and compressed pointer representation
++    // while bounding heap allocations to a smaller reservation.
++    params.reservation_size = 512 * MB;
++    reserved = reservation_.InitReservation(params);
++  }
++#endif
++  if (!reserved) {
+     V8::FatalProcessOutOfMemory(
+         nullptr,
+         "Failed to reserve virtual memory for process-wide V8 "

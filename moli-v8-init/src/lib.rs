@@ -27,6 +27,9 @@ pub fn ensure_v8_initialized_with_flags(
         // OHOS shell processes cannot make anonymous memory executable.
         #[cfg(target_env = "ohos")]
         v8::V8::set_flags_from_string("--jitless");
+        // iPhoneOS runs Wasm through DrumBrake. Execution tracing is diagnostic only.
+        #[cfg(all(target_os = "ios", target_arch = "aarch64", target_abi = ""))]
+        v8::V8::set_flags_from_string("--jitless --wasm-jitless");
         let platform = create_platform();
         v8::V8::initialize_platform(platform);
         v8::V8::initialize();
