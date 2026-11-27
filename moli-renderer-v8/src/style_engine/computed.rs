@@ -11,7 +11,7 @@ use style::{
     dom::{TElement, TNode},
     invalidation::element::restyle_hints::RestyleHint,
     properties::{
-        ComputedValues, PropertyId,
+        ComputedValues, Importance, PropertyDeclarationBlock, PropertyId, ShorthandId,
         longhands::{
             text_wrap_mode::computed_value::T as StyloTextWrapMode,
             visibility::computed_value::T as ComputedVisibility,
@@ -1253,6 +1253,22 @@ pub(crate) fn serialize_resolved_computed_property(
     style
         .computed_or_resolved_property_value(property_id, Some(&mut context), &mut serialized)
         .ok()?;
+    if serialized.is_empty()
+        && let Ok(shorthand) = context.for_property.as_shorthand()
+        && shorthand != ShorthandId::All
+    {
+        // Stylo's computed serializer handles some shorthands directly. The
+        // declaration serializer can also compose the resolved longhand values
+        // using the rules for the shorthand.
+        let mut declarations = PropertyDeclarationBlock::new();
+        for longhand in shorthand.longhands() {
+            let declaration = style.computed_or_resolved_declaration(longhand, Some(&mut context));
+            declarations.push(declaration, Importance::Normal);
+        }
+        declarations
+            .shorthand_to_css(shorthand, &mut serialized)
+            .ok()?;
+    }
     Some(serialized)
 }
 

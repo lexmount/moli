@@ -1753,6 +1753,59 @@ fn computed_absolute_logical_inline_insets_resolve_physical_sides() {
 }
 
 #[test]
+fn computed_shorthands_serialize_resolved_longhands_and_aliases() {
+    let mut vm = new_parsed_test_vm(
+        "https://computed-shorthands.test/",
+        r#"<!doctype html>
+<style>
+  #target {
+    font-synthesis: none;
+    text-wrap: nowrap balance;
+    scroll-timeline: --first inline, --second x;
+    gap: 2px 3px;
+  }
+  #target::before { content: ""; font-synthesis: oblique-only; }
+</style>
+<div id="target"></div>"#,
+    );
+    let observed = vm
+        .eval(
+            r#"
+(() => {
+  const target = document.getElementById('target');
+  const style = getComputedStyle(target);
+  const read = name => style.getPropertyValue(name);
+  const values = [
+    read('font-synthesis'),
+    read('text-wrap'),
+    read('scroll-timeline'),
+    read('grid-gap'),
+    read('all'),
+    getComputedStyle(target, '::before').getPropertyValue('font-synthesis'),
+  ];
+  target.style.setProperty('font-synthesis-style', 'auto');
+  target.style.setProperty('scroll-timeline-axis', 'inline');
+  return JSON.stringify([...values, read('font-synthesis'), read('scroll-timeline')]);
+})()
+"#,
+        )
+        .unwrap();
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&observed).unwrap(),
+        serde_json::json!([
+            "none",
+            "nowrap balance",
+            "--first inline, --second x",
+            "2px 3px",
+            "",
+            "oblique-only",
+            "style",
+            ""
+        ]),
+    );
+}
+
+#[test]
 fn computed_style_property_names_follow_cssom_order() {
     let mut vm = new_storage_test_vm("https://computed-style-order.test/");
 
