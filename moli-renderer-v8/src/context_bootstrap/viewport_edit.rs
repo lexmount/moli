@@ -29,7 +29,6 @@ use crate::{
         },
         node_owner_document_relevant_context,
     },
-    range_boundary::point_order_in_dom,
     runtime::{RendererViewportEdit, RendererViewportEditAction, RendererViewportEditor},
     util::node_wrapper_from_handle,
 };
@@ -162,20 +161,8 @@ fn contenteditable_clipboard_target(
     }
     let selection = host.document_selection_snapshot(document)?;
     let dom = host.dom_host();
-    let start = selection.start;
-    let end = selection.end;
-    let container = if point_order_in_dom(
-        dom,
-        start.container,
-        start.offset,
-        end.container,
-        end.offset,
-    )? == std::cmp::Ordering::Greater
-    {
-        end.container
-    } else {
-        start.container
-    };
+    let (start, _) = selection.ordered_in_dom(dom)?;
+    let container = start.container;
     let node = dom.node(container)?;
     // The selection can start in a nested editable while its outer editor has focus.
     if !node.is_connected() || dom.owner_document_handle(container) != Some(document) {

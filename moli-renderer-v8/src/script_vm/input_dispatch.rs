@@ -3299,16 +3299,14 @@ impl ScriptVm {
                 )));
             }
 
-            if target.is_text_control
-                && text_control_selection::move_text_control_selection(
+            if target.is_text_control {
+                text_control_selection::move_text_control_selection(
                     scope,
                     runtime_ptr,
                     handle,
                     &key_lower,
                     moli_input::InputModifiers::from_bits(modifiers),
-                )
-            {
-                return Ok(input_dispatch_outcome(true));
+                );
             }
 
             Ok(input_dispatch_outcome(true))
