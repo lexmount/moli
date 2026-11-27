@@ -1,4 +1,4 @@
-use icu_locale_core::Locale;
+use icu_locale_core::{Locale, subtags::script};
 use moli_browser_profile::DEFAULT_ACCEPT_LANGUAGE;
 
 pub(super) fn system_accept_language() -> String {
@@ -92,11 +92,20 @@ fn display_accept_language() -> Option<String> {
 }
 
 fn accept_language_from_locale(value: &str) -> Option<String> {
-    let tag = value.split(['.', '@']).next()?.trim();
+    let value = value.trim();
+    let (name, modifier) = value.split_once('@').unwrap_or((value, ""));
+    let tag = name.split_once('.').map_or(name, |(tag, _)| tag).trim();
     if tag.eq_ignore_ascii_case("C") || tag.eq_ignore_ascii_case("POSIX") {
         return None;
     }
-    let locale = Locale::try_from_str(&tag.replace('_', "-")).ok()?;
+    let mut locale = Locale::try_from_str(&tag.replace('_', "-")).ok()?;
+    if locale.id.script.is_none() {
+        locale.id.script = match modifier {
+            "latin" => Some(script!("Latn")),
+            "cyrillic" => Some(script!("Cyrl")),
+            _ => None,
+        };
+    }
     let language = locale.id.language.as_str();
     let mut primary = locale.to_string();
     // Keep the browser spelling used for the macOS Simplified Chinese locale.
@@ -125,6 +134,10 @@ mod tests {
             ("zh-Hant-CN", "zh-Hant-CN,zh;q=0.9"),
             ("zh-Hans", "zh-Hans,zh;q=0.9"),
             ("SR-latn-rs", "sr-Latn-RS,sr;q=0.9"),
+            ("sr_RS@latin", "sr-Latn-RS,sr;q=0.9"),
+            ("sr_RS.UTF-8@latin", "sr-Latn-RS,sr;q=0.9"),
+            ("sr_Cyrl_RS.UTF-8@latin", "sr-Cyrl-RS,sr;q=0.9"),
+            ("uz_UZ@cyrillic", "uz-Cyrl-UZ,uz;q=0.9"),
             ("fr", "fr"),
         ] {
             assert_eq!(
