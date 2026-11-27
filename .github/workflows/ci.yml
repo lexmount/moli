@@ -160,9 +160,6 @@ jobs:
   nextest:
     name: Nextest
     runs-on: [self-hosted, moli-nextest]
-    env:
-      # Default multi-threaded test runtimes otherwise use every logical CPU.
-      TOKIO_WORKER_THREADS: "2"
     container:
       image: rust:1.100.0-bookworm
       # Docker seeds new named volumes from the pinned image. Keep toolchains
