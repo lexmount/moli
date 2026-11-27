@@ -105,6 +105,7 @@ impl<N: Copy + std::fmt::Debug + Eq + std::hash::Hash> DirtyBoxPaths<N> {
     fn collect(
         source: &impl LayoutSource<NodeId = N>,
         world: &LayoutWorld<N>,
+        split_inline_sources: &HashSet<N>,
         changes: &[LayoutSourceChange<N>],
     ) -> Option<Self> {
         let mut dirty = Self {
@@ -142,13 +143,7 @@ impl<N: Copy + std::fmt::Debug + Eq + std::hash::Hash> DirtyBoxPaths<N> {
                     .iter()
                     .map(|reference| reference.source),
             )
-            .chain(
-                world
-                    .boxes
-                    .values()
-                    .filter(|layout_box| layout_box.kind == LayoutBoxKind::InlineContinuation)
-                    .filter_map(|layout_box| layout_box.owner),
-            )
+            .chain(split_inline_sources.iter().copied())
         {
             dirty.mark_path(source, node)?;
         }
@@ -213,11 +208,18 @@ where
 
     let original_count = world.boxes.len();
     let original_body = world.viewport_scroll_policy.defining_body();
-    let dirty = changes.and_then(|changes| DirtyBoxPaths::collect(source, world, changes));
-    let had_floats = world
-        .boxes
-        .values()
-        .any(|layout_box| layout_box.style.is_floated());
+    let mut had_floats = false;
+    let mut split_inline_sources = HashSet::new();
+    for layout_box in world.boxes.values() {
+        had_floats = had_floats || layout_box.style.is_floated();
+        if layout_box.kind == LayoutBoxKind::InlineContinuation
+            && let Some(owner) = layout_box.owner
+        {
+            split_inline_sources.insert(owner);
+        }
+    }
+    let dirty = changes
+        .and_then(|changes| DirtyBoxPaths::collect(source, world, &split_inline_sources, changes));
     let mut retained = RetainedBoxes {
         sources: std::mem::take(&mut world.source_mapping),
         css_image_sources: world
@@ -225,12 +227,7 @@ where
             .drain(..)
             .map(|reference| reference.source)
             .collect(),
-        split_inline_sources: world
-            .boxes
-            .values()
-            .filter(|layout_box| layout_box.kind == LayoutBoxKind::InlineContinuation)
-            .filter_map(|layout_box| layout_box.owner)
-            .collect(),
+        split_inline_sources,
         rebuilt_in_place: HashSet::new(),
         pruned_sources: false,
     };
