@@ -7,6 +7,8 @@ app owns the surface, system input method and file picker.
 
 Build this workspace crate from the repository root with Rust's
 `aarch64-unknown-linux-ohos` target and the DevEco native SDK installed.
+The build uses the
+[ARM64 DrumBrake archive](../../vendor/v8-152.2.0/MOLI_VENDORING.md).
 
 ```sh
 rustup target add aarch64-unknown-linux-ohos
