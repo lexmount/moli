@@ -4,13 +4,13 @@ from wpt_cross_test_support import *
 
 
 class WptCrossCaseConfigurationTests(WptCrossTestCase):
-    def test_moli_wpt_commands_enable_layout_and_resources(self) -> None:
+    def test_moli_wpt_commands_enable_realtime_layout_and_resources(self) -> None:
         self.assertEqual(
             _moli_command(Path("/bin/moli"), 9222, None),
             [
                 "/bin/moli",
                 "serve",
-                "--layout",
+                "--realtime",
                 "--resource",
                 "--host",
                 "127.0.0.1",
@@ -28,7 +28,7 @@ class WptCrossCaseConfigurationTests(WptCrossTestCase):
             [
                 "/bin/moli",
                 "fetch",
-                "--layout",
+                "--realtime",
                 "--resource",
                 "http://127.0.0.1:8000/case.html",
             ],
