@@ -215,6 +215,8 @@ where
     pub viewport_scroll: LayoutPoint,
     pub content_size: LayoutSize,
     pub root_box: LayoutOutputBoxId,
+    /// Dense box storage for this publication. Geometry and paint metadata
+    /// use these indices, while tree relationships and fragment order are explicit.
     pub boxes: Vec<FrozenLayoutBox<N>>,
     pub fragments: Vec<LayoutFragment>,
     /// Geometry for a split inline can span more than one physical box.

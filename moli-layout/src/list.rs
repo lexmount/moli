@@ -46,7 +46,7 @@ where
     let mut changed_retained_text = false;
     let mut handled = vec![false; world.boxes.len()];
     let mut containers = Vec::new();
-    let mut items_in_order = Vec::new();
+    let mut list_items = Vec::new();
     for (id, layout_box) in world.boxes.keyed() {
         if matches!(
             layout_box
@@ -58,11 +58,9 @@ where
             containers.push(id);
         }
         if layout_box.style.display().is_list_item() {
-            items_in_order.push(id);
+            list_items.push(id);
         }
     }
-    containers.sort_unstable_by_key(|id| world.boxes.index_of(id));
-    items_in_order.sort_unstable_by_key(|id| world.boxes.index_of(id));
 
     for container in containers {
         let mut items = Vec::new();
@@ -87,7 +85,7 @@ where
     // CSS can create a list item outside an HTML list. It still gets a
     // deterministic marker; full CSS counter scopes remain an explicit local
     // fallback rather than requiring a live DOM callback.
-    for item in items_in_order {
+    for item in list_items {
         if !handled[world.boxes.index_of(item)] {
             changed_retained_text |= prepare_item_marker(world, item, 1)?;
         }

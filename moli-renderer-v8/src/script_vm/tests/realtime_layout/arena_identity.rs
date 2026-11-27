@@ -295,6 +295,83 @@ async fn reordered_box_storage_preserves_the_nested_scroll_projection() {
 }
 
 #[test]
+fn split_inline_geometry_and_paint_survive_removing_an_earlier_box() {
+    let mut vm = realtime_vm(concat!(
+        "<!doctype html><style>body{margin:0;overflow:hidden;font:16px/1.25 sans-serif}",
+        "#prefix{height:9px}#scroller{width:180px;height:75px;overflow:auto}",
+        "#split{background:lime}#inner{background:red}",
+        "#block{display:block;height:24px}#tail{height:180px}</style>",
+        "<div id=prefix></div><div id=scroller><span id=split>",
+        "<span id=inner>first</span><em id=block></em>last</span><div id=tail></div></div>",
+    ));
+    let host = vm.context_host_weak_for_test().upgrade().unwrap();
+    let document = host.borrow().document_handle();
+    let viewport = host.borrow().layout_viewport_for_document(document);
+    let split = vm.document_runtime.get_element_by_id("split").unwrap();
+    vm.screenshot_layout_snapshot(viewport).unwrap().unwrap();
+    vm.eval("prefix.remove()").unwrap();
+    let retained = vm.screenshot_layout_snapshot(viewport).unwrap().unwrap();
+    let host = host.borrow();
+    let rects = host
+        .with_latest_layout_tree_for_document(document, |tree| tree.client_rects_for_source(split))
+        .unwrap();
+    assert_eq!(rects.len(), 2, "{rects:?}");
+    assert!(
+        rects[0].bounding_rect().y < rects[1].bounding_rect().y,
+        "{rects:?}"
+    );
+    let fresh = host
+        .build_layout_pass_for_document(
+            document,
+            moli_layout::LayoutPassRequest::with_paint(
+                viewport,
+                moli_layout::LayoutFlushReason::Screenshot,
+            ),
+        )
+        .unwrap()
+        .unwrap();
+    assert_eq!(rects, fresh.client_rects_for_source(split));
+    assert_eq!(Some(&retained), fresh.paint_snapshot());
+}
+
+#[test]
+fn nested_inline_static_positions_match_fresh_layout_after_box_retirement() {
+    let mut vm = realtime_vm(concat!(
+        "<!doctype html><style>body{margin:0;overflow:hidden;font:16px/1.25 sans-serif}",
+        "#prefix{height:12px}#host{margin-left:36px}",
+        "#outer{position:absolute;display:inline-block;width:120px}",
+        "#inner{position:fixed;display:inline-block;width:12px;height:12px;background:red}</style>",
+        "<div id=prefix></div><div id=host>before <span id=outer>first <span id=inner></span></span></div>",
+    ));
+    let host = vm.context_host_weak_for_test().upgrade().unwrap();
+    let document = host.borrow().document_handle();
+    let viewport = host.borrow().layout_viewport_for_document(document);
+    let nodes = ["outer", "inner"].map(|name| vm.document_runtime.get_element_by_id(name).unwrap());
+    vm.publish_layout_for_test().unwrap();
+    vm.eval("prefix.remove()").unwrap();
+    vm.publish_layout_for_test().unwrap();
+
+    let host = host.borrow();
+    let rects = host
+        .with_latest_layout_tree_for_document(document, |tree| {
+            nodes.map(|node| tree.client_rects_for_source(node))
+        })
+        .unwrap();
+    assert!(rects.iter().all(|rects| rects.len() == 1), "{rects:?}");
+    let fresh = host
+        .build_layout_pass_for_document(
+            document,
+            moli_layout::LayoutPassRequest::new(
+                viewport,
+                moli_layout::LayoutFlushReason::SynchronousGeometry,
+            ),
+        )
+        .unwrap()
+        .unwrap();
+    assert_eq!(rects, nodes.map(|node| fresh.client_rects_for_source(node)));
+}
+
+#[test]
 fn unchanged_markers_keep_direct_item_paragraphs_and_rebuild_changed_text() {
     let mut vm = realtime_vm(concat!(
         "<!doctype html><style>body{margin:0;font:16px sans-serif}",

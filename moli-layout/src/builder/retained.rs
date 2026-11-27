@@ -280,7 +280,10 @@ where
             world.boxes.index_of(*id) < original_count && !retained.rebuilt_in_place.contains(id)
         })
         .count();
-    world.compact_for_reuse(order);
+    if order.len() != world.boxes.len() {
+        let live = order.into_iter().map(|id| (id, ())).collect();
+        world.retain_reachable(&live);
+    }
     let reuse_numeric_layout = !had_floats
         && !world
             .boxes
@@ -378,7 +381,7 @@ where
                 .sources
                 .get(&child)
                 .copied()
-                .filter(|previous| world.boxes[previous].structural_parent == Some(id));
+                .filter(|previous| world.boxes[*previous].structural_parent == Some(id));
             if let Some(previous) = previous {
                 let old = &world.boxes[previous];
                 // A previously split inline's boxes can extend beyond its

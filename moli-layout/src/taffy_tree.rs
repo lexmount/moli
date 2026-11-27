@@ -206,7 +206,6 @@ where
         }
     }
 
-    outside_list_markers.sort_unstable_by_key(|id| world.boxes.index_of(id));
     world.viewport_layout.cache.clear();
     world.viewport_layout.unrounded_layout = Layout::with_order(0);
     let tree = if let Some(tree) = retained_tree {
@@ -597,7 +596,7 @@ where
             } else if is_table_structural(parent.kind) {
                 parent
                     .layout_parent
-                    .filter(|parent| is_table_root(world.boxes[parent].kind))
+                    .filter(|parent| is_table_root(world.boxes[*parent].kind))
             } else {
                 None
             }
@@ -726,7 +725,7 @@ where
             continue;
         }
         let mut children = std::mem::take(&mut world.boxes[parent_index].layout_children);
-        children.sort_by_key(|child| world.boxes[child].style.order());
+        children.sort_by_key(|child| world.boxes[*child].style.order());
         world.boxes[parent_index].layout_children = children;
     }
     // The table adapter consumes parts in box-tree order after the wrapper's
@@ -734,7 +733,6 @@ where
     for (table, child) in table_children {
         world.boxes[table].layout_children.push(child);
     }
-    tables.sort_unstable_by_key(|id| world.boxes.index_of(*id));
     (positioned_static_sources, tables)
 }
 
@@ -927,9 +925,9 @@ where
         .values()
         .flat_map(|layout_box| layout_box.children.iter().copied().enumerate())
         .filter(|(_, id)| {
-            world.boxes[id].anonymous_reason
+            world.boxes[*id].anonymous_reason
                 == Some(crate::LayoutAnonymousReason::FormControlContent)
-                && world.boxes[id].kind == LayoutBoxKind::AnonymousBlock
+                && world.boxes[*id].kind == LayoutBoxKind::AnonymousBlock
         })
         .collect::<Vec<_>>();
     for (row, content) in contents {
@@ -1231,20 +1229,22 @@ fn finish_inline_positioned_layout<N>(world: &mut LayoutWorld<N>, viewport: Pain
 where
     N: Copy + Debug + Eq + Hash,
 {
-    let mut processed = vec![false; world.boxes.len()];
-    while let Some(index) = world
+    if !world
         .boxes
-        .ordered()
-        .enumerate()
-        .find_map(|(index, layout_box)| {
-            (!processed[index] && layout_box.inline_static_position.is_some()).then_some(index)
-        })
+        .values()
+        .any(|layout_box| layout_box.inline_static_position.is_some())
     {
-        processed[index] = true;
-        let child = world.boxes.id_at(index);
-        let static_position = world.boxes[index]
-            .inline_static_position
-            .expect("selected positioned box has an IFC static position");
+        return;
+    }
+    // Placing an out-of-flow parent may lay out its own IFC and establish
+    // the static positions of its descendants.
+    let mut pending = vec![world.root];
+    while let Some(child) = pending.pop() {
+        let layout_box = &world.boxes[child];
+        pending.extend(layout_box.children.iter().rev().copied());
+        let Some(static_position) = layout_box.inline_static_position else {
+            continue;
+        };
         let area = positioned_containing_area(world, child, viewport);
         let owner_origin = unrounded_global_origin(world, static_position.owner);
         let static_global = Point {
@@ -1255,7 +1255,7 @@ where
             x: static_global.x - area.origin.x,
             y: static_global.y - area.origin.y,
         };
-        let numeric_parent_origin = world.boxes[index]
+        let numeric_parent_origin = world.boxes[child]
             .layout_parent
             .map(|parent| unrounded_global_origin(world, parent))
             .unwrap_or(Point::ZERO);
