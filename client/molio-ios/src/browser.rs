@@ -15,7 +15,7 @@ use moli_core::{
     RendererViewportEdit, RendererViewportEditAction, RendererViewportEditor,
     RendererViewportPointerInput, RendererViewportWheelInput, RendererViewportWheelPhase,
     page::{
-        BufferedViewportFrames, PageInputExt, RendererAuxiliaryWindow,
+        BufferedViewportFrames, Page, PageInputExt, RendererAuxiliaryWindow,
         RendererPopupActivationParts, ViewportBuffers, ViewportOutput, ViewportUpdate,
     },
     protocol_types::{DocumentActivity, ViewportSurface},
@@ -183,6 +183,8 @@ async fn run_tab(
     let mut page_state = page.subscribe_navigation_state().await?;
     page_state.mark_changed();
     status.send_replace(String::new());
+    let mut active = page.document_activity().visible;
+    let mut viewport = None;
     let mut capture: Option<BufferedViewportFrames> = None;
     let mut navigation: Option<
         tokio::task::JoinHandle<Result<moli_core::page::CompletedPageCommand>>,
@@ -257,13 +259,20 @@ async fn run_tab(
                     page.stop_document_lifecycle_async().await?;
                     status.send_replace(String::new());
                 }
-                Some(Command::Activity(active)) => {
+                Some(Command::Activity(next)) => {
+                    active = next;
                     if !active {
                         capture = None;
+                        editor_state.send_if_modified(|current| current.take().is_some());
                     }
                     page.set_document_activity_async(DocumentActivity::new(active, active)).await?;
+                    if active && capture.is_none()
+                        && let Some((surface, revision)) = viewport
+                    {
+                        capture = Some(subscribe_viewport(&mut page, surface, revision, &output).await?);
+                    }
                 }
-                Some(Command::Edit { document, target, action }) => {
+                Some(Command::Edit { document, target, action }) if active => {
                     if !page_state.borrow().as_ref().is_some_and(|state| state.document == document) {
                         continue;
                     }
@@ -314,14 +323,12 @@ async fn run_tab(
                         },
                         ..ViewportSurface::default()
                     };
-                    let layout = ViewportBuffers::layout_for(surface)?;
-                    let storage = std::array::from_fn(|_| Vec::with_capacity(layout.byte_len));
-                    let buffers = ViewportBuffers::new(layout, storage)?;
-                    capture = Some(page.subscribe_viewport_buffer(
-                        surface, revision, buffers, output.clone(),
-                    ).await?);
+                    viewport = Some((surface, revision));
+                    if active {
+                        capture = Some(subscribe_viewport(&mut page, surface, revision, &output).await?);
+                    }
                 }
-                Some(Command::Tap(input)) => {
+                Some(Command::Tap(input)) if active => {
                     for (event, buttons) in [("mousedown", 1), ("mouseup", 0)] {
                         let outcome = page.dispatch_viewport_pointer(RendererViewportPointerInput {
                             document: input.document,
@@ -340,7 +347,7 @@ async fn run_tab(
                     let editor = page.viewport_editor().await?;
                     editor_state.send_replace(editor.map(|editor| (input.document, editor)));
                 }
-                Some(Command::Scroll(input, delta)) => {
+                Some(Command::Scroll(input, delta)) if active => {
                     page.enqueue_viewport_wheel(RendererViewportWheelInput {
                         document: input.document,
                         viewport_revision: input.revision,
@@ -352,6 +359,7 @@ async fn run_tab(
                         precise: true,
                     })?;
                 }
+                Some(_) => {}
                 None => break,
             }
         }
@@ -360,6 +368,19 @@ async fn run_tab(
         task.abort();
     }
     Ok(())
+}
+
+async fn subscribe_viewport(
+    page: &mut Page,
+    surface: ViewportSurface,
+    revision: u64,
+    output: &Arc<ViewportOutput>,
+) -> Result<BufferedViewportFrames> {
+    let layout = ViewportBuffers::layout_for(surface)?;
+    let storage = std::array::from_fn(|_| Vec::with_capacity(layout.byte_len));
+    let buffers = ViewportBuffers::new(layout, storage)?;
+    page.subscribe_viewport_buffer(surface, revision, buffers, output.clone())
+        .await
 }
 
 #[unsafe(no_mangle)]
@@ -759,5 +780,88 @@ extern "C" fn molio_poll(
         if handle.presented.is_none() {
             present(context, std::ptr::null(), 0, 0, 0, 0);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
+
+    use anyhow::Context as _;
+
+    use super::*;
+
+    const TIMEOUT: Duration = Duration::from_secs(8);
+
+    fn open_test_tab(root: &tempfile::TempDir, html: &str) -> Result<Box<Molio>> {
+        let profile = CString::new(root.path().join("profile").to_str().unwrap())?;
+        let downloads = CString::new(root.path().join("downloads").to_str().unwrap())?;
+        let handle = unsafe { molio_create(profile.as_ptr(), downloads.as_ptr()) };
+        anyhow::ensure!(!handle.is_null(), "could not start the iOS browser worker");
+        let mut tab = unsafe { Box::from_raw(handle) };
+        let url = CString::new(format!("data:text/html,{html}"))?;
+        unsafe { molio_navigate(&tab, url.as_ptr()) };
+        molio_resize(&mut tab, 40, 30, 1., 40, 30);
+        Ok(tab)
+    }
+
+    async fn wait_for_frame(
+        tab: &mut Molio,
+        color: [u8; 4],
+    ) -> Result<RendererDocumentLifecycleIdentity> {
+        tokio::time::timeout(TIMEOUT, async {
+            loop {
+                let document = tab.viewport.read(|frame| {
+                    let pixels = frame.pixels?;
+                    (frame.viewport_revision == tab.revision && pixels.starts_with(&color))
+                        .then_some(frame.document)
+                });
+                if let Some(document) = document.flatten() {
+                    return Ok(document);
+                }
+                tab.frames.changed().await?;
+            }
+        })
+        .await
+        .with_context(|| format!("waiting for a frame with BGRA {color:?}"))?
+    }
+
+    #[tokio::test]
+    async fn reactivated_tab_presents_a_new_frame_without_resizing() -> Result<()> {
+        let root = tempfile::tempdir()?;
+        let mut tab = open_test_tab(
+            &root,
+            concat!(
+                "<style>html{background:red}body{margin:0;min-height:100vh}</style>",
+                "<script>document.addEventListener('mousedown', () => {",
+                "  document.documentElement.style.background = 'blue';",
+                "});</script>",
+            ),
+        )?;
+        let initial_document = wait_for_frame(&mut tab, [0, 0, 255, 255]).await?;
+        let initial_revision = tab.revision;
+
+        molio_set_active(&tab, false);
+        tokio::time::timeout(TIMEOUT, async {
+            while tab.viewport.read(|_| ()).is_some() {
+                tab.frames.changed().await?;
+            }
+            Ok::<_, watch::error::RecvError>(())
+        })
+        .await
+        .context("waiting for the hidden tab to release its viewport")??;
+
+        molio_set_active(&tab, true);
+        let resumed_document = wait_for_frame(&mut tab, [0, 0, 255, 255]).await?;
+        assert_eq!(resumed_document, initial_document);
+        assert_eq!(tab.revision, initial_revision);
+
+        tab.presented = Some((resumed_document, initial_revision));
+        molio_tap(&tab, 10., 10.);
+        assert_eq!(
+            wait_for_frame(&mut tab, [255, 0, 0, 255]).await?,
+            initial_document
+        );
+        Ok(())
     }
 }

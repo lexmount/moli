@@ -36,5 +36,16 @@ tokio = { version = "1.53.1", features = ["fs", "io-util", "macros", "net", "rt"
 url = { version = "2.5.7", optional = true }
 v8 = { version = "152.2.0", features = ["v8_enable_pointer_compression"], optional = true }
 
+[dev-dependencies]
+anyhow = "1.0"
+moli-core = { path = "../../moli-core", default-features = false, features = ["molio"] }
+moli-fetch = { path = "../../moli-fetch" }
+parking_lot = "0.12"
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.145"
+tempfile = "3.27.0"
+tokio = { version = "1.53.1", features = ["fs", "io-util", "macros", "net", "rt", "sync", "time"] }
+url = "2.5.7"
+
 [lints]
 workspace = true

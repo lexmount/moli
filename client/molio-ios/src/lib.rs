@@ -1,6 +1,6 @@
 //! C ABI for the arm64 iPhoneOS application.
 
-#![cfg(all(target_os = "ios", target_arch = "aarch64", target_abi = ""))]
+#![cfg(any(test, all(target_os = "ios", target_arch = "aarch64", target_abi = "")))]
 
 #[cfg(feature = "browser")]
 #[path = "../../molio/src/address_target.rs"]
@@ -10,5 +10,10 @@ mod browser;
 #[cfg(feature = "browser")]
 #[path = "../../molio/src/downloads.rs"]
 mod downloads;
-#[cfg(feature = "smoke")]
+#[cfg(all(
+    feature = "smoke",
+    target_os = "ios",
+    target_arch = "aarch64",
+    target_abi = ""
+))]
 mod smoke;
