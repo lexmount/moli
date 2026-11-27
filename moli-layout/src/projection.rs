@@ -617,7 +617,7 @@ fn projection_preserves_scrollbar_layout<N: Copy + Debug + Eq + Hash>(
         if world.is_viewport_defining_body(id) {
             continue;
         }
-        let (horizontal, vertical) = overflow.overflowing_axes(world, id);
+        let (horizontal, vertical) = overflow.overflowing_axes(world, index);
         for (axis, overflowing) in [
             (crate::LayoutScrollbarAxis::Horizontal, horizontal),
             (crate::LayoutScrollbarAxis::Vertical, vertical),
@@ -910,7 +910,8 @@ where
             let vertical_scrollbar_on_left = self.places_vertical_scrollbar_on_left(id);
             let layout_scrollport = geometry.local_scrollport;
             let mut scrollport = layout_scrollport;
-            let mut scroll_size = overflow_projection.scroll_size(self.world, id);
+            let reversed = self.world.boxes[index].style.reversed_scroll_axes();
+            let mut scroll_size = overflow_projection.scroll_size(index, reversed);
             if is_root {
                 scrollport.x = geometry.vertical_leading_gutter;
                 scrollport.y = geometry.horizontal_leading_gutter;
@@ -928,7 +929,6 @@ where
             let is_scroll_container = self.establishes_scroll_container(id);
             let requested = self.world.boxes[index].scroll_offset;
             let (minimum_offset, maximum_offset) = if is_scroll_container {
-                let reversed = self.world.boxes[index].style.reversed_scroll_axes();
                 // A reversed axis can still pan toward the far edge of the
                 // CSS viewport when the mobile frame is smaller.
                 let maximum = LayoutPoint::new(
