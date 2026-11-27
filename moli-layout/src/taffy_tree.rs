@@ -71,6 +71,9 @@ impl PreparedWorldLayout {
     where
         N: Copy + Debug + Eq + Hash,
     {
+        if self.numeric_unrounded_layouts.is_empty() {
+            return;
+        }
         assert_eq!(
             self.numeric_unrounded_layouts.len(),
             world.boxes.len(),
@@ -222,16 +225,14 @@ where
     }
     update_viewport_layout_styles(world, viewport);
     prepare_tables(world, &tree.table_roots);
-    let mut prepared = PreparedWorldLayout {
+    Ok(PreparedWorldLayout {
         tree,
         reused_tree,
         outside_list_markers,
-        numeric_unrounded_layouts: Vec::with_capacity(world.boxes.len()),
+        numeric_unrounded_layouts: Vec::new(),
         feedback_invalidation_marks: vec![false; world.boxes.len()],
         feedback_invalidation_worklist: Vec::new(),
-    };
-    prepared.capture_numeric_geometry(world);
-    Ok(prepared)
+    })
 }
 
 fn validate_numeric_depth<N: Copy + Debug + Eq + Hash>(
@@ -335,7 +336,11 @@ where
             },
         );
     }
-    prepared.capture_numeric_geometry(world);
+    // The in-place geometry is ready for the first pass. Preserve the
+    // computed result only when scrollbar feedback can schedule another pass.
+    if !world.environment.scrollbars_hidden {
+        prepared.capture_numeric_geometry(world);
+    }
     physicalize_vertical_block_flow(world);
     finish_positioned_static_layout(world, viewport, &prepared.tree.positioned_static_sources);
     finish_inline_positioned_layout(world, viewport);
