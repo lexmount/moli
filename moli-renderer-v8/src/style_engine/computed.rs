@@ -155,13 +155,17 @@ pub(crate) struct ComputedRenderedStyleFacts {
     pub(crate) text_wrap_mode: ComputedTextWrapModeKind,
 }
 
-fn layout_damage_for_style_change(
+/// Account for computed style inputs that Moli stores in the layout projection.
+pub(crate) fn layout_damage_for_style_change(
     old: Option<&ServoArc<ComputedValues>>,
     new: Option<&ServoArc<ComputedValues>>,
 ) -> ServoRestyleDamage {
     match (old, new) {
         (Some(old), Some(new))
-            if old.effective_zoom != new.effective_zoom || old.writing_mode != new.writing_mode =>
+            if old.effective_zoom != new.effective_zoom
+                || old.writing_mode != new.writing_mode
+                || old.clone_pointer_events() != new.clone_pointer_events()
+                || old.clone_visibility() != new.clone_visibility() =>
         {
             ServoRestyleDamage::RELAYOUT
         }

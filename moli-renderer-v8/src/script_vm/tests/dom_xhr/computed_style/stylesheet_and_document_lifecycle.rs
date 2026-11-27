@@ -1721,6 +1721,53 @@ fn ondemand_iframe_refresh_follows_relative_selector_layout_damage() {
 }
 
 #[test]
+fn ondemand_iframe_refresh_updates_sibling_hit_testing() {
+    for (property, excluded) in [("pointer-events", "none"), ("visibility", "hidden")] {
+        for read_style in [false, true] {
+            let mut vm = new_parsed_test_vm(
+                "https://iframe-sibling-hit-testing.test/",
+                &format!(
+                    r#"<!doctype html>
+                       <style>
+                         body {{ margin:0 }}
+                         iframe {{ display:block; width:100px; height:100px; border:0 }}
+                         #target {{ position:absolute; left:300px; top:0; width:40px; height:40px;
+                                    background:red }}
+                         iframe[style] ~ #target {{ {property}:{excluded} }}
+                       </style>
+                       <iframe id="frame"></iframe><div id="target"></div>"#,
+                ),
+            );
+            vm.set_layout_policy(moli_page_types::LayoutPolicy::OnDemand);
+            let hit = "document.elementFromPoint(310, 10) === target";
+            assert_eq!(vm.eval(hit).unwrap(), "true");
+            let builds = vm.layout_pass_observability_for_test().1;
+
+            vm.eval("frame.style.backgroundColor = 'blue'").unwrap();
+            if read_style {
+                let read = format!("getComputedStyle(target).getPropertyValue('{property}')");
+                assert_eq!(vm.eval(&read).unwrap(), excluded);
+            }
+            assert_eq!(vm.layout_pass_observability_for_test().1, builds);
+            assert_eq!(
+                vm.eval(hit).unwrap(),
+                "false",
+                "{property}, read_style={read_style}"
+            );
+            assert_eq!(vm.layout_pass_observability_for_test().1, builds + 1);
+
+            vm.eval("frame.style.backgroundColor = 'lime'").unwrap();
+            assert_eq!(vm.eval(hit).unwrap(), "false");
+            assert_eq!(vm.layout_pass_observability_for_test().1, builds + 1);
+
+            vm.eval("frame.removeAttribute('style')").unwrap();
+            assert_eq!(vm.eval(hit).unwrap(), "true");
+            assert_eq!(vm.layout_pass_observability_for_test().1, builds + 2);
+        }
+    }
+}
+
+#[test]
 fn nested_iframe_cached_viewport_units_follow_recursive_frame_resizes() {
     let mut vm = new_storage_test_vm("https://nested-cached-viewport-units.test/");
 
