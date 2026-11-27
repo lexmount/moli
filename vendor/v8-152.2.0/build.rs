@@ -176,7 +176,7 @@ fn require_ios_device_artifacts() {
   );
   assert!(
     !env_bool("V8_FROM_SOURCE") && !env_bool("RUSTY_V8_SKIP_DOWNLOAD"),
-    "Build the pinned iPhoneOS V8 with molio/ios/build-v8.sh first"
+    "Build the pinned iPhoneOS V8 with client/molio-ios/build-v8.sh first"
   );
   for feature in ["V8_ENABLE_SANDBOX", "V8_ENABLE_V8_CHECKS"] {
     assert!(

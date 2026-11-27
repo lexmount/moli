@@ -1,3 +1,5 @@
+#![cfg(target_env = "ohos")]
+
 use std::{
     ffi::{CStr, c_char, c_void},
     path::PathBuf,
@@ -11,7 +13,7 @@ use parking_lot::{Condvar, Mutex};
 use tokio::sync::mpsc;
 
 mod browser;
-#[path = "../../../molio/src/downloads.rs"]
+#[path = "../../molio/src/downloads.rs"]
 mod downloads;
 mod model;
 mod tab;

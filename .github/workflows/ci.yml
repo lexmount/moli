@@ -4,7 +4,7 @@ on:
   pull_request:
     types: [opened, synchronize, reopened]
     paths-ignore: &molio_paths
-      - molio/**
+      - client/**
       - .github/workflows/molio-ci.yml
   push:
     branches:
