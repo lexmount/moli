@@ -2,6 +2,7 @@ use std::{collections::HashMap, sync::Arc};
 
 use moli_parkable_image::ParkableImage;
 use parking_lot::Mutex;
+use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
 use super::{
     ImageDecodeMetadata, ImageResourceRequestIdentity,
@@ -18,6 +19,7 @@ use crate::{
 };
 
 const IMAGE_DECODE_CONCURRENCY: usize = 4;
+const IMAGE_DECODE_SLOTS: usize = 64;
 
 #[derive(Clone)]
 pub(super) struct ImageDecodeCoordinator {
@@ -26,7 +28,8 @@ pub(super) struct ImageDecodeCoordinator {
 
 struct ImageDecodeCoordinatorInner {
     budget: SharedImageResourceBudget,
-    concurrency: Arc<tokio::sync::Semaphore>,
+    slots: Arc<Semaphore>,
+    concurrency: Arc<Semaphore>,
     completions: Mutex<HashMap<RendererPageImageLoadEventTaskId, ImageDecodeCompletion>>,
 }
 
@@ -35,7 +38,8 @@ impl Default for ImageDecodeCoordinator {
         Self {
             inner: Arc::new(ImageDecodeCoordinatorInner {
                 budget: SharedImageResourceBudget::default(),
-                concurrency: Arc::new(tokio::sync::Semaphore::new(IMAGE_DECODE_CONCURRENCY)),
+                slots: Arc::new(Semaphore::new(IMAGE_DECODE_SLOTS)),
+                concurrency: Arc::new(Semaphore::new(IMAGE_DECODE_CONCURRENCY)),
                 completions: Mutex::new(HashMap::new()),
             }),
         }
@@ -44,9 +48,8 @@ impl Default for ImageDecodeCoordinator {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum ImageDecodeQueueError {
-    JobLimit,
+    MissingTaskRunner,
     EncodedByteLimit,
-    EncodedSource,
 }
 
 pub(super) struct ReadyDecodedImage {
@@ -68,7 +71,7 @@ pub(super) struct ImageDecodeCompletion {
     pub(super) identity: ImageResourceRequestIdentity,
     pub(super) target: WindowDocumentTaskTarget,
     pub(super) result: ImageDecodeResult,
-    _job_permit: ImageDecodeJobPermit,
+    _slot: OwnedSemaphorePermit,
 }
 
 impl ImageDecodeCompletion {
@@ -92,12 +95,12 @@ impl ImageDecodeCoordinator {
     ) -> Result<(), ImageDecodeQueueError> {
         let coordinator = self.clone();
         let task_id = RendererPageImageLoadEventTaskId::new(identity.element, identity.sequence);
-        self.submit_job(runner, metadata, encoded, move |result, job_permit| {
+        self.submit_job(runner, metadata, encoded, move |result, slot| {
             let completion = ImageDecodeCompletion {
                 identity,
                 target,
                 result,
-                _job_permit: job_permit,
+                _slot: slot,
             };
             let kind = completion.kind();
             let previous = coordinator
@@ -127,7 +130,7 @@ impl ImageDecodeCoordinator {
             runner,
             metadata,
             encoded,
-            move |result, _job_permit| match result {
+            move |result, _slot| match result {
                 ImageDecodeResult::Ready(ready) => {
                     if !store.complete_decode(&identity, ready) {
                         tracing::debug!(
@@ -157,7 +160,7 @@ impl ImageDecodeCoordinator {
         encoded: ParkableImage,
         complete: impl FnOnce(ImageDecodeResult) + Send + 'static,
     ) -> Result<(), ImageDecodeQueueError> {
-        self.submit_job(runner, metadata, encoded, move |result, _job_permit| {
+        self.submit_job(runner, metadata, encoded, move |result, _slot| {
             complete(result);
         })
     }
@@ -167,25 +170,23 @@ impl ImageDecodeCoordinator {
         runner: RendererResourceTaskRunner,
         metadata: ImageDecodeMetadata,
         encoded: ParkableImage,
-        complete: impl FnOnce(ImageDecodeResult, ImageDecodeJobPermit) + Send + 'static,
+        complete: impl FnOnce(ImageDecodeResult, OwnedSemaphorePermit) + Send + 'static,
     ) -> Result<(), ImageDecodeQueueError> {
         let encoded_len = encoded.len();
-        let job_permit = self
+        // Reserve the encoded data and a per-request bookkeeping charge
+        // while waiting. The page can continue consuming completions even
+        // when all decode slots are occupied.
+        let queued_bytes = encoded_len.saturating_add(size_of::<ImageDecodeCompletion>());
+        let encoded_permit = self
             .inner
             .budget
-            .admit_job(encoded_len)
-            .map_err(|error| match error {
-                ImageResourceBudgetError::JobLimit => ImageDecodeQueueError::JobLimit,
-                ImageResourceBudgetError::EncodedByteLimit
-                | ImageResourceBudgetError::DecodedByteLimit => {
-                    ImageDecodeQueueError::EncodedByteLimit
-                }
-            })?;
-        let snapshot = encoded
-            .snapshot()
-            .map_err(|_| ImageDecodeQueueError::EncodedSource)?;
+            .reserve_encoded(queued_bytes)
+            .map_err(|_| ImageDecodeQueueError::EncodedByteLimit)?;
         let coordinator = self.clone();
         runner.spawn(async move {
+            let Ok(slot) = coordinator.inner.slots.clone().acquire_owned().await else {
+                return;
+            };
             let Ok(_concurrency) = coordinator.inner.concurrency.clone().acquire_owned().await
             else {
                 return;
@@ -193,6 +194,9 @@ impl ImageDecodeCoordinator {
             let budget = coordinator.inner.budget.clone();
             let decoded = tokio::task::spawn_blocking(move || {
                 let result = (|| {
+                    let snapshot = encoded
+                        .snapshot()
+                        .map_err(|error| format!("encoded image source is unavailable: {error}"))?;
                     let retained_bytes = metadata
                         .retained_byte_len(encoded_len)
                         .ok_or_else(|| "decoded image byte estimate overflowed".to_owned())?;
@@ -222,8 +226,7 @@ impl ImageDecodeCoordinator {
                 })
             })
             .await;
-            let mut job_permit = job_permit;
-            job_permit.release_encoded_bytes();
+            drop(encoded_permit);
             let result = match decoded {
                 Ok(Ok(ready)) => ImageDecodeResult::Ready(ready),
                 Ok(Err(error)) => ImageDecodeResult::Failed(error),
@@ -231,7 +234,7 @@ impl ImageDecodeCoordinator {
                     ImageDecodeResult::Failed(format!("image decode worker failed: {error}"))
                 }
             };
-            complete(result, job_permit);
+            complete(result, slot);
         });
         Ok(())
     }
@@ -281,6 +284,49 @@ mod tests {
     use moli_parkable_image::{ParkableImageManager, ParkableImagePolicy};
 
     use super::*;
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn image_decode_waits_for_a_slot_during_a_burst() {
+        let pixels = moli_image::RgbaImage::try_new(1, 1, vec![255, 0, 0, 255]).unwrap();
+        let bytes = moli_image::encode_png(&pixels).unwrap().bytes;
+        let metadata = moli_image::probe_raster_image(&bytes).unwrap();
+        let manager = ParkableImageManager::new(None, ParkableImagePolicy::default());
+        let coordinator = ImageDecodeCoordinator::default();
+        let runner = RendererResourceTaskRunner::from_current_tokio().unwrap();
+        let occupied = coordinator
+            .inner
+            .slots
+            .clone()
+            .acquire_many_owned(IMAGE_DECODE_SLOTS as u32)
+            .await
+            .unwrap();
+        let (complete_tx, mut complete_rx) = tokio::sync::oneshot::channel();
+
+        coordinator
+            .submit_preload(
+                runner,
+                ImageDecodeMetadata::Raster(metadata),
+                manager.from_frozen_bytes(bytes),
+                move |result| {
+                    let _ = complete_tx.send(result);
+                },
+            )
+            .expect("a full decode queue should still accept within the byte budget");
+        tokio::task::yield_now().await;
+        assert!(matches!(
+            complete_rx.try_recv(),
+            Err(tokio::sync::oneshot::error::TryRecvError::Empty)
+        ));
+        assert!(coordinator.inner.budget.counters().0 > 0);
+
+        drop(occupied);
+        let result = tokio::time::timeout(Duration::from_secs(5), complete_rx)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(coordinator.inner.budget.counters().0, 0);
+        assert!(matches!(result, ImageDecodeResult::Ready(_)));
+    }
 
     #[tokio::test(flavor = "multi_thread")]
     async fn decode_releases_its_snapshot_for_manager_parking() {

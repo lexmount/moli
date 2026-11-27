@@ -324,7 +324,7 @@ impl super::PageScriptHost {
         let submission = self
             .document_resource_loader_for_owner(identity.document_owner)
             .map(|loader| loader.task_runner())
-            .ok_or(decode::ImageDecodeQueueError::JobLimit)
+            .ok_or(decode::ImageDecodeQueueError::MissingTaskRunner)
             .and_then(|runner| {
                 self.image_resources.decode.submit_css(
                     runner,
@@ -523,7 +523,7 @@ impl super::PageScriptHost {
             let encoded_len = encoded.len();
             let submission = loader
                 .map(|loader| loader.task_runner())
-                .ok_or(decode::ImageDecodeQueueError::JobLimit)
+                .ok_or(decode::ImageDecodeQueueError::MissingTaskRunner)
                 .and_then(|runner| {
                     self.image_resources.decode.submit(
                         runner,
