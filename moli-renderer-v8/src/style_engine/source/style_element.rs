@@ -52,7 +52,7 @@ impl MoliStyleEngine {
             }
             DomStylesheetOwnerChangeKind::Unregistered
             | DomStylesheetOwnerChangeKind::TreeConnectionChanged { connected: false } => {
-                self.remove_owner_style_sheet_source(owner);
+                self.remove_owner_style_sheet_source(host, change);
                 let documents = self.linked_stylesheet_owner_documents(owner);
                 self.remove_linked_stylesheet_owner_from_documents(host, owner, documents);
             }
