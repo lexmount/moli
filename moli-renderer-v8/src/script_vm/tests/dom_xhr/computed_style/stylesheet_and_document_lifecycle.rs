@@ -1632,6 +1632,55 @@ const readViewport = () => JSON.stringify([
 }
 
 #[test]
+fn ondemand_iframe_refresh_compares_against_the_published_owner_style() {
+    for screenshot in [false, true] {
+        for read_style in [false, true] {
+            let mut vm = new_parsed_test_vm(
+                "https://iframe-published-style.test/",
+                r#"<!doctype html>
+                   <style>
+                     iframe { box-sizing:border-box; width:200px; height:160px;
+                              padding:20px; border:10px solid }
+                     section[data-wide] iframe { width:280px }
+                   </style>
+                   <section id="owner"><iframe id="frame"></iframe></section>"#,
+            );
+            vm.set_layout_policy(moli_page_types::LayoutPolicy::OnDemand);
+            vm.eval("globalThis.child = frame.contentWindow").unwrap();
+            if screenshot {
+                publish_layout_for_test(&mut vm);
+            } else {
+                vm.eval("frame.getBoundingClientRect().width").unwrap();
+            }
+            let builds = vm.layout_pass_observability_for_test().1;
+            assert_eq!(vm.eval("child.innerWidth").unwrap(), "140");
+
+            vm.eval("owner.setAttribute('data-wide', '')").unwrap();
+            if read_style {
+                vm.eval("getComputedStyle(frame).width").unwrap();
+            }
+            assert_eq!(vm.eval("child.innerWidth").unwrap(), "140");
+            assert_eq!(vm.layout_pass_observability_for_test().1, builds);
+
+            assert_eq!(
+                vm.eval("frame.style.backgroundColor = 'red'; child.innerWidth")
+                    .unwrap(),
+                "220",
+                "screenshot={screenshot}, read_style={read_style}",
+            );
+            assert_eq!(vm.layout_pass_observability_for_test().1, builds + 1);
+
+            assert_eq!(
+                vm.eval("frame.style.backgroundColor = 'blue'; child.innerWidth")
+                    .unwrap(),
+                "220",
+            );
+            assert_eq!(vm.layout_pass_observability_for_test().1, builds + 1);
+        }
+    }
+}
+
+#[test]
 fn nested_iframe_cached_viewport_units_follow_recursive_frame_resizes() {
     let mut vm = new_storage_test_vm("https://nested-cached-viewport-units.test/");
 

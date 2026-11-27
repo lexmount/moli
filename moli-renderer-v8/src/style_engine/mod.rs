@@ -231,16 +231,6 @@ impl MoliStyleEngine {
             .computed_cache_generation
     }
 
-    pub(crate) fn retained_element_style(
-        &self,
-        document: DomHandle,
-        handle: DomHandle,
-    ) -> Option<style::servo_arc::Arc<style::properties::ComputedValues>> {
-        self.dom_adapter
-            .clone_clean_element_styles(document, handle, 0)
-            .map(|styles| styles.primary().clone())
-    }
-
     pub(crate) fn has_screen_style_invalidation(&self, document: DomHandle) -> bool {
         self.document_worlds
             .active_world(document)
