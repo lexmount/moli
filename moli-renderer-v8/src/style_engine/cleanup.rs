@@ -96,22 +96,13 @@ impl<'a> StyleInvalidationCleanup<'a> {
         &self,
         host: &DomHost,
         root: DomHandle,
-        can_replace_rules: bool,
+        hint: RestyleHint,
     ) -> bool {
         let roots = self.existing_subtree_roots(host, [root]);
         if roots.is_empty() {
             return false;
         }
-        if can_replace_rules {
-            self.record_style_paths_targets(
-                host,
-                &roots,
-                |_| StyleInvalidationScope::Element,
-                RestyleHint::RESTYLE_STYLE_ATTRIBUTE,
-            );
-        } else {
-            self.record_style_paths(host, &roots);
-        }
+        self.record_style_paths_targets(host, &roots, |_| StyleInvalidationScope::Element, hint);
         self.dom_adapter.clear_inline_style_attribute(root);
         true
     }

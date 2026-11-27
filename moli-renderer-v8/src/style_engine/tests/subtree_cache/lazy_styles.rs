@@ -49,6 +49,41 @@ fn computed_style_is_published_on_canonical_element_data_and_reused() {
 }
 
 #[test]
+fn presentational_hint_restyles_self_and_recascades_inherited_values() {
+    let mut host = test_host();
+    let document = host.document_handle();
+    let heading = host.create_element("h1");
+    let child = host.create_element("span");
+    assert!(host.append_child(document, heading));
+    assert!(host.append_child(heading, child));
+    assert!(host.set_attribute(heading, "align", "left"));
+
+    let mut engine = MoliStyleEngine::new();
+    let url = url::Url::parse("https://example.test/").unwrap();
+    let inputs = FullStyleWorldSnapshot::default();
+    let alignment = |engine: &MoliStyleEngine, host: &DomHost| {
+        engine
+            .computed_style_property_value(host, &url, child, "text-align", None, &inputs, None)
+            .unwrap()
+    };
+    assert_eq!(alignment(&engine, &host), "left");
+    let mutation = host.set_attribute_mutation_outcome(heading, "align", "right");
+    engine.invalidate_dom_mutations(
+        &host,
+        &StyleMutationEffect::from_dom_mutation_effects(mutation.effects()),
+    );
+    engine.drain_pending_style_invalidations_for_document_for_test(&host, document);
+
+    assert!(element_style_is_dirty_for_test(&engine, &host, heading));
+    assert!(!element_style_is_dirty_for_test(&engine, &host, child));
+    assert_eq!(
+        engine.retained_style_invalidation_root_count_for_document_for_test(document),
+        0,
+    );
+    assert_eq!(alignment(&engine, &host), "right");
+}
+
+#[test]
 fn lazy_subtree_invalidation_avoids_eager_scans_and_memoizes_paths() {
     const UNRELATED_COUNT: usize = 256;
 

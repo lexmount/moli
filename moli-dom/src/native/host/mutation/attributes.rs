@@ -10,9 +10,81 @@ struct AttributeBeforeMutation {
 }
 
 impl DomHost {
-    /// Class and data attributes can affect CSS without changing native box inputs.
-    pub fn attribute_affects_native_layout(name: &str) -> bool {
-        name != "class" && !name.starts_with("data-")
+    /// Tracks attributes consumed directly by layout, independently of CSS
+    /// selectors and presentation hints. Inline style has its own tracked-input
+    /// path. Foreign markup can also be serialized into an inline SVG scene.
+    pub fn attribute_affects_native_layout(
+        &self,
+        handle: DomHandle,
+        namespace: Option<&str>,
+        name: &str,
+    ) -> bool {
+        let Some(element) = self.node(handle).and_then(Node::as_element) else {
+            return false;
+        };
+        if element.namespace() != "http://www.w3.org/1999/xhtml" {
+            return namespace.is_some() || (name != "class" && !name.starts_with("data-"));
+        }
+        if matches!(
+            name,
+            "id" | "style" | "slot" | "popover" | "contenteditable"
+        ) {
+            return true;
+        }
+        match element.local_name() {
+            "a" => matches!(name, "href" | "name"),
+            "base" => name == "href",
+            "slot" => name == "name",
+            "details" => matches!(name, "open" | "name"),
+            "dialog" => name == "open",
+            "ol" | "ul" | "menu" => matches!(name, "start" | "reversed"),
+            "li" => name == "value",
+            "td" | "th" => matches!(name, "colspan" | "rowspan"),
+            "col" | "colgroup" => name == "span",
+            "input" | "textarea" | "select" | "button" | "option" | "optgroup" | "fieldset"
+            | "legend" | "output" | "progress" | "meter" => matches!(
+                name,
+                "type"
+                    | "value"
+                    | "placeholder"
+                    | "size"
+                    | "cols"
+                    | "rows"
+                    | "disabled"
+                    | "multiple"
+                    | "checked"
+                    | "selected"
+                    | "label"
+                    | "name"
+                    | "form"
+                    | "list"
+                    | "min"
+                    | "max"
+                    | "step"
+                    | "low"
+                    | "high"
+                    | "optimum"
+                    | "width"
+                    | "height"
+                    | "src"
+            ),
+            "iframe" | "frame" => {
+                matches!(
+                    name,
+                    "width" | "height" | "scrolling" | "src" | "srcdoc" | "name"
+                )
+            }
+            "canvas" => matches!(name, "width" | "height"),
+            "img" | "source" => {
+                matches!(
+                    name,
+                    "width" | "height" | "src" | "srcset" | "sizes" | "media" | "type"
+                )
+            }
+            "audio" | "video" => matches!(name, "width" | "height" | "src" | "poster" | "controls"),
+            "embed" | "object" => matches!(name, "width" | "height" | "src" | "data" | "type"),
+            _ => false,
+        }
     }
 
     fn record_attribute_mutation(
@@ -22,7 +94,7 @@ impl DomHost {
         local_name: &str,
     ) {
         let affects_native_layout =
-            namespace.is_some() || Self::attribute_affects_native_layout(local_name);
+            self.attribute_affects_native_layout(handle, namespace, local_name);
         self.record_mutation_and_layout_input(
             MutationScope::QueryState,
             affects_native_layout.then_some(handle),
@@ -758,6 +830,45 @@ mod tests {
         let mutation = &effects.style().attribute_mutations()[0];
         assert_eq!(mutation.local_name(), "CONTENT");
         assert_eq!(mutation.namespace(), None);
+    }
+
+    #[test]
+    fn html_attribute_mutations_track_layout_only_for_native_inputs() {
+        let mut host = DomHost::from_dom(NativeDom::new_html(
+            url::Url::parse("https://example.test/").unwrap(),
+        ));
+        let document = host.document_handle();
+        let container = host.create_element("div");
+        assert!(host.append_child(document, container));
+        let version = host.document_layout_version(document);
+        let dom_version = host.dom_version();
+        for attribute in ["x", "width", "align", "rows", "unknown"] {
+            assert!(host.set_attribute(container, attribute, "2"));
+            assert_eq!(
+                host.document_layout_version(document),
+                version,
+                "{attribute}"
+            );
+        }
+        assert!(host.dom_version() > dom_version);
+
+        for (tag, attribute) in [
+            ("canvas", "width"),
+            ("textarea", "rows"),
+            ("td", "colspan"),
+            ("li", "value"),
+            ("iframe", "scrolling"),
+            ("a", "href"),
+        ] {
+            let element = host.create_element(tag);
+            assert!(host.append_child(container, element));
+            let version = host.document_layout_version(document);
+            assert!(host.set_attribute(element, attribute, "2"));
+            assert!(
+                host.document_layout_version(document) > version,
+                "{tag}.{attribute}"
+            );
+        }
     }
 
     #[test]

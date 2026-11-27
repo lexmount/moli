@@ -65,6 +65,12 @@ impl StyleMutationSnapshots {
         self.elements.keys().copied()
     }
 
+    pub fn attribute_handles(&self) -> impl Iterator<Item = NodeId> + '_ {
+        self.elements.iter().filter_map(|(&handle, snapshot)| {
+            (!snapshot.old_attributes.is_empty()).then_some(handle)
+        })
+    }
+
     pub fn merge(&mut self, incoming: Self) {
         for (handle, incoming) in incoming.elements {
             let target = self.elements.entry(handle).or_default();

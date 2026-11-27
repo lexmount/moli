@@ -29,7 +29,7 @@ use crate::{
     dom::{
         NodeId,
         custom_elements::is_valid_custom_element_name,
-        native::{Attribute, CustomElementState, DomHost, Element, Node},
+        native::{CustomElementState, DomHost, Element, Node},
     },
     stylo::{
         StyloElementDataStore,
@@ -92,23 +92,6 @@ impl<'a> QueryElement<'a> {
         self.node()
             .as_element()
             .expect("query element should wrap an element node")
-    }
-
-    pub(super) fn attr_value(self, local_name: &str, namespace: Option<&str>) -> Option<&'a str> {
-        self.element()
-            .attributes()
-            .iter()
-            .find(|attribute| {
-                attribute.local_name() == local_name
-                    && namespace.is_none_or(|expected| attribute.namespace() == expected)
-            })
-            .map(Attribute::value)
-    }
-
-    pub(super) fn lang_attr_value(self) -> Option<&'a str> {
-        self.attr_value("lang", Some("http://www.w3.org/XML/1998/namespace"))
-            .or_else(|| self.attr_value("lang", Some("")))
-            .or_else(|| self.attr_value("lang", None))
     }
 
     pub(super) fn matches_defined_pseudo(self) -> bool {
@@ -364,7 +347,9 @@ impl<'a> TElement for QueryElement<'a> {
     }
 
     fn lang_attr(&self) -> Option<SelectorAttrValue> {
-        self.lang_attr_value().map(SelectorAttrValue::from)
+        self.element()
+            .language_attribute()
+            .map(SelectorAttrValue::from)
     }
 
     fn match_element_lang(

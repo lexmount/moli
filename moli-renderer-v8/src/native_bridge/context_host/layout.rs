@@ -9,6 +9,7 @@ use moli_layout::{
     ScrollProjectionRefresh,
 };
 use moli_selector::QueryContainerSizes;
+use style::servo::restyle_damage::ServoRestyleDamage;
 
 use super::PageScriptHost;
 #[cfg(feature = "devtools")]
@@ -293,6 +294,64 @@ impl PageScriptHost {
             .try_borrow()
             .ok()?
             .frame_viewport(frame)
+    }
+
+    pub(crate) fn observed_frame_viewport(
+        &self,
+        frame: DomHandle,
+        owner_document: DomHandle,
+    ) -> Option<LayoutViewport> {
+        let viewport = self.frame_viewport(frame)?;
+        if self.layout_policy().is_realtime() {
+            return Some(viewport);
+        }
+        // A child Window can read its size before the outer script turn ends.
+        let frames = self
+            .style_engine
+            .drain_pending_style_invalidations_for_document_read(self.dom_host(), owner_document);
+        if frames.is_empty() {
+            return Some(viewport);
+        }
+        self.invalidate_published_frame_viewports_for_attribute_changes(&frames);
+        self.frame_viewport(frame)
+    }
+
+    pub(super) fn invalidate_published_frame_viewports_for_attribute_changes(
+        &self,
+        frames: &[DomHandle],
+    ) {
+        if frames.is_empty() || self.layout_policy().is_realtime() {
+            return;
+        }
+        let host = self.dom_host();
+        // OnDemand keeps the published screen layout when surrounding
+        // styles change. A frame's own attribute can change its viewport.
+        let mut geometry_changed = false;
+        let resized = frames
+            .iter()
+            .copied()
+            .filter(|&frame| self.frame_viewport(frame).is_some())
+            .filter(|&frame| {
+                let damage = host
+                    .owner_document_handle(frame)
+                    .and_then(|document| {
+                        self.style_engine.resolve_element_restyle_damage(
+                            host,
+                            &self.document_url_for_handle(document),
+                            frame,
+                        )
+                    })
+                    .unwrap_or(ServoRestyleDamage::RELAYOUT);
+                geometry_changed |= !ServoRestyleDamage::REPAINT.contains(damage);
+                damage.contains(ServoRestyleDamage::RELAYOUT)
+            })
+            .collect::<Vec<_>>();
+        if resized.is_empty() && geometry_changed {
+            self.document_layout_state
+                .borrow_mut()
+                .clear_latest_layout();
+        }
+        self.invalidate_published_frame_viewports(resized);
     }
 
     pub(crate) fn invalidate_published_frame_viewports(
