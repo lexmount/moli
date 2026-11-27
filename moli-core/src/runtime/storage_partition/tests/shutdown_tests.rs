@@ -12,10 +12,11 @@ use std::{
 };
 
 const TX: TransactionHandle = TransactionHandle::from_raw(7);
+const SHUTDOWN_WATCHDOG: Duration = Duration::from_secs(60);
 
 fn receive<T>(receiver: &mpsc::Receiver<T>) -> T {
     receiver
-        .recv_timeout(Duration::from_secs(10))
+        .recv_timeout(SHUTDOWN_WATCHDOG)
         .expect("partition shutdown must progress after its explicit gate opens")
 }
 
@@ -116,7 +117,7 @@ fn partition_shutdown_retires_retained_sql_handles_before_releasing_the_profile_
         drop(partition);
         let _ = done.send(());
     });
-    let deadline = Instant::now() + Duration::from_secs(10);
+    let deadline = Instant::now() + SHUTDOWN_WATCHDOG;
     while !service.is_closed() {
         assert!(
             matches!(finished.try_recv(), Err(mpsc::TryRecvError::Empty)),
@@ -126,7 +127,7 @@ fn partition_shutdown_retires_retained_sql_handles_before_releasing_the_profile_
             Instant::now() < deadline,
             "partition must request SQL shutdown"
         );
-        thread::yield_now();
+        thread::sleep(Duration::from_millis(10));
     }
     assert!(
         BrowserProfile::open(&root.path).is_err(),

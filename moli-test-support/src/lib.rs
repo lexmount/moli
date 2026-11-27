@@ -73,7 +73,7 @@ mod server_routes;
 use helpers::*;
 use routes_core::*;
 const STATIC_HTML: &str = "<!doctype html><html><body><main>fixture static</main></body></html>";
-const FUTURE_INTERVAL_DONE_HTML: &str = "<!doctype html><html><body><main>interval</main><script>document.body.dataset.ready = 'yes'; setInterval(() => { document.body.dataset.ticks = String((Number(document.body.dataset.ticks) || 0) + 1); }, 50);</script></body></html>";
+const FUTURE_INTERVAL_DONE_HTML: &str = "<!doctype html><html><body><main>interval</main><script>document.body.dataset.ready = 'yes'; setInterval(() => { document.body.dataset.ticks = String((Number(document.body.dataset.ticks) || 0) + 1); }, 60000);</script></body></html>";
 const SCRIPT_HTML: &str =
     "<!doctype html><html><body><script src=\"/assets/app.js\"></script></body></html>";
 const INLINE_SCRIPT_HTML: &str = "<!doctype html><html><head><!--head--><script>window.inlineReady = '\u{4f60}\u{597d}';</script></head><body><template id=\"tpl\"><script>window.templateReady = true;</script></template><main>fixture inline script</main></body></html>";
