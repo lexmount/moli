@@ -64,7 +64,9 @@ use crate::runtime::{
 };
 use crate::util::{node_wrapper_from_handle, utf16_len};
 #[cfg(feature = "molio")]
-use crate::{host::EventTargetHandle, native_bridge::OwnerDispatchScope};
+use crate::{
+    host::EventTargetHandle, native_bridge::OwnerDispatchScope, runtime::RendererViewportEditAction,
+};
 
 fn related_target_value<'s>(
     scope: &mut v8::PinScope<'s, '_>,
@@ -952,7 +954,7 @@ impl ScriptVm {
     }
 
     pub(crate) fn copy_or_cut_viewport_selection(&mut self, cut: bool) -> Result<Option<String>> {
-        let result = self.with_default_context_scope(|scope, host| {
+        let result = self.with_native_input_event_scope(|scope, host| {
             Ok(
                 crate::context_bootstrap::viewport_edit::copy_or_cut_viewport_selection(
                     scope, host, cut,
@@ -968,7 +970,7 @@ impl ScriptVm {
         paste: &crate::runtime::RendererViewportPaste,
         sequence: Option<u64>,
     ) -> Result<bool> {
-        let result = self.with_default_context_scope(|scope, host| {
+        let result = self.with_native_input_event_scope(|scope, host| {
             Ok(editing.paste_from_clipboard(scope, host, paste, sequence))
         });
         self.finish_input_event_dispatch_turn(result)
@@ -992,17 +994,20 @@ impl ScriptVm {
         editing: &mut crate::context_bootstrap::viewport_edit::ViewportEditing,
         edit: crate::runtime::RendererViewportEdit,
     ) -> Result<bool> {
-        let result =
-            self.with_default_context_scope(|scope, host| Ok(editing.apply(scope, host, edit)));
+        let result = if matches!(edit.action, RendererViewportEditAction::Paste { .. }) {
+            self.with_native_input_event_scope(|scope, host| Ok(editing.apply(scope, host, edit)))
+        } else {
+            self.with_default_context_scope(|scope, host| Ok(editing.apply(scope, host, edit)))
+        };
         self.finish_input_command_checkpoint(result)
     }
 }
 
 impl ScriptVm {
-    /// Native keyboard delivery has no outer JavaScript invocation. Checkpoint
+    /// Native input delivery has no outer JavaScript invocation. Checkpoint
     /// when each outermost callback returns, including between listeners and
     /// before defaults. Nested dispatchEvent() stays inside its calling script.
-    fn with_native_keyboard_event_scope<T>(
+    fn with_native_input_event_scope<T>(
         &mut self,
         operation: impl FnOnce(&mut v8::PinScope<'_, '_>, *mut PageScriptHost) -> Result<T>,
     ) -> Result<T> {
@@ -3015,7 +3020,7 @@ impl ScriptVm {
         let shift = modifiers & 8 == 8;
         let canceled_raw_keydown = Cell::new(false);
 
-        let result = self.with_native_keyboard_event_scope(|scope, runtime_ptr| {
+        let result = self.with_native_input_event_scope(|scope, runtime_ptr| {
             let Some(event) = construct_keyboard_event(
                 scope,
                 event_name,

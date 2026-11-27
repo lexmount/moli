@@ -2175,6 +2175,98 @@ async fn viewport_clipboard_follows_document_selection_and_focus_changes() -> Re
 }
 
 #[tokio::test]
+async fn viewport_clipboard_runs_microtasks_before_the_next_listener_and_default_action()
+-> Result<()> {
+    use moli_core::{RendererViewportEdit, RendererViewportEditAction};
+
+    let browser =
+        Browser::new(BrowserConfig::default().with_layout_policy(LayoutPolicy::Realtime))?;
+    let mut page = browser.fetch(&html_url("<input id=editor>")).await?;
+    let mut frames = page
+        .subscribe_viewport_frames(ViewportSurface::default(), 1)
+        .await?;
+    let document = frame(&mut frames, |frame| frame.snapshot.is_some())
+        .await?
+        .document;
+
+    let mut outcomes = Vec::new();
+    for action in ["copy", "cut", "paste", "versioned paste"] {
+        let event = if action == "versioned paste" {
+            "paste"
+        } else {
+            action
+        };
+        page.evaluate_runtime_expression_async(&format!(
+            r#"
+            editor.value = 'ABC';
+            editor.focus();
+            editor.setSelectionRange(1, 2);
+            editor.addEventListener('{event}', () => {{
+              queueMicrotask(() => editor.setSelectionRange(2, 3));
+            }}, {{once:true}});
+            editor.addEventListener('{event}', () => {{
+              window.listenerSelectionStart = editor.selectionStart;
+            }}, {{once:true}});
+            "#,
+        ))
+        .await?;
+
+        let clipboard = match action {
+            "copy" => page.copy_viewport_selection(document).await?,
+            "cut" => page.cut_viewport_selection(document).await?,
+            "paste" => {
+                assert!(
+                    page.paste_viewport_text(document, Some("X".into()), None)
+                        .await?
+                );
+                None
+            }
+            _ => {
+                let editor = page
+                    .viewport_editor()
+                    .await?
+                    .context("editor before paste")?;
+                let reply = page
+                    .edit_viewport(RendererViewportEdit {
+                        document,
+                        target: editor.target,
+                        revision: editor.revision,
+                        sequence: 1,
+                        previous: None,
+                        action: RendererViewportEditAction::Paste { text: "X".into() },
+                    })
+                    .await?;
+                assert!(reply.applied);
+                None
+            }
+        };
+        let state = page
+            .evaluate_runtime_expression_async(
+                "JSON.stringify([listenerSelectionStart, editor.value])",
+            )
+            .await?;
+        outcomes.push((
+            action,
+            clipboard,
+            state["value"]
+                .as_str()
+                .context("clipboard state")?
+                .to_owned(),
+        ));
+    }
+    assert_eq!(
+        outcomes,
+        [
+            ("copy", Some("C".into()), r#"[2,"ABC"]"#.into()),
+            ("cut", Some("C".into()), r#"[2,"AB"]"#.into()),
+            ("paste", None, r#"[2,"ABX"]"#.into()),
+            ("versioned paste", None, r#"[2,"ABX"]"#.into()),
+        ],
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn viewport_paste_dispatches_readonly_data_before_editing() -> Result<()> {
     use moli_core::{RendererViewportEdit, RendererViewportEditAction};
 
@@ -2205,6 +2297,10 @@ async fn viewport_paste_dispatches_readonly_data_before_editing() -> Result<()> 
           pasteEvents.push([event.type, event.isTrusted, pasteData.getData('text/plain')]);
           if (cancelPaste) {
             event.preventDefault();
+            queueMicrotask(() => {
+              editor.value = 'ABCD';
+              editor.setSelectionRange(2, 3);
+            });
           } else {
             editor.setSelectionRange(2, 3);
           }
@@ -2231,7 +2327,7 @@ async fn viewport_paste_dispatches_readonly_data_before_editing() -> Result<()> 
             "JSON.stringify([editor.value, pasteData.getData('text/plain'), pasteEvents])",
         )
         .await?;
-    assert_eq!(state["value"], r#"["ABC","",[["paste",true,"X"]]]"#);
+    assert_eq!(state["value"], r#"["ABCD","",[["paste",true,"X"]]]"#);
     let after_canceled_paste = page
         .edit_viewport(RendererViewportEdit {
             document,
@@ -2251,7 +2347,7 @@ async fn viewport_paste_dispatches_readonly_data_before_editing() -> Result<()> 
             .editor
             .context("editor after canceled paste")?
             .text,
-        "A!C"
+        "AB!D"
     );
 
     page.evaluate_runtime_expression_async("editor.value = 'ABC'; editor.setSelectionRange(1,2); cancelPaste = false; pasteEvents = []")
