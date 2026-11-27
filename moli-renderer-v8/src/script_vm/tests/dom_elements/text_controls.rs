@@ -1087,7 +1087,7 @@ async fn text_control_clone_resets_selection_but_still_queues_select_event() {
     );
 }
 #[tokio::test]
-async fn text_control_selectionchange_bubbles_across_shadow_and_exec_delete_targets_document() {
+async fn text_control_selectionchange_bubbles_within_shadow_and_exec_delete_targets_document() {
     let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
     let mut vm = new_storage_page_task_executor_test_vm_with_loader(
         "https://forms-selectionchange-shadow-text-control.test/",
@@ -1106,9 +1106,15 @@ async fn text_control_selectionchange_bubbles_across_shadow_and_exec_delete_targ
   shadow.append(input);
   globalThis.__shadowTextControl = input;
   globalThis.__shadowTextControlInputEvents = [];
+  globalThis.__shadowTextControlRootEvents = [];
   globalThis.__shadowTextControlDocumentEvents = [];
   input.addEventListener('selectionchange', event => {
-    globalThis.__shadowTextControlInputEvents.push(event.target === input);
+    globalThis.__shadowTextControlInputEvents.push(
+      [event.target === input, event.bubbles, event.cancelable, event.composed].join(',')
+    );
+  });
+  shadow.addEventListener('selectionchange', event => {
+    globalThis.__shadowTextControlRootEvents.push(event.target === input);
   });
   document.addEventListener('selectionchange', event => {
     globalThis.__shadowTextControlDocumentEvents.push(event.target === document ? 'document' : 'bubble');
@@ -1129,8 +1135,8 @@ async fn text_control_selectionchange_bubbles_across_shadow_and_exec_delete_targ
     assert_eq!(result, "0|1|0|0");
     for _ in 0..8 {
         if vm
-            .eval("globalThis.__shadowTextControlDocumentEvents.length")
-            .expect("document selectionchange event count should evaluate")
+            .eval("globalThis.__shadowTextControlRootEvents.length")
+            .expect("shadow root selectionchange event count should evaluate")
             == "1"
         {
             break;
@@ -1145,10 +1151,10 @@ async fn text_control_selectionchange_bubbles_across_shadow_and_exec_delete_targ
     }
     assert_eq!(
         vm.eval(
-            "globalThis.__shadowTextControlInputEvents.join(',') + '|' + globalThis.__shadowTextControlDocumentEvents.join(',')",
+            "[__shadowTextControlInputEvents, __shadowTextControlRootEvents, __shadowTextControlDocumentEvents].join('|')",
         )
         .expect("shadow selectionchange event log should evaluate"),
-        "true|bubble"
+        "true,true,false,false|true|"
     );
 
     let result = vm
@@ -1157,6 +1163,7 @@ async fn text_control_selectionchange_bubbles_across_shadow_and_exec_delete_targ
 (() => {
   const input = globalThis.__shadowTextControl;
   globalThis.__shadowTextControlInputEvents = [];
+  globalThis.__shadowTextControlRootEvents = [];
   globalThis.__shadowTextControlDocumentEvents = [];
   input.setSelectionRange(5, 5);
   return [input.selectionStart, input.selectionEnd].join('|');
@@ -1167,8 +1174,8 @@ async fn text_control_selectionchange_bubbles_across_shadow_and_exec_delete_targ
     assert_eq!(result, "5|5");
     for _ in 0..8 {
         if vm
-            .eval("globalThis.__shadowTextControlDocumentEvents.length")
-            .expect("document selectionchange pre-delete count should evaluate")
+            .eval("globalThis.__shadowTextControlRootEvents.length")
+            .expect("shadow root selectionchange pre-delete count should evaluate")
             == "1"
         {
             break;
