@@ -564,6 +564,41 @@ fn computed_style_resolves_animation_duration_auto_against_timeline() {
 }
 
 #[test]
+fn computed_style_resolves_progress_after_relative_units_change() {
+    let mut vm = new_parsed_test_vm(
+        "https://css-progress.test/",
+        r#"<!doctype html><style>
+            :root { font-size: 16px }
+            #target { font-size: 8px; opacity: progress(4em, 0px, 4rem) }
+        </style><div id="target"></div>"#,
+    );
+    let result = vm
+        .eval(
+            r#"(() => {
+  const target = document.getElementById('target');
+  const computed = getComputedStyle(target);
+  const values = [
+    CSS.supports('opacity', 'progress(4em, 0px, 4rem)'),
+    CSS.supports('opacity', 'progress(1px, 0s, 2px)'),
+    computed.opacity,
+  ];
+  document.documentElement.style.fontSize = '32px';
+  values.push(computed.opacity);
+  target.style.opacity = 'calc(0.5 * progress(30px, 0px, 10px))';
+  values.push(computed.opacity);
+  target.style.opacity = 'progress(30px, 10px, 10px)';
+  values.push(computed.opacity);
+  target.style.scale = 'progress(no-clamp 30px, 0px, 10px)';
+  values.push(computed.scale);
+  return values.join('|');
+})()"#,
+        )
+        .expect("CSS progress() should evaluate");
+
+    assert_eq!(result, "true|false|0.5|0.25|0.5|0|3");
+}
+
+#[test]
 fn computed_style_resolves_animation_math_against_query_container_width() {
     let mut vm = new_parsed_test_vm(
         "https://css-animation-container-math.test/",
