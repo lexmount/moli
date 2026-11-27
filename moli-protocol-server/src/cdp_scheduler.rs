@@ -2992,9 +2992,15 @@ impl CdpScheduler {
         // predecessor; already-observed Network facts are split below because
         // they are prerequisites of browser load visibility, not Page effects
         // produced after that boundary.
-        let requires_output_residence =
-            !load_predecessors.is_empty() || future_load_predecessor.is_some();
-        let (immediate_output, resident_output) = if requires_output_residence {
+        let earlier_same_stream_pending = renderer_output_cursor
+            .is_some_and(|cursor| self.queues.earlier_same_stream_output_is_pending(cursor));
+        let requires_output_residence = !load_predecessors.is_empty()
+            || future_load_predecessor.is_some()
+            || earlier_same_stream_pending;
+        let (immediate_output, resident_output) = if (!load_predecessors.is_empty()
+            || future_load_predecessor.is_some())
+            && !earlier_same_stream_pending
+        {
             // A timer publication can contain both Page-side effects that must
             // remain after the exact load boundary and Network-domain facts
             // that Chromium has already exposed. Keep the load predecessor on

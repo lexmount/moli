@@ -243,6 +243,20 @@ impl SchedulerQueues {
         self.protocol_residences.len()
     }
 
+    fn same_stream_insertion_index(&self, cursor: RendererOutputCursor) -> usize {
+        self.protocol_residences
+            .iter()
+            .position(|residence| {
+                matches!(
+                    residence,
+                    ProtocolSchedulerResidence::RendererOutputPublication(work)
+                        if work.renderer_output_cursor.stream() == cursor.stream()
+                            && work.renderer_output_cursor.sequence() > cursor.sequence()
+                )
+            })
+            .unwrap_or(self.protocol_residences.len())
+    }
+
     pub(super) fn enqueue_renderer_output_publication(
         &mut self,
         renderer_output_cursor: RendererOutputCursor,
@@ -260,18 +274,19 @@ impl SchedulerQueues {
         );
         self.undelivered_renderer_outputs
             .insert(renderer_output_cursor);
-        self.protocol_residences
-            .push_back(ProtocolSchedulerResidence::RendererOutputPublication(
-                RendererOutputPublicationWork {
-                    renderer_output_cursor,
-                    output,
-                    projection_pending: false,
-                    delivery_predecessor: None,
-                    predecessors: Vec::new(),
-                    load_predecessors,
-                    future_load_predecessor,
-                },
-            ));
+        let position = self.same_stream_insertion_index(renderer_output_cursor);
+        self.protocol_residences.insert(
+            position,
+            ProtocolSchedulerResidence::RendererOutputPublication(RendererOutputPublicationWork {
+                renderer_output_cursor,
+                output,
+                projection_pending: false,
+                delivery_predecessor: None,
+                predecessors: Vec::new(),
+                load_predecessors,
+                future_load_predecessor,
+            }),
+        );
     }
 
     pub(super) fn enqueue_pending_renderer_output_projection(
@@ -284,10 +299,7 @@ impl SchedulerQueues {
             return;
         }
         self.undelivered_renderer_outputs.insert(cursor);
-        let position = self.protocol_residences.iter().position(|residence| matches!(residence,
-            ProtocolSchedulerResidence::RendererOutputPublication(work)
-                if work.renderer_output_cursor.stream() == cursor.stream() && work.renderer_output_cursor.sequence() > cursor.sequence()
-        )).unwrap_or(self.protocol_residences.len());
+        let position = self.same_stream_insertion_index(cursor);
         self.protocol_residences.insert(
             position,
             ProtocolSchedulerResidence::RendererOutputPublication(RendererOutputPublicationWork {
@@ -377,6 +389,9 @@ impl SchedulerQueues {
         &mut self,
         cursor: RendererOutputCursor,
     ) -> Option<ProtocolOutputSequence> {
+        if self.earlier_same_stream_output_is_pending(cursor) {
+            return None;
+        }
         let index = self.protocol_residences.iter().position(|residence| {
             matches!(residence, ProtocolSchedulerResidence::RendererOutputPublication(work)
                 if work.renderer_output_cursor == cursor && !work.projection_pending
@@ -394,10 +409,15 @@ impl SchedulerQueues {
     }
 
     pub(super) fn renderer_delivery_is_pending(&self, cursor: RendererOutputCursor) -> bool {
-        self.protocol_residences.iter().any(|residence| matches!(residence,
-            ProtocolSchedulerResidence::RendererOutputPublication(work)
-                if work.renderer_output_cursor == cursor && self.delivery_predecessor_is_pending(work.delivery_predecessor)
-        ))
+        self.earlier_same_stream_output_is_pending(cursor)
+            || self.protocol_residences.iter().any(|residence| {
+                matches!(
+                    residence,
+                    ProtocolSchedulerResidence::RendererOutputPublication(work)
+                        if work.renderer_output_cursor == cursor
+                            && self.delivery_predecessor_is_pending(work.delivery_predecessor)
+                )
+            })
     }
 
     pub(super) fn bind_renderer_delivery_predecessor(
@@ -438,6 +458,22 @@ impl SchedulerQueues {
         predecessor.is_some_and(|cursor| self.undelivered_renderer_outputs.contains(&cursor))
     }
 
+    /// Returns whether an earlier sequence on the exact same renderer stream
+    /// has not been delivered yet.
+    ///
+    /// A later unconstrained publication (such as a deferred `Runtime.evaluate`
+    /// response) must never overtake an earlier resident batch (such as
+    /// `Runtime.consoleAPICalled` from the resolving timer turn) from the same
+    /// stream.
+    pub(super) fn earlier_same_stream_output_is_pending(
+        &self,
+        cursor: RendererOutputCursor,
+    ) -> bool {
+        self.undelivered_renderer_outputs.iter().any(|earlier| {
+            earlier.stream() == cursor.stream() && earlier.sequence() < cursor.sequence()
+        })
+    }
+
     pub(super) fn renderer_output_source_is_pending(
         &self,
         residence: &ProtocolSchedulerResidence,
@@ -448,7 +484,8 @@ impl SchedulerQueues {
         let (source, requires_delivery) = match residence {
             ProtocolSchedulerResidence::RendererOutputPublication(work) => {
                 return work.projection_pending
-                    || self.delivery_predecessor_is_pending(work.delivery_predecessor);
+                    || self.delivery_predecessor_is_pending(work.delivery_predecessor)
+                    || self.earlier_same_stream_output_is_pending(work.renderer_output_cursor);
             }
             ProtocolSchedulerResidence::ProtocolWork { work, .. } => (
                 work.renderer_output_source(),

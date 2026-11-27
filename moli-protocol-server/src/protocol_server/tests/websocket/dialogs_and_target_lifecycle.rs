@@ -2378,3 +2378,84 @@ async fn websocket_cdp_empty_attached_session_survives_crash_rebinding_and_first
     socket.close(None).await.unwrap();
     abort_test_cdp_server(server).await;
 }
+
+#[tokio::test]
+async fn websocket_cdp_await_promise_delivers_all_console_events_before_evaluate_response() {
+    let (address, server) = spawn_test_protocol_server().await;
+    let endpoint = discover_browser_websocket_url(address).await.unwrap();
+    let (mut socket, _) = connect_async(endpoint).await.unwrap();
+    let context = cdp_create_browser_context(&mut socket, 1).await;
+    let target = cdp_create_attached_target(&mut socket, 2, &context).await;
+
+    let _ = send_cdp_command(
+        &mut socket,
+        10,
+        "Runtime.enable",
+        Some(&target.session_id),
+        json!({}),
+    )
+    .await;
+    let _ = send_cdp_command(
+        &mut socket,
+        11,
+        "Page.enable",
+        Some(&target.session_id),
+        json!({}),
+    )
+    .await;
+
+    let script = r#"
+        (async () => {
+            for (let i = 0; i < 100; i++) {
+                console.log('flood-' + i);
+                if (i % 25 === 0) {
+                    await new Promise(resolve => setTimeout(resolve, 1));
+                }
+            }
+            return 'done';
+        })()
+    "#;
+    let messages = send_cdp_command(
+        &mut socket,
+        12,
+        "Runtime.evaluate",
+        Some(&target.session_id),
+        json!({
+            "expression": script,
+            "awaitPromise": true,
+            "returnByValue": true,
+        }),
+    )
+    .await;
+
+    let response_index = messages
+        .iter()
+        .position(|message| message["id"] == json!(12))
+        .expect("Runtime.evaluate awaitPromise response");
+    assert_eq!(
+        messages[response_index]["result"]["result"]["value"],
+        json!("done"),
+        "unexpected evaluate response: {:#?}",
+        messages[response_index]
+    );
+    let console_before_response: Vec<String> = messages[..response_index]
+        .iter()
+        .filter(|message| {
+            message["sessionId"].as_str() == Some(target.session_id.as_str())
+                && message["method"] == json!("Runtime.consoleAPICalled")
+        })
+        .filter_map(|message| {
+            message["params"]["args"][0]["value"]
+                .as_str()
+                .map(str::to_owned)
+        })
+        .collect();
+    let expected: Vec<String> = (0..100).map(|i| format!("flood-{i}")).collect();
+    assert_eq!(
+        console_before_response, expected,
+        "all consoleAPICalled events emitted during awaitPromise evaluation must arrive before the evaluate response"
+    );
+
+    socket.close(None).await.unwrap();
+    abort_test_cdp_server(server).await;
+}

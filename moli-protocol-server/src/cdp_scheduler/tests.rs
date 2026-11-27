@@ -3634,3 +3634,120 @@ async fn attachment_churn_needs_no_browser_readiness_waiter_and_reclaims_native_
         })
         .await;
 }
+
+#[test]
+fn later_same_stream_publication_waits_for_earlier_resident_output() {
+    let page_id = PageId::new_for_testing(9);
+    let earlier_pub = post_load_renderer_publication(page_id, 1);
+    let earlier = publication_cursor(&earlier_pub);
+    let later = RendererOutputCursor::new_for_test(earlier.stream(), earlier.sequence() + 1);
+    let candidate = future_load_candidate(&earlier_pub);
+    let (mut scheduler, _tasks) = CdpScheduler::new(CdpConnection::new());
+
+    // Case 1: an earlier post-load timer publication is held behind its
+    // provisional load-binding window while a later unconstrained response on
+    // the exact same stream finishes projection.
+    scheduler.queues.enqueue_pending_renderer_output_projection(
+        earlier,
+        Vec::new(),
+        Some(candidate),
+    );
+    scheduler
+        .queues
+        .enqueue_pending_renderer_output_projection(later, Vec::new(), None);
+    assert!(scheduler.queues.complete_renderer_output_projection(
+        earlier,
+        ProtocolOutputSequence::from_messages(vec![json!({
+            "method": "Runtime.consoleAPICalled",
+            "params": {"marker": "timer-console"},
+        })]),
+    ));
+    assert!(scheduler.queues.complete_renderer_output_projection(
+        later,
+        ProtocolOutputSequence::from_messages(vec![json!({
+            "id": 7,
+            "result": {"result": {"type": "string", "value": "done"}},
+        })]),
+    ));
+
+    assert!(
+        scheduler
+            .queues
+            .take_unconstrained_renderer_output(later)
+            .is_none(),
+        "a later publication on the same stream must not overtake an undelivered earlier batch"
+    );
+    assert_eq!(
+        scheduler.next_protocol_scheduler_step(),
+        ProtocolSchedulerStep::CloseLoadBindingWindow
+    );
+    scheduler.close_protocol_residence_load_binding_window();
+    assert_eq!(
+        scheduler.next_protocol_scheduler_step(),
+        ProtocolSchedulerStep::CompleteReadyResidence
+    );
+    let mut delivered = scheduler.complete_next_protocol_residence();
+    assert_eq!(
+        scheduler.next_protocol_scheduler_step(),
+        ProtocolSchedulerStep::CompleteReadyResidence
+    );
+    delivered.append(scheduler.complete_next_protocol_residence());
+    assert_eq!(
+        delivered.into_messages(),
+        vec![
+            json!({
+                "method": "Runtime.consoleAPICalled",
+                "params": {"marker": "timer-console"},
+            }),
+            json!({
+                "id": 7,
+                "result": {"result": {"type": "string", "value": "done"}},
+            }),
+        ],
+    );
+    assert_eq!(scheduler.queues.protocol_residence_len(), 0);
+
+    // Case 2: while an earlier same-stream publication is still projecting,
+    // a later projected batch on the same stream cannot jump ahead either.
+    let third = RendererOutputCursor::new_for_test(earlier.stream(), earlier.sequence() + 2);
+    let fourth = RendererOutputCursor::new_for_test(earlier.stream(), earlier.sequence() + 3);
+    scheduler
+        .queues
+        .enqueue_pending_renderer_output_projection(third, Vec::new(), None);
+    scheduler
+        .queues
+        .enqueue_pending_renderer_output_projection(fourth, Vec::new(), None);
+    assert!(scheduler.queues.complete_renderer_output_projection(
+        fourth,
+        ProtocolOutputSequence::from_messages(vec![json!({"id": 8, "result": {}})]),
+    ));
+    assert!(
+        scheduler
+            .queues
+            .take_unconstrained_renderer_output(fourth)
+            .is_none(),
+        "a later same-stream batch cannot release while an earlier projection is still pending"
+    );
+    assert_eq!(scheduler.next_ungated_protocol_residence_index(), None);
+    assert!(scheduler.queues.complete_renderer_output_projection(
+        third,
+        ProtocolOutputSequence::from_messages(vec![json!({"method": "Runtime.consoleAPICalled"})]),
+    ));
+    let mut second_round = scheduler
+        .queues
+        .take_unconstrained_renderer_output(third)
+        .expect("earlier batch releases once its own projection finishes");
+    second_round.append(
+        scheduler
+            .queues
+            .take_unconstrained_renderer_output(fourth)
+            .expect("later batch releases once the earlier same-stream batch is delivered"),
+    );
+    assert_eq!(
+        second_round.into_messages(),
+        vec![
+            json!({"method": "Runtime.consoleAPICalled"}),
+            json!({"id": 8, "result": {}}),
+        ],
+    );
+}
