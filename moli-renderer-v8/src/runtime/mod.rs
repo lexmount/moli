@@ -455,8 +455,8 @@ pub use self::page_viewport::{
     RendererPageNavigationState, RendererViewportCursor, RendererViewportCursorKind,
     RendererViewportEdit, RendererViewportEditAction, RendererViewportEditReply,
     RendererViewportEditor, RendererViewportFrame, RendererViewportNavigation,
-    RendererViewportPointerInput, RendererViewportSubscription, RendererViewportWheelInput,
-    RendererViewportWheelPhase,
+    RendererViewportPaste, RendererViewportPointerInput, RendererViewportSubscription,
+    RendererViewportWheelInput, RendererViewportWheelPhase,
 };
 pub(crate) use self::page_vm::PageVm;
 use self::page_vm::PageVmDropTracker;

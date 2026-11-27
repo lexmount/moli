@@ -31,7 +31,7 @@ use crate::{
     },
     runtime::{
         RendererDragData, RendererDragDataItem, RendererViewportEdit, RendererViewportEditAction,
-        RendererViewportEditor,
+        RendererViewportEditor, RendererViewportPaste,
     },
     util::node_wrapper_from_handle,
 };
@@ -151,22 +151,24 @@ fn active_target(host: &PageScriptHost) -> Option<DomHandle> {
     contenteditable_editing_host(host, active)
 }
 
-fn contenteditable_clipboard_target(
+fn clipboard_selection_target(
     host: &PageScriptHost,
     focus_target: DomHandle,
     document: DomHandle,
 ) -> Option<DomHandle> {
-    if is_text_control(host, focus_target)
-        || contenteditable_editing_host(host, focus_target).is_none()
-    {
-        return None;
-    }
-    let selection = host.document_selection_snapshot(document)?;
     let dom = host.dom_host();
-    let (start, _) = selection.ordered_in_dom(dom)?;
+    let (start, end) = host
+        .document_selection_snapshot(document)?
+        .ordered_in_dom(dom)?;
     let container = start.container;
+    // An unfocused caret is hidden, while a document range can remain visible.
+    if start == end {
+        let editor = contenteditable_editing_host(host, focus_target)?;
+        if !dom.dom().contains(editor, container) {
+            return None;
+        }
+    }
     let node = dom.node(container)?;
-    // The selection can start in a nested editable while its outer editor has focus.
     if !node.is_connected() || dom.owner_document_handle(container) != Some(document) {
         return None;
     }
@@ -211,30 +213,36 @@ fn document_selection_text(scope: &mut v8::PinScope<'_, '_>) -> Option<String> {
 }
 
 struct ClipboardTarget {
-    focused: Option<DomHandle>,
-    focus_target: DomHandle,
     document: DomHandle,
     event_target: DomHandle,
 }
 
 impl ClipboardTarget {
     fn resolve(host: &PageScriptHost) -> Option<Self> {
-        let focused = host.active_element_handle();
-        let focus_target = focused.or_else(|| host.document_focus_fallback_handle())?;
+        let focus_target = host
+            .active_element_handle()
+            .or_else(|| host.document_focus_fallback_handle())?;
         let document = host.dom_host().owner_document_handle(focus_target)?;
-        let event_target =
-            contenteditable_clipboard_target(host, focus_target, document).unwrap_or(focus_target);
+        if !host.document_is_fully_active(document) {
+            return None;
+        }
+        let event_target = if is_text_control(host, focus_target) {
+            focus_target
+        } else {
+            clipboard_selection_target(host, focus_target, document).unwrap_or(focus_target)
+        };
         Some(Self {
-            focused,
-            focus_target,
             document,
             event_target,
         })
     }
 
-    fn still_focused(&self, host: &PageScriptHost) -> bool {
-        host.active_element_handle() == self.focused
-            && host.dom_host().owner_document_handle(self.focus_target) == Some(self.document)
+    fn is_current_document(&self, host: &PageScriptHost) -> bool {
+        let focus = host
+            .active_element_handle()
+            .unwrap_or_else(|| host.document_handle());
+        host.dom_host().owner_document_handle(focus) == Some(self.document)
+            && host.document_is_fully_active(self.document)
     }
 }
 
@@ -302,9 +310,10 @@ pub(crate) fn copy_or_cut_viewport_selection(
 ) -> Option<String> {
     let runtime = unsafe { &*host };
     let clipboard = ClipboardTarget::resolve(runtime)?;
+    let initial_focus = runtime.active_element_handle();
     if runtime
         .dom_host()
-        .node(clipboard.focus_target)
+        .node(clipboard.event_target)
         .and_then(Node::as_element)
         .is_some_and(is_password_control)
     {
@@ -324,7 +333,9 @@ pub(crate) fn copy_or_cut_viewport_selection(
     }
 
     let runtime = unsafe { &*host };
-    if !clipboard.still_focused(runtime) {
+    if !clipboard.is_current_document(runtime)
+        || (cut && runtime.active_element_handle() != initial_focus)
+    {
         return None;
     }
     if !cut {
@@ -400,23 +411,53 @@ impl ViewportEditing {
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,
         host: *mut PageScriptHost,
-        text: Option<&str>,
+        paste: &RendererViewportPaste,
         sequence: Option<u64>,
-    ) -> Option<()> {
-        let clipboard = ClipboardTarget::resolve(unsafe { &*host })?;
-        let realm = node_owner_document_relevant_context(scope, host, clipboard.event_target)?;
+    ) -> bool {
+        let Some(clipboard) = ClipboardTarget::resolve(unsafe { &*host }) else {
+            return false;
+        };
+        let Some(realm) = node_owner_document_relevant_context(scope, host, clipboard.document)
+        else {
+            return false;
+        };
         let scope = &mut v8::ContextScope::new(scope, realm);
-        let result = dispatch_clipboard_event(
-            scope,
-            host,
-            clipboard.event_target,
-            ClipboardEvent::Paste(text),
-        )?;
+        let applied = if let RendererViewportPaste::Text(text) = paste
+            && matches!(
+                dispatch_clipboard_event(
+                    scope,
+                    host,
+                    clipboard.event_target,
+                    ClipboardEvent::Paste(text.as_deref()),
+                ),
+                Some(ClipboardDispatch::Default)
+            )
+            && clipboard.is_current_document(unsafe { &*host })
+            && let Some(text) = text.as_deref().filter(|text| !text.is_empty())
+        {
+            self.insert_clipboard_text(scope, host, text)
+                .unwrap_or(false)
+        } else {
+            false
+        };
+        // The platform may have queued another edit after a canceled paste.
         let runtime = unsafe { &*host };
-        if !matches!(result, ClipboardDispatch::Default) || !clipboard.still_focused(runtime) {
-            return None;
+        if let Some(sequence) = sequence
+            && clipboard.is_current_document(runtime)
+            && let Some(target) = active_target(runtime)
+        {
+            self.remember_edit(scope, runtime, target, sequence);
         }
-        let text = text.filter(|text| !text.is_empty())?;
+        applied
+    }
+
+    fn insert_clipboard_text(
+        &mut self,
+        scope: &mut v8::PinScope<'_, '_>,
+        host: *mut PageScriptHost,
+        text: &str,
+    ) -> Option<bool> {
+        let runtime = unsafe { &*host };
         let target = active_target(runtime)?;
         let editor = read_editor(scope, runtime, target)?;
         let revision = editor.revision(runtime);
@@ -436,10 +477,7 @@ impl ViewportEditing {
         if existing.is_some() {
             composition_event(scope, host, target, "compositionend", "");
         }
-        if applied && let Some(sequence) = sequence {
-            self.remember_edit(scope, unsafe { &*host }, target, sequence);
-        }
-        applied.then_some(())
+        Some(applied)
     }
 
     fn remember_edit(
@@ -628,9 +666,14 @@ impl ViewportEditing {
                 }
                 applied
             }
-            RendererViewportEditAction::Paste { text } => self
-                .paste_from_clipboard(scope, host_ptr, Some(&text), None)
-                .is_some(),
+            RendererViewportEditAction::Paste { text } => {
+                return self.paste_from_clipboard(
+                    scope,
+                    host_ptr,
+                    &RendererViewportPaste::Text(Some(text)),
+                    Some(edit.sequence),
+                );
+            }
             RendererViewportEditAction::Finish => {
                 if let Some(state) = existing {
                     composition_event(

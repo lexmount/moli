@@ -368,8 +368,8 @@ pub use runtime::{
     RendererPageNavigationState, RendererViewportCursor, RendererViewportCursorKind,
     RendererViewportEdit, RendererViewportEditAction, RendererViewportEditReply,
     RendererViewportEditor, RendererViewportFrame, RendererViewportNavigation,
-    RendererViewportPointerInput, RendererViewportSubscription, RendererViewportWheelInput,
-    RendererViewportWheelPhase,
+    RendererViewportPaste, RendererViewportPointerInput, RendererViewportSubscription,
+    RendererViewportWheelInput, RendererViewportWheelPhase,
 };
 pub use runtime::{RendererPopupActivationParts, RendererRuntimeInspectorMessageResponseOrder};
 pub use service_worker_runtime::{

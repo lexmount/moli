@@ -617,6 +617,9 @@ async fn run_tab(browser: Browser, downloads: Rc<Downloads>, mut tab: OpenTab) {
                             (Ok(true), ClipboardAction::Paste { text, sequence }) => {
                                 page.paste_viewport_text(document, text, sequence).await.map(|_| ())
                             }
+                            (Ok(false), ClipboardAction::Paste { sequence: Some(sequence), .. }) => {
+                                page.acknowledge_canceled_viewport_paste(document, sequence).await
+                            }
                             (Ok(false), _) => Ok(()),
                             (Err(error), _) => Err(error),
                         };
@@ -1319,6 +1322,78 @@ mod tests {
                 assert!(text.is_err());
             }
         }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn canceled_paste_keydown_keeps_the_next_edit() -> Result<()> {
+        use moli_core::RendererViewportEditAction;
+
+        let (host, _events) = BrowserHost::start(None, None)?;
+        let mut tab = host.open_tab()?;
+        navigate(
+            &tab,
+            concat!(
+                "data:text/html,<title>Cancel Paste</title><input id=editor value=ABC><script>",
+                "editor.focus();editor.setSelectionRange(1,2);",
+                "editor.addEventListener('keydown',e=>e.preventDefault(),{once:true});",
+                "editor.addEventListener('paste',()=>editor.value='unexpected');</script>",
+            ),
+        )?;
+        let document = show_tab(&mut tab, "Cancel Paste", 1, [255; 4]).await?;
+        let editor = tokio::time::timeout(
+            Duration::from_secs(5),
+            tab.state.wait_for(|state| {
+                state
+                    .editor
+                    .as_ref()
+                    .is_some_and(|editor| editor.selection == (1..2))
+            }),
+        )
+        .await??
+        .editor
+        .clone()
+        .context("editor before paste shortcut")?;
+        for command in [
+            TabCommand::Clipboard {
+                document,
+                key: KeyInput {
+                    event: "keydown",
+                    key: "v".into(),
+                    code: "KeyV".into(),
+                    modifiers: if cfg!(target_os = "macos") { 4 } else { 2 },
+                    repeat: false,
+                },
+                action: ClipboardAction::Paste {
+                    text: Some("X".into()),
+                    sequence: Some(1),
+                },
+            },
+            TabCommand::Edit(RendererViewportEdit {
+                document,
+                target: editor.target,
+                revision: editor.revision,
+                sequence: 2,
+                previous: Some(1),
+                action: RendererViewportEditAction::Commit {
+                    range: None,
+                    text: "!".into(),
+                },
+            }),
+        ] {
+            tab.commands
+                .send(command)
+                .map_err(|_| anyhow::anyhow!("queue paste followed by typing"))?;
+        }
+        let state = tokio::time::timeout(
+            Duration::from_secs(5),
+            tab.state.wait_for(|state| state.editor_ack == Some(2)),
+        )
+        .await??;
+        assert_eq!(
+            state.editor.as_ref().context("editor after typing")?.text,
+            "A!C"
+        );
         Ok(())
     }
 

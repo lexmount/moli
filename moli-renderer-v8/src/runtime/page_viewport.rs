@@ -72,6 +72,11 @@ pub enum RendererViewportEditAction {
     Cancel,
 }
 
+pub enum RendererViewportPaste {
+    Text(Option<String>),
+    CanceledByKeydown,
+}
+
 pub struct RendererViewportEditReply {
     pub applied: bool,
     pub editor: Option<RendererViewportEditor>,
@@ -485,7 +490,7 @@ impl PageVm {
     pub(super) fn paste_viewport_text(
         &mut self,
         document: RendererDocumentLifecycleIdentity,
-        text: Option<&str>,
+        paste: &RendererViewportPaste,
         sequence: Option<u64>,
     ) -> anyhow::Result<bool> {
         if document != self.document_lifecycle.identity()
@@ -496,7 +501,7 @@ impl PageVm {
         let (Some(state), Some(vm)) = (self.viewport_frames.as_mut(), self.vm.as_mut()) else {
             return Ok(false);
         };
-        let applied = vm.paste_viewport_text(&mut state.editing, text, sequence)?;
+        let applied = vm.paste_viewport_text(&mut state.editing, paste, sequence)?;
         self.wake_viewport_frames();
         Ok(applied)
     }

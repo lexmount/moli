@@ -965,13 +965,11 @@ impl ScriptVm {
     pub(crate) fn paste_viewport_text(
         &mut self,
         editing: &mut crate::context_bootstrap::viewport_edit::ViewportEditing,
-        text: Option<&str>,
+        paste: &crate::runtime::RendererViewportPaste,
         sequence: Option<u64>,
     ) -> Result<bool> {
         let result = self.with_default_context_scope(|scope, host| {
-            Ok(editing
-                .paste_from_clipboard(scope, host, text, sequence)
-                .is_some())
+            Ok(editing.paste_from_clipboard(scope, host, paste, sequence))
         });
         self.finish_input_event_dispatch_turn(result)
     }

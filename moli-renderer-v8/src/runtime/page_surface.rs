@@ -5147,7 +5147,7 @@ pub enum RendererPageCommand {
     #[cfg(feature = "molio")]
     PasteViewportText {
         document: RendererDocumentLifecycleIdentity,
-        text: Option<String>,
+        paste: super::RendererViewportPaste,
         sequence: Option<u64>,
     },
     #[cfg(feature = "molio")]

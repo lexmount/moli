@@ -2098,6 +2098,83 @@ async fn viewport_copy_dispatches_to_the_selection_and_supports_custom_text() ->
 }
 
 #[tokio::test]
+async fn viewport_clipboard_follows_document_selection_and_focus_changes() -> Result<()> {
+    let browser =
+        Browser::new(BrowserConfig::default().with_layout_policy(LayoutPolicy::Realtime))?;
+    let mut page = browser
+        .fetch(&html_url(
+            "<p id=part>abcde</p><input id=source value=first><input id=destination value=second>",
+        ))
+        .await?;
+    let mut frames = page
+        .subscribe_viewport_frames(ViewportSurface::default(), 1)
+        .await?;
+    let document = frame(&mut frames, |frame| frame.snapshot.is_some())
+        .await?
+        .document;
+
+    page.evaluate_runtime_expression_async(
+        r#"
+        getSelection().setBaseAndExtent(part.firstChild, 3, part.firstChild, 1);
+        part.addEventListener('copy', event => {
+          event.clipboardData.setData('text/plain', event.target.id);
+          event.preventDefault();
+        }, {once:true});
+        "#,
+    )
+    .await?;
+    let plain_copy = page.copy_viewport_selection(document).await?;
+
+    page.evaluate_runtime_expression_async(
+        r#"
+        source.focus();
+        source.select();
+        source.addEventListener('copy', () => {
+          destination.focus();
+          destination.select();
+        }, {once:true});
+        "#,
+    )
+    .await?;
+    let redirected_copy = page.copy_viewport_selection(document).await?;
+
+    page.evaluate_runtime_expression_async(
+        r#"
+        source.focus();
+        source.select();
+        source.addEventListener('paste', () => {
+          destination.focus();
+          destination.select();
+        }, {once:true});
+        "#,
+    )
+    .await?;
+    let pasted = page
+        .paste_viewport_text(document, Some("pasted".into()), None)
+        .await?;
+    let state = page
+        .evaluate_runtime_expression_async(
+            "JSON.stringify([source.value, destination.value, document.activeElement.id])",
+        )
+        .await?;
+    assert_eq!(
+        (
+            plain_copy.as_deref(),
+            redirected_copy.as_deref(),
+            pasted,
+            state["value"].as_str()
+        ),
+        (
+            Some("part"),
+            Some("second"),
+            true,
+            Some(r#"["first","pasted","destination"]"#)
+        )
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn viewport_paste_dispatches_readonly_data_before_editing() -> Result<()> {
     use moli_core::{RendererViewportEdit, RendererViewportEditAction};
 
@@ -2140,9 +2217,13 @@ async fn viewport_paste_dispatches_readonly_data_before_editing() -> Result<()> 
         "#,
     )
     .await?;
+    let editor_before_cancel = page
+        .viewport_editor()
+        .await?
+        .context("editor before canceled paste")?;
     assert!(
         !page
-            .paste_viewport_text(document, Some("X".into()), None)
+            .paste_viewport_text(document, Some("X".into()), Some(1))
             .await?
     );
     let state = page
@@ -2151,15 +2232,36 @@ async fn viewport_paste_dispatches_readonly_data_before_editing() -> Result<()> 
         )
         .await?;
     assert_eq!(state["value"], r#"["ABC","",[["paste",true,"X"]]]"#);
+    let after_canceled_paste = page
+        .edit_viewport(RendererViewportEdit {
+            document,
+            target: editor_before_cancel.target,
+            revision: editor_before_cancel.revision,
+            sequence: 2,
+            previous: Some(1),
+            action: RendererViewportEditAction::Commit {
+                range: None,
+                text: "!".into(),
+            },
+        })
+        .await?;
+    assert!(after_canceled_paste.applied);
+    assert_eq!(
+        after_canceled_paste
+            .editor
+            .context("editor after canceled paste")?
+            .text,
+        "A!C"
+    );
 
-    page.evaluate_runtime_expression_async("cancelPaste = false; pasteEvents = []")
+    page.evaluate_runtime_expression_async("editor.value = 'ABC'; editor.setSelectionRange(1,2); cancelPaste = false; pasteEvents = []")
         .await?;
     let editor_before = page
         .viewport_editor()
         .await?
         .context("editor before paste")?;
     assert!(
-        page.paste_viewport_text(document, Some("😀".into()), Some(1))
+        page.paste_viewport_text(document, Some("😀".into()), Some(3))
             .await?
     );
     let state = page.evaluate_runtime_expression_async(
@@ -2174,8 +2276,8 @@ async fn viewport_paste_dispatches_readonly_data_before_editing() -> Result<()> 
             document,
             target: editor_before.target,
             revision: editor_before.revision,
-            sequence: 2,
-            previous: Some(1),
+            sequence: 4,
+            previous: Some(3),
             action: RendererViewportEditAction::Commit {
                 range: None,
                 text: "!".into(),

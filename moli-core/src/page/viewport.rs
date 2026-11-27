@@ -2,8 +2,8 @@ use anyhow::Result;
 use moli_page_types::ViewportSurface;
 use moli_renderer_v8::{
     RendererDevToolsPageReply, RendererPageNavigationState, RendererViewportCursor,
-    RendererViewportFrame, RendererViewportPointerInput, RendererViewportSubscription,
-    RendererViewportWheelInput,
+    RendererViewportFrame, RendererViewportPaste, RendererViewportPointerInput,
+    RendererViewportSubscription, RendererViewportWheelInput,
 };
 use std::sync::Arc;
 use tokio::sync::{Notify, watch};
@@ -113,10 +113,35 @@ impl Page {
         text: Option<String>,
         sequence: Option<u64>,
     ) -> Result<bool> {
+        self.complete_viewport_paste(document, RendererViewportPaste::Text(text), sequence)
+            .await
+    }
+
+    /// Completes the editor sequence when a keydown handler cancels the paste shortcut.
+    pub async fn acknowledge_canceled_viewport_paste(
+        &mut self,
+        document: crate::RendererDocumentLifecycleIdentity,
+        sequence: u64,
+    ) -> Result<()> {
+        self.complete_viewport_paste(
+            document,
+            RendererViewportPaste::CanceledByKeydown,
+            Some(sequence),
+        )
+        .await
+        .map(|_| ())
+    }
+
+    async fn complete_viewport_paste(
+        &mut self,
+        document: crate::RendererDocumentLifecycleIdentity,
+        paste: RendererViewportPaste,
+        sequence: Option<u64>,
+    ) -> Result<bool> {
         let reply = self
             .dispatch_page_command_async(RendererPageCommand::PasteViewportText {
                 document,
-                text,
+                paste,
                 sequence,
             })
             .await?;
