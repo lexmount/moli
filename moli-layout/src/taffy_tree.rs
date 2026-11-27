@@ -59,6 +59,7 @@ impl NumericTree {
 pub(crate) struct PreparedWorldLayout {
     pub(crate) tree: NumericTree,
     pub(crate) reused_tree: bool,
+    outside_list_markers: Vec<LayoutBoxId>,
     // Post-layout adapters change box geometry before the next feedback pass.
     numeric_unrounded_layouts: Vec<Layout>,
     feedback_invalidation_marks: Vec<bool>,
@@ -173,12 +174,17 @@ where
 
     world.resolved_grid_tracks.clear();
     world.native_grid_details.clear();
+    let mut outside_list_markers = Vec::new();
     for index in 0..world.boxes.len() {
+        let id = LayoutBoxId::from_index(index);
         if !reuse_numeric_layout {
-            world.clear_layout_caches(LayoutBoxId::from_index(index));
+            world.clear_layout_caches(id);
             world.boxes[index].unrounded_layout = Layout::with_order(0);
         }
         let layout_box = &mut world.boxes[index];
+        if layout_box.outside_list_marker {
+            outside_list_markers.push(id);
+        }
         if !preserve_final_layout {
             layout_box.final_layout = Layout::with_order(0);
         }
@@ -219,6 +225,7 @@ where
     let mut prepared = PreparedWorldLayout {
         tree,
         reused_tree,
+        outside_list_markers,
         numeric_unrounded_layouts: Vec::with_capacity(world.boxes.len()),
         feedback_invalidation_marks: vec![false; world.boxes.len()],
         feedback_invalidation_worklist: Vec::new(),
@@ -333,7 +340,7 @@ where
     finish_positioned_static_layout(world, viewport, &prepared.tree.positioned_static_sources);
     finish_inline_positioned_layout(world, viewport);
     finish_form_control_contents(world);
-    finish_outside_list_markers(world);
+    finish_outside_list_markers(world, &prepared.outside_list_markers);
     round_layout_to_css_subpixels(world, root);
     if let Some(fixed_root) = fixed_root {
         round_layout_to_css_subpixels(world, fixed_root);
@@ -342,11 +349,7 @@ where
     // otherwise Taffy would allocate them a normal-flow row. Round each
     // detached numeric root explicitly so paint consumes the geometry written
     // by `finish_outside_list_markers` rather than its zeroed final layout.
-    let outside_markers = (0..world.boxes.len())
-        .map(LayoutBoxId::from_index)
-        .filter(|id| world.boxes[id.index()].outside_list_marker)
-        .collect::<Vec<_>>();
-    for marker in outside_markers {
+    for &marker in &prepared.outside_list_markers {
         round_layout_to_css_subpixels(world, marker.to_taffy());
     }
     world.finish_numeric_layout_tracking()
@@ -823,15 +826,11 @@ where
     None
 }
 
-fn finish_outside_list_markers<N>(world: &mut LayoutWorld<N>)
+fn finish_outside_list_markers<N>(world: &mut LayoutWorld<N>, markers: &[LayoutBoxId])
 where
     N: Copy + Debug + Eq + Hash,
 {
-    let markers = (0..world.boxes.len())
-        .map(LayoutBoxId::from_index)
-        .filter(|id| world.boxes[id.index()].outside_list_marker)
-        .collect::<Vec<_>>();
-    for marker in markers {
+    for &marker in markers {
         let Some(item) = world.boxes[marker.index()].layout_parent else {
             continue;
         };
