@@ -178,6 +178,16 @@ fn text_control_pointer_uses_editor_lines_and_password_value_offsets() {
 
         click(&mut page, bullet, 1, 0);
         assert_eq!(selection(&mut page, "secret"), "3:3:none");
+
+        page.vm_mut()
+            .eval("secret.value = 'Aß👩‍💻e\u{0301}Z'; secret.style.textTransform = 'uppercase'")
+            .unwrap();
+        let start = character_point(&mut page, "secret", 3);
+        let end = editor_point(&mut page, "secret", EditorPoint::Character(3, 0.8));
+        click(&mut page, start, 1, 0);
+        assert_eq!(selection(&mut page, "secret"), "2:2:none");
+        click(&mut page, end, 1, 0);
+        assert_eq!(selection(&mut page, "secret"), "7:7:none");
     });
 }
 

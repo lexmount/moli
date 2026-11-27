@@ -2,6 +2,8 @@
 
 use std::{collections::HashSet, fmt::Debug, hash::Hash};
 
+use unicode_segmentation::UnicodeSegmentation;
+
 use super::{
     model::{
         LayoutBoxModel, LayoutClipChainId, LayoutClipNode, LayoutCoordinateSpaceId, LayoutFragment,
@@ -94,12 +96,45 @@ pub struct LayoutCaretPosition<N> {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct LayoutTextControlCaret {
-    /// The UTF-16 offset of the hit edge of the source fragment.
+    /// The UTF-16 offset of the hit grapheme edge in the control value.
     pub offset: usize,
-    /// The UTF-16 start of the hit source fragment, for selecting its word.
+    /// The UTF-16 start of the hit grapheme, for selecting its word.
     pub source_start: usize,
-    /// Whether the hit is on the fragment's logical start half.
-    pub at_source_start: bool,
+}
+
+struct TextFragmentCaret {
+    offset: usize,
+    source_start: usize,
+    at_source_start: bool,
+}
+
+impl TextFragmentCaret {
+    fn in_text_control(self, value: &str) -> LayoutTextControlCaret {
+        let mut caret = LayoutTextControlCaret {
+            offset: self.offset,
+            source_start: self.source_start,
+        };
+        if value.is_ascii() {
+            return caret;
+        }
+        // Several source fragments can share a shaped grapheme rectangle.
+        // Snap interior offsets to the edge on the fragment's hit side.
+        let mut start = 0;
+        for grapheme in value.graphemes(true) {
+            let end = start + grapheme.encode_utf16().count();
+            if start < caret.source_start && caret.source_start < end {
+                caret.source_start = start;
+            }
+            if start < caret.offset && caret.offset < end {
+                caret.offset = if self.at_source_start { start } else { end };
+            }
+            if caret.offset <= end && caret.source_start <= end {
+                break;
+            }
+            start = end;
+        }
+        caret
+    }
 }
 
 impl<N> FrozenLayoutTree<N>
@@ -336,6 +371,7 @@ where
         &self,
         source: N,
         point: LayoutPoint,
+        value: &str,
     ) -> Option<LayoutTextControlCaret> {
         let control = self
             .boxes
@@ -385,18 +421,17 @@ where
                     &distance_to_interval(local_point.x, b.rect.x, b.rect.right()),
                 )
             });
-        Some(
-            nearest_fragment
-                .and_then(|fragment| text_fragment_caret(fragment, local_point.x))
-                .map_or(
-                    LayoutTextControlCaret {
-                        offset: line_start as usize,
-                        source_start: line_start as usize,
-                        at_source_start: true,
-                    },
-                    |(caret, _)| caret,
-                ),
-        )
+        let caret = nearest_fragment
+            .and_then(|fragment| text_fragment_caret(fragment, local_point.x))
+            .map_or(
+                TextFragmentCaret {
+                    offset: line_start as usize,
+                    source_start: line_start as usize,
+                    at_source_start: true,
+                },
+                |(caret, _)| caret,
+            );
+        Some(caret.in_text_control(value))
     }
 
     /// Streams candidates directly from canonical geometry, without retaining
@@ -602,7 +637,7 @@ fn distance_to_interval(value: f32, start: f32, end: f32) -> f32 {
     (value - value.clamp(start, end)).abs()
 }
 
-fn text_fragment_caret(fragment: &LayoutFragment, x: f32) -> Option<(LayoutTextControlCaret, f32)> {
+fn text_fragment_caret(fragment: &LayoutFragment, x: f32) -> Option<(TextFragmentCaret, f32)> {
     let LayoutFragmentKind::Text {
         source_utf16_range,
         rtl,
@@ -624,7 +659,7 @@ fn text_fragment_caret(fragment: &LayoutFragment, x: f32) -> Option<(LayoutTextC
         fragment.rect.right()
     };
     Some((
-        LayoutTextControlCaret {
+        TextFragmentCaret {
             offset,
             source_start: source_utf16_range.start,
             at_source_start,
