@@ -424,7 +424,7 @@ async fn implicit_font_network_load_waits_for_completion_and_font_set_ready() {
         "<!doctype html><span id=probe style='display:inline-block;font:40px NetworkFace'>AAAA</span>",
         &loader,
     );
-    vm.set_layout_policy(moli_page_types::LayoutPolicy::OnDemand);
+    vm.set_layout_policy(moli_page_types::LayoutPolicy::Lazy);
     vm.eval(&format!(r#"
         globalThis.result=[];globalThis.events=[];
         globalThis.face=new FontFace('NetworkFace','url("{url}")');document.fonts.add(face);

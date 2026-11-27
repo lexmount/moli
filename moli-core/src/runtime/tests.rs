@@ -5385,7 +5385,7 @@ async fn renderer_owner_created_page_runs_input_commands() -> Result<()> {
 #[tokio::test(flavor = "multi_thread")]
 async fn renderer_owner_created_page_runs_input_query_commands() -> Result<()> {
     let server = FixtureServer::spawn().await?;
-    let browser = Browser::new(AppConfig::default().with_layout_policy(LayoutPolicy::OnDemand))?;
+    let browser = Browser::new(AppConfig::default().with_layout_policy(LayoutPolicy::Lazy))?;
     let renderer_owner = browser.js_runtime.renderer_owner_handle();
     let page_url: url::Url = server.url("/input-query-commands").parse()?;
     let html = r#"
@@ -5483,7 +5483,7 @@ async fn renderer_owner_created_page_runs_input_query_commands() -> Result<()> {
 #[tokio::test(flavor = "multi_thread")]
 async fn renderer_owner_created_page_reports_real_client_rect_for_positioned_node() -> Result<()> {
     let server = FixtureServer::spawn().await?;
-    let browser = Browser::new(AppConfig::default().with_layout_policy(LayoutPolicy::OnDemand))?;
+    let browser = Browser::new(AppConfig::default().with_layout_policy(LayoutPolicy::Lazy))?;
     let renderer_owner = browser.js_runtime.renderer_owner_handle();
     let page_url: url::Url = server.url("/input-query-geometry").parse()?;
     let html = r#"

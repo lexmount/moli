@@ -487,7 +487,7 @@ fn protocol_server_test_runtime_config(
         fetch_config,
         optional_resource_fetch_mask,
         true,
-        LayoutPolicy::OnDemand,
+        LayoutPolicy::Lazy,
     )
     // Most protocol fixtures exercise Chromium-compatible debugging, including pauses.
     .with_debugger_enabled(true)

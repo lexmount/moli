@@ -37,7 +37,7 @@ document.body.innerHTML = '<input type=password value="Aß😀e\u0301Z">';
 async fn native_pdf_requests_only_css_images_used_by_the_capture() {
     run_page_vm_async_test(async move {
         let image = "data:image/webp;base64,UklGRhwAAABXRUJQVlA4TA8AAAAvAUAAAAcQ/Y/+ByKi/wEA";
-        for policy in [LayoutPolicy::OnDemand, LayoutPolicy::Realtime] {
+        for policy in [LayoutPolicy::Lazy, LayoutPolicy::Realtime] {
             for (print_background, uses_mask) in [(false, false), (true, false), (false, true)] {
                 let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default())?;
                 loader.set_optional_resource_fetch_mask(
@@ -109,7 +109,7 @@ async fn native_pdf_embeds_a_loaded_font_under_its_print_declaration() {
         let data = base64::engine::general_purpose::STANDARD.encode(include_bytes!(
             "../../../../../../moli-layout/tests/fixtures/moli-ahem.woff2"
         ));
-        for policy in [LayoutPolicy::OnDemand, LayoutPolicy::Realtime] {
+        for policy in [LayoutPolicy::Lazy, LayoutPolicy::Realtime] {
             let mut page = test_page_vm_with_loader_and_document_url(
                 &loader,
                 Vec::new(),
@@ -168,7 +168,7 @@ async fn native_pdf_embeds_a_loaded_font_under_its_print_declaration() {
 fn print_truncates_deep_frames_without_publishing_partial_screen_layout() {
     run_page_vm_large_stack_async_test("bounded-print-frame-coverage", || async move {
         let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default()).unwrap();
-        for policy in [LayoutPolicy::OnDemand, LayoutPolicy::Realtime] {
+        for policy in [LayoutPolicy::Lazy, LayoutPolicy::Realtime] {
             for depth in [31, 32] {
                 let (mut page, _, _) = page_vm_with_bound_task_sources_and_owner_wake(
                     &loader,

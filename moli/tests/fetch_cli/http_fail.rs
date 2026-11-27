@@ -324,8 +324,8 @@ async fn fail_with_body_keeps_output_generation_errors_and_http_diagnostics() ->
             vec!["--eval", "document.querySelector('#app').textContent"],
             "TypeError",
         ),
-        (vec!["--dump", "screenshot"], "requires --layout"),
-        (vec!["--dump", "pdf"], "requires --layout"),
+        (vec!["--dump", "screenshot"], "requires --lazy"),
+        (vec!["--dump", "pdf"], "requires --lazy"),
     ] {
         for status in [200, 403] {
             let path = format!("/status/{status}");

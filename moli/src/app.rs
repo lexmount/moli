@@ -259,9 +259,9 @@ async fn run_cli_with_transport<W: Write>(
                 if !args.fail || http_failure.is_none() {
                     let rendered = async {
                         if let Some(expression) = eval_expression.as_deref() {
-                            // OnDemand needs an explicit sample before the script.
+                            // Lazy needs an explicit sample before the script.
                             // Realtime refreshes at each geometry demand itself.
-                            if config.browser.layout_policy() == moli_core::LayoutPolicy::OnDemand {
+                            if config.browser.layout_policy() == moli_core::LayoutPolicy::Lazy {
                                 page.publish_layout_async()
                                     .await
                                     .context("failed to publish layout before evaluating JavaScript")?;

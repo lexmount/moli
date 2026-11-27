@@ -4,12 +4,10 @@ use moli_core::LayoutPolicy;
 #[test]
 fn realtime_cli_selects_one_policy_without_enabling_optional_resources() {
     for command in ["fetch", "serve"] {
-        for legacy_flag in [false, true] {
+        for lazy_flag in [None, Some("--layout"), Some("--lazy")] {
             for resources in [false, true] {
                 let mut args = vec!["moli", command, "--realtime", "--scrollbars"];
-                if legacy_flag {
-                    args.push("--layout");
-                }
+                args.extend(lazy_flag);
                 if resources {
                     args.extend(["--image", "--font"]);
                 }
@@ -52,9 +50,9 @@ fn realtime_environment_and_cli_priority_use_actual_enabled_values() {
             (None, Some("false"), "", "Mock"),
             (None, Some("0"), "", "Mock"),
             (None, Some("false"), "--realtime", "Realtime"),
-            (None, Some("false"), "--layout", "OnDemand"),
+            (None, Some("false"), "--layout", "Lazy"),
             (Some("true"), Some("true"), "", "Realtime"),
-            (Some("true"), Some("0"), "", "OnDemand"),
+            (Some("true"), Some("0"), "", "Lazy"),
             (Some("false"), Some("true"), "--layout", "Realtime"),
         ] {
             for capability in ["none", "scrollbars", "screencast"] {

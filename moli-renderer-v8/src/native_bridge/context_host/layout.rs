@@ -474,7 +474,7 @@ impl PageScriptHost {
         request: LayoutPassRequest,
     ) -> Result<Option<LayoutPassResult<DomHandle>>, LayoutError> {
         use crate::layout_renderer::LayoutInputRetention;
-        let inputs = if self.layout_policy == moli_page_types::LayoutPolicy::OnDemand {
+        let inputs = if self.layout_policy == moli_page_types::LayoutPolicy::Lazy {
             LayoutInputRetention::Frozen
         } else {
             LayoutInputRetention::Transient

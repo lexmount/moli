@@ -1232,7 +1232,7 @@ async fn fetch_with_load_defers_css_images_until_a_paint_layout() -> Result<()> 
     let token = support::next_parser_image_fetch_policy_token();
     let browser = Browser::new(
         AppConfig::default()
-            .with_layout_policy(moli_page_types::LayoutPolicy::OnDemand)
+            .with_layout_policy(moli_page_types::LayoutPolicy::Lazy)
             .with_image_fetch_enabled(true),
     )?;
 

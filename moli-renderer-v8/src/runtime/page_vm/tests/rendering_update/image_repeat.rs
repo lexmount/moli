@@ -21,7 +21,7 @@ async fn ready_css_image_snapshot(
             Url::parse("https://example.com/raster-background-repeat.html")?,
         );
         page.vm_mut()
-            .set_layout_policy(moli_page_types::LayoutPolicy::OnDemand);
+            .set_layout_policy(moli_page_types::LayoutPolicy::Lazy);
         let executor = page.local_executor.clone();
         executor
             .run(async move {
@@ -34,7 +34,7 @@ async fn ready_css_image_snapshot(
                 page.vm_mut().sync_live_document_style_sources();
                 let viewport = moli_layout::PaintViewport::new(96, 80, 1.0);
                 // Establish readiness independently of the projection assertion.
-                // This is an ordinary OnDemand screen paint, with no Print job.
+                // This is an ordinary Lazy screen paint, with no Print job.
                 page.vm_mut()
                     .screenshot_layout_snapshot(viewport)?
                     .expect("image fixture has a layout root");

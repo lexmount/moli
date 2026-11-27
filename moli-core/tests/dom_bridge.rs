@@ -253,7 +253,7 @@ async fn range_exposes_constructor_create_range_and_clone_contents_basics() -> R
 #[tokio::test]
 async fn range_internal_algorithms_ignore_page_tampered_methods() -> Result<()> {
     let server = FixtureServer::spawn().await?;
-    let browser = Browser::new(AppConfig::default().with_layout_policy(LayoutPolicy::OnDemand))?;
+    let browser = Browser::new(AppConfig::default().with_layout_policy(LayoutPolicy::Lazy))?;
 
     let mut page = browser
         .fetch(&server.url("/compat/range-internal-algorithms-ignore-page-tampered-methods"))

@@ -26,7 +26,7 @@ mod scrollbars;
 #[tokio::test(flavor = "multi_thread")]
 async fn os_text_scale_keeps_styles_document_media_queries_and_font_faces_in_sync() {
     for policy in [
-        moli_core::LayoutPolicy::OnDemand,
+        moli_core::LayoutPolicy::Lazy,
         moli_core::LayoutPolicy::Realtime,
     ] {
         let mut ctx = TestContext::new_with_layout_policy(policy);
@@ -164,7 +164,7 @@ async fn os_text_scale_keeps_styles_document_media_queries_and_font_faces_in_syn
 #[tokio::test(flavor = "multi_thread")]
 async fn css_media_rule_matches_uses_the_stylesheet_document_after_adoption() {
     for policy in [
-        moli_core::LayoutPolicy::OnDemand,
+        moli_core::LayoutPolicy::Lazy,
         moli_core::LayoutPolicy::Realtime,
     ] {
         let mut ctx = TestContext::new_with_layout_policy(policy);

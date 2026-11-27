@@ -320,7 +320,7 @@ async fn scrollbars_hidden_false_and_detach_preserve_the_browser_startup_flag() 
             moli_fetch::FetchConfig::default(),
             moli_core::OptionalResourceFetchMask::NONE,
             true,
-            moli_core::LayoutPolicy::OnDemand,
+            moli_core::LayoutPolicy::Lazy,
         )
         .with_scrollbars_hidden(true),
     );

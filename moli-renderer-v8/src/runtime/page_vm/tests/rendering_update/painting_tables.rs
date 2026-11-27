@@ -765,7 +765,7 @@ async fn screenshot_preserves_table_cell_dimension_hints_and_avatar_columns() {
             Url::parse("https://example.com/table-cell-dimensions.html")?,
         );
         page.vm_mut()
-            .set_layout_policy(moli_page_types::LayoutPolicy::OnDemand);
+            .set_layout_policy(moli_page_types::LayoutPolicy::Lazy);
         let fixture = include_str!("../../../../../tests/fixtures/table-cell-dimensions.html");
         page.vm_mut().eval(&format!(
             "document.open();document.write({});document.close()",
@@ -825,7 +825,7 @@ async fn table_cell_absolute_descendants_use_final_geometry() {
             Vec::new(),
             Url::parse("https://example.com/table-cell-absolute.html")?,
         );
-        page.vm_mut().set_layout_policy(moli_page_types::LayoutPolicy::OnDemand);
+        page.vm_mut().set_layout_policy(moli_page_types::LayoutPolicy::Lazy);
         page.vm_mut().eval(r#"
 document.head.innerHTML = `<style>
 body { margin:0 } table { width:200px;border-spacing:0;table-layout:fixed }
@@ -863,7 +863,7 @@ async fn table_cell_nested_percentage_baseline_reaches_parent_measurement() {
             Vec::new(),
             Url::parse("https://example.com/table-cell-nested-baseline.html")?,
         );
-        page.vm_mut().set_layout_policy(moli_page_types::LayoutPolicy::OnDemand);
+        page.vm_mut().set_layout_policy(moli_page_types::LayoutPolicy::Lazy);
         page.vm_mut().eval(r#"
 document.head.innerHTML = `<style>
 body { margin:0 } table { width:200px;border-spacing:0;table-layout:fixed }
@@ -903,7 +903,7 @@ async fn table_cell_synthetic_baselines_ignore_positioned_overflow() {
             Vec::new(),
             Url::parse("https://example.com/table-cell-flow-baseline.html")?,
         );
-        page.vm_mut().set_layout_policy(moli_page_types::LayoutPolicy::OnDemand);
+        page.vm_mut().set_layout_policy(moli_page_types::LayoutPolicy::Lazy);
         page.vm_mut().eval(r#"
 document.head.innerHTML = `<style>
 body { margin:0 } table { width:200px;border-spacing:0;table-layout:fixed }
@@ -950,7 +950,7 @@ async fn table_cell_vertical_alignment_includes_floats() {
             Vec::new(),
             Url::parse("https://example.com/table-cell-float-alignment.html")?,
         );
-        page.vm_mut().set_layout_policy(moli_page_types::LayoutPolicy::OnDemand);
+        page.vm_mut().set_layout_policy(moli_page_types::LayoutPolicy::Lazy);
         page.vm_mut().eval(r#"
 document.head.innerHTML = `<style>
 body { margin:0 } table { width:200px;border-spacing:0;table-layout:fixed }
@@ -1000,7 +1000,7 @@ async fn screenshot_table_row_heights_match_chromium() {
         let mut page = test_page_vm_with_loader_and_document_url(
             &loader, Vec::new(), Url::parse("https://example.com/table-row-heights.html")?,
         );
-        page.vm_mut().set_layout_policy(moli_page_types::LayoutPolicy::OnDemand);
+        page.vm_mut().set_layout_policy(moli_page_types::LayoutPolicy::Lazy);
         let fixture = include_str!("../../../../../tests/fixtures/table-row-heights.html");
         page.vm_mut().eval(&format!("document.open();document.write({});document.close()", serde_json::to_string(fixture)?))?;
         page.vm_mut().prime_document_lifecycle_and_publish_stylesheets();
@@ -1075,7 +1075,7 @@ async fn screenshot_recascades_table_part_dimension_hints() {
             Url::parse("https://example.com/table-part-dimensions.html")?,
         );
         page.vm_mut()
-            .set_layout_policy(moli_page_types::LayoutPolicy::OnDemand);
+            .set_layout_policy(moli_page_types::LayoutPolicy::Lazy);
         let fixture = include_str!("../../../../../tests/fixtures/table-part-dimensions.html");
         page.vm_mut().eval(&format!(
             "document.open();document.write({});document.close()",
