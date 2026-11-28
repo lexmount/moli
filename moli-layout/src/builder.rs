@@ -465,7 +465,7 @@ where
         );
         layout_box.replaced_context = replaced_context;
         if semantics.replaced != Some(crate::LayoutReplacedKind::Svg) {
-            layout_box.replaced_image = self.source.replaced_image(source_node, &style);
+            layout_box.replaced_image = self.source.replaced_image(source_node);
         }
         if !matches!(
             style.display(),

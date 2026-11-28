@@ -307,11 +307,7 @@ impl LayoutSource for NativeLayoutSourceView<'_> {
         })
     }
 
-    fn replaced_image(
-        &self,
-        node: Self::NodeId,
-        _style: &moli_layout::ResolvedLayoutStyle,
-    ) -> Option<LayoutImageResource> {
+    fn replaced_image(&self, node: Self::NodeId) -> Option<LayoutImageResource> {
         if !self.paint_resources {
             return None;
         }

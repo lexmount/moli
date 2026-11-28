@@ -645,14 +645,9 @@ pub trait LayoutSource {
 
     /// Samples immutable replaced content already available to the source.
     ///
-    /// Inline SVG scenes come from the paint consumer. Implementations must
-    /// not retain the supplied style or call into live DOM/style state after
-    /// returning.
-    fn replaced_image(
-        &self,
-        _node: Self::NodeId,
-        _style: &ResolvedLayoutStyle,
-    ) -> Option<LayoutImageResource> {
+    /// Inline SVG scenes come from the paint consumer. The returned resource
+    /// must be usable without further access to live DOM or style state.
+    fn replaced_image(&self, _node: Self::NodeId) -> Option<LayoutImageResource> {
         None
     }
 

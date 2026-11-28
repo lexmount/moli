@@ -353,10 +353,7 @@ where
     }
 
     /// Pass-local geometry is validated once after all frame members are built.
-    pub(crate) fn record_painted_svg_geometry(
-        &mut self,
-        mut scenes: Vec<(N, Vec<(N, LayoutQuad)>)>,
-    ) {
+    pub(crate) fn record_svg_geometry(&mut self, mut scenes: Vec<(N, Vec<(N, LayoutQuad)>)>) {
         self.retain_pending_svg_scenes(&mut scenes);
         let additional = scenes.iter().map(|(_, objects)| objects.len()).sum();
         self.apply_svg_geometry(scenes, additional);
@@ -558,7 +555,7 @@ where
                     Some((root, decode(root, &input, size)))
                 })
                 .collect();
-            self.record_painted_svg_geometry(scenes);
+            self.record_svg_geometry(scenes);
             materialized = true;
         }
         for frame in &mut self.embedded_frames {

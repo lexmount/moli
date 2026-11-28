@@ -139,11 +139,7 @@ impl LayoutSource for Source {
         self.0[node].metrics
     }
 
-    fn replaced_image(
-        &self,
-        node: Self::NodeId,
-        _style: &ResolvedLayoutStyle,
-    ) -> Option<LayoutImageResource> {
+    fn replaced_image(&self, node: Self::NodeId) -> Option<LayoutImageResource> {
         self.0[node].image.clone()
     }
 }
