@@ -534,7 +534,7 @@ where
         let world = &self.prepared.world;
         world
             .boxes
-            .ordered()
+            .values()
             .enumerate()
             .filter_map(|(index, layout_box)| {
                 let source = layout_box.source()?;
@@ -785,7 +785,7 @@ where
     let mut embedded_viewports = HashMap::new();
     let mut svg_viewports = HashMap::new();
     let mut frozen_inline_svg = None;
-    for (index, layout_box) in world.boxes.ordered().enumerate() {
+    for (index, (id, layout_box)) in world.boxes.keyed().enumerate() {
         let Some(kind) = layout_box
             .element_semantics()
             .and_then(|element| element.replaced)
@@ -843,7 +843,7 @@ where
             css_viewport_dimension(height),
             request.viewport.device_pixel_ratio,
         );
-        embedded_viewports.insert(world.boxes.id_at(index), (source, viewport));
+        embedded_viewports.insert(id, (source, viewport));
     }
     let mut result = finish_layout_pass(
         world,

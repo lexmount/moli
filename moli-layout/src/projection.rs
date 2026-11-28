@@ -415,7 +415,7 @@ impl<N: Copy + Debug + Eq + Hash> RetainedLayoutWorld<N> {
 
         let mut brush_updates = Vec::new();
         let mut text_styles = Vec::new();
-        for (index, layout_box) in world.boxes.ordered().enumerate() {
+        for (index, layout_box) in world.boxes.values().enumerate() {
             if layout_box.kind == crate::LayoutBoxKind::Text
                 && let Some(parent) = layout_box.structural_parent
                 && let Some(style) = replacements.get(&parent)
@@ -612,7 +612,7 @@ fn projection_preserves_scrollbar_layout<N: Copy + Debug + Eq + Hash>(
         return true;
     }
     let policy = world.viewport_scroll_policy;
-    for (index, layout_box) in world.boxes.ordered().enumerate() {
+    for (index, layout_box) in world.boxes.values().enumerate() {
         let id = world.boxes.id_at(index);
         if world.is_viewport_defining_body(id) {
             continue;
@@ -821,7 +821,7 @@ where
     fn build_local_box_geometry(&mut self, overflow: &OverflowProjection) {
         assert_eq!(overflow.len(), self.world.boxes.len());
         let layout_origins = self.world.global_layout_origins();
-        for (index, layout_box) in self.world.boxes.ordered().enumerate() {
+        for (index, layout_box) in self.world.boxes.values().enumerate() {
             for diagnostic in layout_box.capability_diagnostics() {
                 self.diagnostics.push(PaintDiagnostic::new(
                     diagnostic.code(),
@@ -903,8 +903,7 @@ where
     }
 
     fn build_scroll_extents(&mut self, overflow_projection: &OverflowProjection) {
-        for index in 0..self.world.boxes.len() {
-            let id = self.world.boxes.id_at(index);
+        for (index, id) in self.world.boxes.keys().enumerate() {
             let (geometry, overflow) = overflow_projection.geometry_and_overflow(index);
             let is_root = id == self.world.root;
             let scrollbar_thickness = self.scrollbar_control_thickness(id);
@@ -1590,8 +1589,7 @@ where
             )
             .collect::<Vec<_>>();
         if !split_inline_boxes.is_empty() {
-            let mut pending = vec![world.root];
-            while let Some(id) = pending.pop() {
+            for (id, _, _) in world.boxes_in_tree_order() {
                 let output_id = world.output_id(id);
                 if let Some(group) = boxes[output_id.index()]
                     .geometry_source
@@ -1599,7 +1597,6 @@ where
                 {
                     group.push(output_id);
                 }
-                pending.extend(world.boxes[id].children.iter().rev().copied());
             }
         }
         let mut tree = FrozenLayoutTree::new(

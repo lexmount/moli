@@ -95,25 +95,23 @@ struct StackingDescendants {
 
 /// Only IFCs containing atomic objects need fragment-level interleaving. Keep
 /// the existing single-pass text projection for all other paragraphs.
-struct InlineOrder<'a> {
-    order: &'a crate::world::BoxOrder,
+struct InlineOrder {
     split: Vec<bool>,
     entries: Vec<Vec<PaintOrderEvent>>,
     atomic_lines: Vec<Option<(LayoutBoxId, usize)>>,
 }
 
-impl<'a> InlineOrder<'a> {
-    fn new<N>(world: &'a LayoutWorld<N>) -> Self
+impl InlineOrder {
+    fn new<N>(world: &LayoutWorld<N>) -> Self
     where
         N: Copy + Debug + Eq + Hash,
     {
         let mut result = Self {
-            order: world.boxes.order(),
             split: vec![false; world.boxes.len()],
             entries: vec![Vec::new(); world.boxes.len()],
             atomic_lines: vec![None; world.boxes.len()],
         };
-        for (owner_index, layout_box) in world.boxes.ordered().enumerate() {
+        for (owner_index, (owner, layout_box)) in world.boxes.keyed().enumerate() {
             let Some(context) = &layout_box.inline_layout else {
                 continue;
             };
@@ -124,7 +122,6 @@ impl<'a> InlineOrder<'a> {
             {
                 continue;
             }
-            let owner = world.boxes.id_at(owner_index);
             result.split[owner_index] = true;
             for (fragment, inline) in context.fragments.boxes.iter().enumerate() {
                 result.entries[world.boxes.index_of(inline.box_id)]
@@ -273,7 +270,7 @@ impl<'a> InlineOrder<'a> {
         if !world.boxes[target].style.is_visible() {
             return;
         }
-        let entries = &mut self.entries[self.order.index_of(target)];
+        let entries = &mut self.entries[world.boxes.index_of(target)];
         if let Some(PaintOrderEvent::InlineSelection {
             owner: previous_owner,
             line: previous_line,
@@ -295,23 +292,20 @@ impl<'a> InlineOrder<'a> {
         });
     }
 
-    fn order(&self, id: LayoutBoxId, sequence: &[usize]) -> (usize, usize, usize, usize) {
-        self.atomic_lines[self.order.index_of(id)].map_or(
-            (
-                sequence[self.order.index_of(id)],
-                0,
-                sequence[self.order.index_of(id)],
-                0,
-            ),
-            |(owner, line)| {
-                (
-                    sequence[self.order.index_of(owner)],
-                    line,
-                    sequence[self.order.index_of(id)],
-                    0,
-                )
-            },
-        )
+    fn order<N>(
+        &self,
+        world: &LayoutWorld<N>,
+        id: LayoutBoxId,
+        sequence: &[usize],
+    ) -> (usize, usize, usize, usize)
+    where
+        N: Copy + Debug + Eq + Hash,
+    {
+        let index = world.boxes.index_of(id);
+        let rank = sequence[index];
+        self.atomic_lines[index].map_or((rank, 0, rank, 0), |(owner, line)| {
+            (sequence[world.boxes.index_of(owner)], line, rank, 0)
+        })
     }
 }
 
@@ -430,7 +424,7 @@ fn collect_subtree<N>(
                     0,
                 )
             } else {
-                inline.order(id, sequence)
+                inline.order(world, id, sequence)
             },
             kind: PaintEntryKind::Group {
                 root: id,
@@ -599,7 +593,7 @@ where
     }
     let mut children = layout_box.children.clone();
     children.sort_by_key(|child| {
-        let child = &world.boxes[child];
+        let child = &world.boxes[*child];
         if matches!(
             child.style.position(),
             LayoutPosition::Absolute | LayoutPosition::Fixed

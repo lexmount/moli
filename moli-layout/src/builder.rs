@@ -525,7 +525,7 @@ where
         let style = marker.into_style();
         if let Some(item) = retained_item
             && let Some(id) = world.boxes[item].children.iter().copied().find(|id| {
-                let child = &world.boxes[id];
+                let child = &world.boxes[*id];
                 child.kind == LayoutBoxKind::PseudoMarker && child.owner == Some(source_node)
             })
         {
@@ -867,7 +867,7 @@ where
                 .filter(|id| {
                     !self.is_ignorable_whitespace_text(world, *id)
                         || (preserve_whitespace
-                            && world.boxes[id]
+                            && world.boxes[*id]
                                 .text
                                 .as_deref()
                                 .is_some_and(|text| !text.is_empty()))

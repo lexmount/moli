@@ -12,7 +12,7 @@ use crate::{
 
 mod storage;
 use slotmap::{Key, KeyData};
-pub(crate) use storage::{BoxOrder, LayoutBoxes};
+pub(crate) use storage::LayoutBoxes;
 
 slotmap::new_key_type! {
     /// Opaque generational identity scoped to one LayoutWorld.
@@ -999,7 +999,7 @@ where
         let mut first_child = vec![None; count];
         let mut next_sibling = vec![None; count];
         let mut stack = Vec::new();
-        for (index, layout_box) in self.boxes.ordered().enumerate().rev() {
+        for (index, layout_box) in self.boxes.values().enumerate().rev() {
             let id = LayoutOutputBoxId::from_index(index);
             if let Some(parent) = layout_box.layout_parent {
                 let parent_index = self.boxes.index_of(parent);
@@ -1087,67 +1087,71 @@ where
         self.source_mapping.entry(source).or_insert(id);
     }
 
-    pub(crate) fn preorder(&self) -> Result<Vec<LayoutBoxId>, LayoutError> {
-        let mut order = Vec::with_capacity(self.boxes.len());
+    pub(crate) fn boxes_in_tree_order(
+        &self,
+    ) -> impl Iterator<Item = (LayoutBoxId, &LayoutBox<N>, usize)> + '_ {
         let mut pending = vec![(self.root, 1)];
-        while let Some((id, depth)) = pending.pop() {
-            crate::error::check_layout_depth(depth)?;
-            order.push(id);
+        std::iter::from_fn(move || {
+            let (id, depth) = pending.pop()?;
+            let layout_box = &self.boxes[id];
             pending.extend(
-                self.boxes[id]
+                layout_box
                     .children
                     .iter()
                     .rev()
                     .map(|&child| (child, depth + 1)),
             );
+            Some((id, layout_box, depth))
+        })
+    }
+
+    pub(crate) fn preorder(&self) -> Result<Vec<LayoutBoxId>, LayoutError> {
+        let mut order = Vec::with_capacity(self.boxes.len());
+        for (id, _, depth) in self.boxes_in_tree_order() {
+            crate::error::check_layout_depth(depth)?;
+            order.push(id);
         }
         Ok(order)
     }
 
-    /// Keeps the existing box allocation and restores dense source order.
-    /// Changed IDs or discarded numeric placeholders retire the old topology.
-    pub(crate) fn compact_for_reuse(&mut self, order: Vec<LayoutBoxId>) {
+    /// Retires unreachable boxes and keeps the stable handles of survivors.
+    /// Dense positions can move, so the numeric tree and its sidecars expire.
+    pub(crate) fn retain_reachable(&mut self, live: &slotmap::SecondaryMap<LayoutBoxId, ()>) {
         let previous_len = self.boxes.len();
-        if self.boxes.keys().eq(order.iter().copied()) {
+        if live.len() == previous_len {
             return;
         }
         let started = moli_trace::cpu_profile_enabled().then(std::time::Instant::now);
-        // Per-order numeric sidecars belong to the old topology. Stable IFC
-        // handles and their independently validated measurements survive.
         self.numeric_tree = None;
-        self.boxes.retain_in_order(order);
-        if self.boxes.len() != previous_len {
-            let (live, boxes) = self.boxes.order_and_values_mut();
-            for layout_box in boxes {
-                layout_box.structural_parent =
-                    layout_box.structural_parent.filter(|id| live.contains(*id));
-                layout_box.parent = layout_box.parent.filter(|id| live.contains(*id));
-                layout_box.children.retain(|id| live.contains(*id));
-                if layout_box
-                    .inline_layout
-                    .as_ref()
-                    .is_some_and(|context| !context.references_only(|id| live.contains(id)))
-                {
-                    layout_box.inline_layout = None;
-                }
+        self.boxes.retain(|id| live.contains_key(id));
+        assert_eq!(self.boxes.len(), live.len());
+        for layout_box in self.boxes.values_mut() {
+            layout_box.structural_parent = layout_box
+                .structural_parent
+                .filter(|id| live.contains_key(*id));
+            layout_box.parent = layout_box.parent.filter(|id| live.contains_key(*id));
+            layout_box.children.retain(|id| live.contains_key(*id));
+            if layout_box
+                .inline_layout
+                .as_ref()
+                .is_some_and(|context| !context.references_only(|id| live.contains_key(id)))
+            {
+                layout_box.inline_layout = None;
             }
-            // Both numeric owner maps can use the outcomes of the IFC check
-            // above. Reordering living boxes cannot retire a reference.
-            if let Some(numeric) = &mut self.inline_numeric_reuse {
-                numeric.retain_owners(|id| {
-                    self.boxes
-                        .get(id)
-                        .is_some_and(|b| b.inline_layout.is_some())
-                });
-            }
-            let live = self.boxes.order();
-            self.source_mapping.retain(|_, id| live.contains(*id));
-            self.display_contents_mapping.retain(|_, ids| {
-                ids.retain(|id| live.contains(*id));
-                !ids.is_empty()
-            });
-            self.compact_cache_slots();
         }
+        if let Some(numeric) = &mut self.inline_numeric_reuse {
+            numeric.retain_owners(|id| {
+                self.boxes
+                    .get(id)
+                    .is_some_and(|b| b.inline_layout.is_some())
+            });
+        }
+        self.source_mapping.retain(|_, id| live.contains_key(*id));
+        self.display_contents_mapping.retain(|_, ids| {
+            ids.retain(|id| live.contains_key(*id));
+            !ids.is_empty()
+        });
+        self.compact_cache_slots();
         self.numeric_layout_touched_marks.clear();
         self.numeric_layout_touched_marks
             .resize(self.boxes.len(), false);
@@ -1257,14 +1261,9 @@ where
             }
             stack.extend(self.boxes[id].children.iter().copied());
         }
-        let order = self
-            .boxes
-            .keys()
-            .filter(|id| reachable.contains_key(*id))
-            .collect();
         self.display_contents_mapping
             .retain(|_, ids| !ids.is_empty());
-        self.compact_for_reuse(order);
+        self.retain_reachable(&reachable);
     }
 
     /// Validates graph ownership invariants without relying on allocator IDs.

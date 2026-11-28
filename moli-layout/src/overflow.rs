@@ -50,11 +50,15 @@ impl OverflowProjection {
         N: Copy + Debug + Eq + Hash,
     {
         let count = world.boxes.len();
-        let geometries = (0..count)
-            .map(|index| project_box(world, viewport, world.boxes.id_at(index)))
+        let geometries = world
+            .boxes
+            .keys()
+            .map(|id| project_box(world, viewport, id))
             .collect::<Vec<_>>();
-        let parents = (0..count)
-            .map(|index| overflow_parent(world, world.boxes.id_at(index)))
+        let parents = world
+            .boxes
+            .keys()
+            .map(|id| overflow_parent(world, id))
             .collect::<Vec<_>>();
         let mut children = vec![Vec::new(); count];
         for (index, parent) in parents.iter().copied().enumerate() {

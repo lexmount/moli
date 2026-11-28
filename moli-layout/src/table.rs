@@ -109,7 +109,7 @@ where
         let fixed = table.style.uses_fixed_table_layout();
         if (!collapsed && !fixed)
             || !table.children.iter().any(|child| {
-                let kind = world.boxes[child].kind;
+                let kind = world.boxes[*child].kind;
                 kind.is_internal_table_box() || kind == LayoutBoxKind::TableCaption
             })
         {
@@ -303,14 +303,14 @@ where
             .captions
             .iter()
             .copied()
-            .filter(|caption| !world.boxes[caption].style.caption_is_bottom())
+            .filter(|caption| !world.boxes[*caption].style.caption_is_bottom())
             .collect::<Vec<_>>();
         let bottom_captions = context
             .structure
             .captions
             .iter()
             .copied()
-            .filter(|caption| world.boxes[caption].style.caption_is_bottom())
+            .filter(|caption| world.boxes[*caption].style.caption_is_bottom())
             .collect::<Vec<_>>();
         let top_height = layout_captions(
             world,
@@ -1530,7 +1530,7 @@ mod tests {
             }
         );
         for id in cells.iter().chain([&caption, &group]) {
-            assert_eq!(world.boxes[id].unrounded_layout.size, Size::ZERO);
+            assert_eq!(world.boxes[*id].unrounded_layout.size, Size::ZERO);
         }
         assert_eq!(cold.baselines.first, Some(40.0));
         assert_eq!(cold, world.compute_child_layout(root.to_taffy(), inputs));
@@ -1659,12 +1659,12 @@ mod tests {
                 },
                 ..LayoutInput::HIDDEN
             };
-            let before: Vec<_> = world.boxes.ordered().map(|b| b.unrounded_layout).collect();
+            let before: Vec<_> = world.boxes.values().map(|b| b.unrounded_layout).collect();
             let cold = world.compute_child_layout(root.to_taffy(), inputs);
             assert_eq!(
                 world
                     .boxes
-                    .ordered()
+                    .values()
                     .map(|b| b.unrounded_layout)
                     .collect::<Vec<_>>(),
                 before,
@@ -1681,7 +1681,7 @@ mod tests {
             let computations = |world: &LayoutWorld<usize>| {
                 world
                     .boxes
-                    .ordered()
+                    .values()
                     .filter_map(|b| b.table_measure_cache.as_ref())
                     .map(|c| c.computations)
                     .sum::<usize>()
@@ -1690,7 +1690,7 @@ mod tests {
             assert_eq!(
                 world
                     .boxes
-                    .ordered()
+                    .values()
                     .filter(|b| b.table_measure_cache.is_some())
                     .count(),
                 depth

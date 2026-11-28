@@ -1,73 +1,21 @@
 use std::ops::{Index, IndexMut};
 
-use slotmap::{DenseSlotMap, SecondaryMap};
+use slotmap::DenseSlotMap;
 
 use super::{LayoutBox, LayoutBoxId};
 
-type BoxMap<N> = DenseSlotMap<LayoutBoxId, LayoutBox<N>>;
-
-/// Pass-local order. Handles never encode these positions.
-#[derive(Debug, Default)]
-pub(crate) struct BoxOrder {
-    ids: Vec<LayoutBoxId>,
-    positions: SecondaryMap<LayoutBoxId, u32>,
-}
-
-impl BoxOrder {
-    pub(crate) fn new(ids: Vec<LayoutBoxId>) -> Self {
-        let mut positions = SecondaryMap::new();
-        for (index, id) in ids.iter().copied().enumerate() {
-            assert!(
-                positions
-                    .insert(id, u32::try_from(index).expect("layout order exceeds u32"))
-                    .is_none(),
-                "a layout box may appear only once in an order"
-            );
-        }
-        Self { ids, positions }
-    }
-
-    #[inline]
-    pub(crate) fn index_of(&self, id: impl std::borrow::Borrow<LayoutBoxId>) -> usize {
-        self.position(*id.borrow())
-            .expect("layout handle does not belong to this order")
-    }
-
-    #[inline]
-    pub(crate) fn position(&self, id: LayoutBoxId) -> Option<usize> {
-        self.positions.get(id).map(|index| *index as usize)
-    }
-
-    #[inline]
-    pub(crate) fn contains(&self, id: LayoutBoxId) -> bool {
-        self.positions.contains_key(id)
-    }
-
-    #[inline]
-    pub(crate) fn id_at(&self, index: usize) -> LayoutBoxId {
-        self.ids[index]
-    }
-
-    #[inline]
-    pub(crate) fn len(&self) -> usize {
-        self.ids.len()
-    }
-}
-
-/// Stable box identities with an explicit logical iteration order.
-/// The backend's slot/dense storage order is never a tree or publication order.
+/// Stable handles identify boxes across passes. Dense indices belong to the
+/// current storage arrangement and index both working and published geometry.
 #[derive(Debug)]
 pub(crate) struct LayoutBoxes<N> {
-    entries: BoxMap<N>,
-    order: BoxOrder,
+    entries: DenseSlotMap<LayoutBoxId, LayoutBox<N>>,
     storage_revision: u64,
 }
 
 impl<N> Default for LayoutBoxes<N> {
     fn default() -> Self {
         Self {
-            entries: BoxMap::with_key(),
-            order: BoxOrder::default(),
+            entries: DenseSlotMap::with_key(),
             storage_revision: 0,
         }
     }
@@ -75,13 +23,8 @@ impl<N> Default for LayoutBoxes<N> {
 
 impl<N> LayoutBoxes<N> {
     pub(crate) fn insert(&mut self, value: LayoutBox<N>) -> LayoutBoxId {
-        let id = self.entries.insert(value);
         self.storage_revision += 1;
-        let order = &mut self.order;
-        let index = u32::try_from(order.ids.len()).expect("layout order exceeds u32");
-        order.ids.push(id);
-        assert!(order.positions.insert(id, index).is_none());
-        id
+        self.entries.insert(value)
     }
 
     #[cfg(test)]
@@ -90,9 +33,7 @@ impl<N> LayoutBoxes<N> {
     }
 
     pub(crate) fn pop(&mut self) -> Option<LayoutBox<N>> {
-        let order = &mut self.order;
-        let id = order.ids.pop()?;
-        order.positions.remove(id);
+        let id = *self.entries.keys_as_slice().last()?;
         self.storage_revision += 1;
         self.entries.remove(id)
     }
@@ -101,58 +42,52 @@ impl<N> LayoutBoxes<N> {
     pub(crate) fn len(&self) -> usize {
         self.entries.len()
     }
+
     #[inline]
     pub(crate) fn is_empty(&self) -> bool {
         self.entries.is_empty()
     }
+
     pub(crate) fn capacity(&self) -> usize {
         self.entries.capacity()
     }
 
     #[inline]
     pub(crate) fn index_of(&self, id: impl std::borrow::Borrow<LayoutBoxId>) -> usize {
-        self.order.index_of(id)
+        let value = &self.entries[*id.borrow()];
+        self.entries
+            .values_as_slice()
+            .element_offset(value)
+            .expect("a live layout box belongs to the dense storage")
     }
+
     #[inline]
     pub(crate) fn id_at(&self, index: usize) -> LayoutBoxId {
-        self.order.id_at(index)
+        self.entries.keys_as_slice()[index]
     }
-    #[inline]
-    pub(crate) fn order(&self) -> &BoxOrder {
-        &self.order
-    }
-    pub(crate) fn order_and_values_mut(
-        &mut self,
-    ) -> (&BoxOrder, impl Iterator<Item = &mut LayoutBox<N>>) {
-        (&self.order, self.entries.values_mut())
-    }
+
     #[inline]
     pub(crate) fn keys(
         &self,
     ) -> impl DoubleEndedIterator<Item = LayoutBoxId> + ExactSizeIterator + '_ {
-        self.order.ids.iter().copied()
+        self.entries.keys_as_slice().iter().copied()
     }
 
     #[inline]
-    pub(crate) fn get<I: BoxLookup>(&self, index: I) -> Option<&LayoutBox<N>> {
-        self.entries.get(index.key(&self.order)?)
+    pub(crate) fn get(&self, id: LayoutBoxId) -> Option<&LayoutBox<N>> {
+        self.entries.get(id)
     }
 
     #[inline]
-    pub(crate) fn get_mut<I: BoxLookup>(&mut self, index: I) -> Option<&mut LayoutBox<N>> {
-        self.entries.get_mut(index.key(&self.order)?)
+    pub(crate) fn get_mut(&mut self, id: LayoutBoxId) -> Option<&mut LayoutBox<N>> {
+        self.entries.get_mut(id)
     }
 
     #[inline]
-    pub(crate) fn ordered(&self) -> OrderedBoxes<'_, N> {
-        OrderedBoxes {
-            ids: self.order.ids.iter(),
-            entries: &self.entries,
-        }
+    pub(crate) fn values(&self) -> std::slice::Iter<'_, LayoutBox<N>> {
+        self.entries.values_as_slice().iter()
     }
 
-    // Bulk resets may visit storage in any order. Callers needing logical
-    // order use id_at()/get_mut() explicitly.
     pub(crate) fn values_mut(&mut self) -> impl Iterator<Item = &mut LayoutBox<N>> {
         self.entries.values_mut()
     }
@@ -169,96 +104,47 @@ impl<N> LayoutBoxes<N> {
         self.storage_revision
     }
 
-    /// Unordered scans never round-trip through logical IDs.
-    pub(crate) fn values(&self) -> impl Iterator<Item = &LayoutBox<N>> {
-        self.entries.values()
-    }
-
-    pub(crate) fn retain_in_order(&mut self, ids: Vec<LayoutBoxId>) -> bool {
-        if ids == self.order.ids {
-            return false;
+    pub(crate) fn retain(&mut self, mut keep: impl FnMut(LayoutBoxId) -> bool) {
+        let previous_len = self.entries.len();
+        self.entries.retain(|id, _| keep(id));
+        if self.entries.len() != previous_len {
+            self.storage_revision += 1;
         }
-        self.storage_revision += 1;
-        let order = BoxOrder::new(ids);
-        if self.entries.len() != order.len() {
-            self.entries.retain(|id, _| order.contains(id));
-            // Order construction rejects duplicate IDs. Every requested ID
-            // must therefore have been live if the lengths match.
-            assert_eq!(self.entries.len(), order.len());
-        } else {
-            debug_assert!(order.ids.iter().all(|&id| self.entries.contains_key(id)));
-        }
-        self.order = order;
-        true
     }
 }
 
-pub(crate) trait BoxLookup {
-    fn key(self, order: &BoxOrder) -> Option<LayoutBoxId>;
-}
-impl BoxLookup for LayoutBoxId {
-    #[inline]
-    fn key(self, _order: &BoxOrder) -> Option<LayoutBoxId> {
-        Some(self)
-    }
-}
-impl BoxLookup for &LayoutBoxId {
-    #[inline]
-    fn key(self, _order: &BoxOrder) -> Option<LayoutBoxId> {
-        Some(*self)
-    }
-}
-impl BoxLookup for &&LayoutBoxId {
-    #[inline]
-    fn key(self, _order: &BoxOrder) -> Option<LayoutBoxId> {
-        Some(**self)
-    }
-}
-impl BoxLookup for &mut LayoutBoxId {
-    #[inline]
-    fn key(self, _order: &BoxOrder) -> Option<LayoutBoxId> {
-        Some(*self)
-    }
-}
-impl BoxLookup for usize {
-    #[inline]
-    fn key(self, order: &BoxOrder) -> Option<LayoutBoxId> {
-        order.ids.get(self).copied()
-    }
-}
-impl<N, I: BoxLookup> Index<I> for LayoutBoxes<N> {
+impl<N> Index<LayoutBoxId> for LayoutBoxes<N> {
     type Output = LayoutBox<N>;
+
     #[inline]
-    fn index(&self, index: I) -> &Self::Output {
-        self.get(index).expect("layout box is not live")
-    }
-}
-impl<N, I: BoxLookup> IndexMut<I> for LayoutBoxes<N> {
-    #[inline]
-    fn index_mut(&mut self, index: I) -> &mut Self::Output {
-        self.get_mut(index).expect("layout box is not live")
+    fn index(&self, id: LayoutBoxId) -> &Self::Output {
+        &self.entries[id]
     }
 }
 
-pub(crate) struct OrderedBoxes<'a, N> {
-    ids: std::slice::Iter<'a, LayoutBoxId>,
-    entries: &'a BoxMap<N>,
-}
-impl<'a, N> Iterator for OrderedBoxes<'a, N> {
-    type Item = &'a LayoutBox<N>;
-    fn next(&mut self) -> Option<Self::Item> {
-        self.ids.next().map(|id| &self.entries[*id])
-    }
-    fn size_hint(&self) -> (usize, Option<usize>) {
-        self.ids.size_hint()
+impl<N> IndexMut<LayoutBoxId> for LayoutBoxes<N> {
+    #[inline]
+    fn index_mut(&mut self, id: LayoutBoxId) -> &mut Self::Output {
+        &mut self.entries[id]
     }
 }
-impl<N> DoubleEndedIterator for OrderedBoxes<'_, N> {
-    fn next_back(&mut self) -> Option<Self::Item> {
-        self.ids.next_back().map(|id| &self.entries[*id])
+
+impl<N> Index<usize> for LayoutBoxes<N> {
+    type Output = LayoutBox<N>;
+
+    #[inline]
+    fn index(&self, index: usize) -> &Self::Output {
+        &self.entries.values_as_slice()[index]
     }
 }
-impl<N> ExactSizeIterator for OrderedBoxes<'_, N> {}
+
+impl<N> IndexMut<usize> for LayoutBoxes<N> {
+    #[inline]
+    fn index_mut(&mut self, index: usize) -> &mut Self::Output {
+        &mut self.entries.values_as_mut_slice()[index]
+    }
+}
+
 #[cfg(test)]
 impl<N> Extend<LayoutBox<N>> for LayoutBoxes<N> {
     fn extend<T: IntoIterator<Item = LayoutBox<N>>>(&mut self, values: T) {

@@ -2321,9 +2321,8 @@ where
     }
 
     let owners = world
-        .boxes
-        .keys()
-        .filter(|id| world.boxes[id].inline_formatting_context)
+        .boxes_in_tree_order()
+        .filter_map(|(id, layout_box, _)| layout_box.inline_formatting_context.then_some(id))
         .collect::<Vec<_>>();
     let mut initialized = false;
     for owner in owners {
