@@ -119,7 +119,7 @@ impl PageScriptHost {
                 child_handle,
                 owner,
                 document_url.clone(),
-                signature,
+                input,
                 load_delay_token,
                 fetcher,
             );
@@ -132,10 +132,19 @@ impl PageScriptHost {
         child_handle: DomHandle,
         owner: FrameDocumentTaskOwner,
         document_url: url::Url,
-        signature: DocumentBlockingStylesheetSignature,
+        input: DocumentOwnedStylesheetDiscoveryInput,
         load_delay_token: DocumentLoadDelayTokenId,
         fetcher: RendererStylesheetFetcher,
     ) {
+        let signature = input.signature().clone();
+        let dom = self.dom_host();
+        let render_blocking = input.blocks_scripts()
+            && dom
+                .node(DomHandle::new(input.node_id().index()))
+                .and_then(crate::dom::native::Node::parent_node_id)
+                .and_then(|parent| dom.node(parent))
+                .and_then(crate::dom::native::Node::as_element)
+                .is_some_and(|parent| parent.is_html_element("head"));
         let completion_tx = self.resource_completion_tx.clone();
         let frame_id = self
             .child_browsing_contexts
@@ -188,6 +197,7 @@ impl PageScriptHost {
                     owner,
                     signature,
                     load_delay_token,
+                    render_blocking,
                     frame_id,
                     document_url,
                     graph: std::sync::Arc::new(graph),
@@ -474,12 +484,16 @@ impl PageScriptHost {
                 crate::types::SubresourceRequestInitiatorType::Css => "css",
                 _ => "link",
             };
-            ResourcePerformanceEntry::from_network_result(
+            let mut entry = ResourcePerformanceEntry::from_network_result(
                 url.as_str(),
                 initiator_type,
                 Some(result.start_unix_millis()),
                 &result.terminal().physical().as_result(),
-            )
+            );
+            if completion.render_blocking {
+                entry.mark_render_blocking();
+            }
+            entry
         });
         let dispatch_scope = OwnerDispatchScope::Child(completion.child_handle);
         let execution_owner = WindowExecutionContextOwner::Frame(completion.owner.local_window_id);

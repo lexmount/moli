@@ -6842,3 +6842,27 @@ async fn windowless_media_tasks_use_their_documents_owning_window() -> Result<()
     assert_eq!(value["value"], "true");
     Ok(())
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn child_parser_stylesheet_timing_retains_render_blocking() -> Result<()> {
+    let server = FixtureServer::spawn().await?;
+    let browser = Browser::new(AppConfig::default())?;
+    let mut page = browser
+        .fetch(&server.url("/compat/script-src-base-alpha/page"))
+        .await?;
+    let result = page.evaluate_runtime_expression_with_await_async(
+        r#"(async () => {
+            const frame = document.createElement('iframe');
+            frame.src = '/compat/blocking-stylesheet-parser-blocking-external';
+            const loaded = new Promise(resolve => frame.addEventListener('load', resolve, {once: true}));
+            document.body.append(frame);
+            await loaded;
+            return frame.contentWindow.performance.getEntriesByType('resource')
+                .find(entry => new URL(entry.name).pathname.endsWith('.css'))?.renderBlockingStatus;
+        })()"#,
+        true,
+    ).await?;
+    assert_eq!(result["value"], "blocking");
+    server.shutdown().await;
+    Ok(())
+}
