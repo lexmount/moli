@@ -2242,10 +2242,16 @@ async def run_touch_input_workflows(state: SmokeState) -> None:
             "touchPoints": [{"id": 4, "x": 20, "y": 20}, {"x": 30, "y": 20}],
         },
     )
-    await expect_invalid_params(
-        "Input.dispatchTouchEvent",
-        {"type": "touchEnd", "touchPoints": [{"id": 4, "x": 20, "y": 20}]},
-    )
+    idle_touch_end = {"type": "touchEnd", "touchPoints": [{"id": 4, "x": 20, "y": 20}]}
+    if is_moli_browser():
+        assert_equal(
+            await cdp.send("Input.dispatchTouchEvent", idle_touch_end), {}, "idle touchEnd is accepted",
+        )
+        assert_equal(
+            await page.evaluate("window.__coordinateEvents"), [], "idle touchEnd dispatches no touch or click events",
+        )
+    else:
+        await expect_invalid_params("Input.dispatchTouchEvent", idle_touch_end)
     await expect_invalid_params(
         "Input.emulateTouchFromMouseEvent",
         {"type": "mouseReleased", "x": 20, "y": 20},
