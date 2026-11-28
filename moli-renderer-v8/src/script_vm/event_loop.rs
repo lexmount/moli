@@ -35,7 +35,7 @@ impl ScriptVm {
             return Ok(true);
         }
         let host = self._context_host.clone();
-        self.with_current_main_world_scope(|scope, _| {
+        self.with_current_main_world_scope_internal(|scope, _| {
             Ok(host.borrow().has_event_loop_keep_alive_resources(scope))
         })
         .map(|pending| pending.unwrap_or(false))

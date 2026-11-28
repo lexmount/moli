@@ -144,6 +144,19 @@ where
         self.blobs.lock().by_id.len()
     }
 
+    /// Number of live native backings belonging to `owner_id`.
+    pub fn live_blob_count_for_owner(&self, owner_id: OwnerId) -> usize
+    where
+        OwnerId: PartialEq,
+    {
+        self.blobs
+            .lock()
+            .by_id
+            .values()
+            .filter(|blob| blob.owner_id.as_ref() == Some(&owner_id))
+            .count()
+    }
+
     pub fn blob_size(&self, blob_id: BlobId) -> Option<usize> {
         self.blobs
             .lock()

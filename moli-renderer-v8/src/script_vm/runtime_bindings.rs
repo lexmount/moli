@@ -5,11 +5,20 @@ use crate::{
     util::context_host_ptr_from_global_bridge,
 };
 use std::{
-    cell::RefCell,
+    cell::{Cell, RefCell},
     pin::pin,
     rc::{Rc, Weak},
+    sync::Arc,
     time::Instant,
 };
+
+thread_local! {
+    static PROMISE_REACTION_BEFORE_COUNT: Cell<u64> = const { Cell::new(0) };
+}
+
+pub(super) fn current_thread_promise_reaction_before_count() -> u64 {
+    PROMISE_REACTION_BEFORE_COUNT.with(Cell::get)
+}
 
 const MAX_REPORTED_WINDOW_PROMISE_REJECTIONS: usize = 1024;
 
@@ -261,7 +270,14 @@ pub(crate) fn perform_microtask_checkpoint_and_report_pending_promise_rejections
     }
     let flush_started = trace_enabled.then(Instant::now);
     let pending_rejections = flush_agent_pending_promise_rejections(scope);
-    crate::context_bootstrap::run_end_of_microtask_checkpoint_tasks(scope);
+    let ran_end_of_checkpoint_tasks =
+        crate::context_bootstrap::run_end_of_microtask_checkpoint_tasks(scope);
+    if (pending_rejections > 0 || ran_end_of_checkpoint_tasks > 0)
+        && let Some(pressure) =
+            scope.get_slot::<Arc<super::document_isolate::IsolateNativeMemoryPressure>>()
+    {
+        pressure.record_microtask_checkpoint_side_effect();
+    }
     if let Some(host) = context_host_ptr_from_global_bridge(scope)
         && let Some(environment) = unsafe { &*host }.page_script_environment()
     {
@@ -294,11 +310,17 @@ pub(crate) fn perform_microtask_checkpoint_and_report_pending_promise_rejections
     }
 }
 
-pub(super) unsafe extern "C" fn promise_trace_hook(
+pub(super) unsafe extern "C" fn promise_activity_and_trace_hook(
     hook_type: v8::PromiseHookType,
     _promise: v8::Local<v8::Promise>,
     _parent: v8::Local<v8::Value>,
 ) {
+    if matches!(hook_type, v8::PromiseHookType::Before) {
+        PROMISE_REACTION_BEFORE_COUNT.with(|count| count.set(count.get().wrapping_add(1)));
+    }
+    if !moli_trace::dom_binding_timing_enabled() {
+        return;
+    }
     match hook_type {
         v8::PromiseHookType::Init => moli_trace::record_promise_hook_init(),
         v8::PromiseHookType::Resolve => moli_trace::record_promise_hook_resolve(),

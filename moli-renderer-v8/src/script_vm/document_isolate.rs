@@ -4,8 +4,8 @@ use super::{
         RendererInspectorIsolateBackendHandle,
     },
     runtime_bindings::{
-        PromiseRejectDispatchSlot, failed_access_check_callback, promise_reject_callback,
-        promise_trace_hook,
+        PromiseRejectDispatchSlot, current_thread_promise_reaction_before_count,
+        failed_access_check_callback, promise_activity_and_trace_hook, promise_reject_callback,
     },
 };
 use crate::{
@@ -33,7 +33,10 @@ use anyhow::{Result, anyhow};
 use std::{
     cell::{Cell, OnceCell, RefCell},
     rc::{Rc, Weak},
-    sync::atomic::{AtomicU64, Ordering},
+    sync::{
+        Arc,
+        atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
+    },
 };
 
 static DOCUMENT_ISOLATE_CREATED_COUNT: AtomicU64 = AtomicU64::new(0);
@@ -773,8 +776,10 @@ impl RendererIsolateHandle {
         let RendererIsolateHolder {
             isolate,
             inspector_backend,
+            maintenance,
             ..
         } = &mut *holder;
+        maintenance.note_isolate_activity();
         let inspector_backend = inspector_backend
             .as_mut()
             .expect("document isolate Inspector backend missing before ScriptVm drop");
@@ -794,8 +799,10 @@ impl RendererIsolateHandle {
         let RendererIsolateHolder {
             isolate,
             inspector_backend,
+            maintenance,
             ..
         } = &mut *holder;
+        maintenance.note_isolate_activity();
         let inspector_backend = inspector_backend
             .as_mut()
             .ok_or_else(|| anyhow!("document isolate Inspector backend unavailable"))?;
@@ -811,6 +818,18 @@ impl RendererIsolateHandle {
         &self,
         op: impl FnOnce(&mut v8::OwnedIsolate) -> T,
     ) -> T {
+        self.inner.borrow_mut().maintenance.note_isolate_activity();
+        self.with_renderer_document_isolate_internal_mut(op)
+    }
+
+    /// Enter the document isolate for V8-internal or read-only runtime work
+    /// (such as V8 GC foreground tasks, microtask checkpoint entry, or memory
+    /// diagnostics) without counting it as script activity that re-arms
+    /// maintenance on an otherwise idle page.
+    pub(super) fn with_renderer_document_isolate_internal_mut<T>(
+        &self,
+        op: impl FnOnce(&mut v8::OwnedIsolate) -> T,
+    ) -> T {
         let mut holder = self.inner.borrow_mut();
         with_entered_owned_isolate(&mut holder.isolate, |isolate| {
             let result = op(isolate);
@@ -820,11 +839,119 @@ impl RendererIsolateHandle {
         })
     }
 
+    /// Enter the document isolate to run one V8 platform foreground task.
+    ///
+    /// V8's `MemoryPressureLevel::Moderate` performs GC work asynchronously via
+    /// foreground tasks. Pure GC foreground tasks must not count as script
+    /// activity, whereas foreground continuations that execute author JS (such
+    /// as `FinalizationRegistry` cleanup callbacks or async Wasm promise
+    /// resolution) advance `activity_generation` via V8's call-completed hook.
+    /// When an asynchronous moderate GC finishes, we fold its post-GC valley
+    /// downward into the maintenance baselines.
+    pub(super) fn with_renderer_document_isolate_v8_foreground_task_mut<T>(
+        &self,
+        op: impl FnOnce(&mut v8::OwnedIsolate) -> T,
+    ) -> T {
+        let mut holder = self.inner.borrow_mut();
+        let RendererIsolateHolder {
+            isolate,
+            maintenance,
+            ..
+        } = &mut *holder;
+        with_entered_owned_isolate(isolate, |isolate| {
+            maintenance.ensure_promise_activity_hook_if_needed(isolate);
+            let was_recalibration_armed = maintenance.is_moderate_recalibration_armed();
+            let major_gc_before = maintenance.major_gc_completion_epoch();
+            let call_completed_before = maintenance.call_completed_epoch();
+            let promise_reaction_before = current_thread_promise_reaction_before_count();
+            let result = op(isolate);
+            self.deferred_context_host_releases
+                .drain_on_entered_isolate(isolate);
+            if maintenance.call_completed_epoch() != call_completed_before
+                || current_thread_promise_reaction_before_count() != promise_reaction_before
+            {
+                maintenance.note_isolate_activity();
+            }
+            maintenance.apply_pending_post_gc_valley();
+            if was_recalibration_armed && maintenance.major_gc_completion_epoch() != major_gc_before
+            {
+                maintenance.recalibrate_baselines_downward(&isolate.get_heap_statistics());
+            }
+            result
+        })
+    }
+
+    /// Enter the document isolate to run a microtask checkpoint.
+    ///
+    /// Empty checkpoints remain silent so idle pages do not re-arm bounded
+    /// native-wrapper maintenance; checkpoints that run author JS reactions or
+    /// produce checkpoint side effects advance `activity_generation`.
+    pub(super) fn with_renderer_document_isolate_microtask_checkpoint_mut<T>(
+        &self,
+        op: impl FnOnce(&mut v8::OwnedIsolate) -> T,
+    ) -> T {
+        let mut holder = self.inner.borrow_mut();
+        let RendererIsolateHolder {
+            isolate,
+            maintenance,
+            ..
+        } = &mut *holder;
+        with_entered_owned_isolate(isolate, |isolate| {
+            maintenance.ensure_promise_activity_hook_if_needed(isolate);
+            let call_completed_before = maintenance.call_completed_epoch();
+            let promise_reaction_before = current_thread_promise_reaction_before_count();
+            let side_effect_before = maintenance.microtask_checkpoint_side_effect_epoch();
+            let result = op(isolate);
+            self.deferred_context_host_releases
+                .drain_on_entered_isolate(isolate);
+            if maintenance.call_completed_epoch() != call_completed_before
+                || current_thread_promise_reaction_before_count() != promise_reaction_before
+                || maintenance.microtask_checkpoint_side_effect_epoch() != side_effect_before
+            {
+                maintenance.note_isolate_activity();
+            }
+            result
+        })
+    }
+
+    pub(super) fn capture_initial_main_world_maintenance_baselines(&self) {
+        let mut holder = self.inner.borrow_mut();
+        let RendererIsolateHolder {
+            isolate,
+            maintenance,
+            ..
+        } = &mut *holder;
+        if maintenance.initial_used_global_handles_size.is_some() {
+            return;
+        }
+        with_entered_owned_isolate(isolate, |isolate| {
+            maintenance.note_initial_main_world_baselines(&isolate.get_heap_statistics());
+        });
+    }
+
     pub(super) fn with_entered_renderer_document_isolate<T>(
         &self,
         op: impl FnOnce(&mut v8::OwnedIsolate) -> Result<T>,
     ) -> Result<T> {
         self.with_renderer_document_isolate_mut(op)
+    }
+
+    pub(super) fn with_entered_renderer_document_isolate_maintenance<T>(
+        &self,
+        op: impl FnOnce(&mut v8::OwnedIsolate, &mut RendererIsolateMaintenanceState) -> Result<T>,
+    ) -> Result<T> {
+        let mut holder = self.inner.borrow_mut();
+        let RendererIsolateHolder {
+            isolate,
+            maintenance,
+            ..
+        } = &mut *holder;
+        with_entered_owned_isolate(isolate, |isolate| {
+            let result = op(isolate, maintenance);
+            self.deferred_context_host_releases
+                .drain_on_entered_isolate(isolate);
+            result
+        })
     }
 
     pub(super) fn with_entered_renderer_document_isolate_and_bootstrap<T>(
@@ -833,8 +960,12 @@ impl RendererIsolateHandle {
     ) -> Result<T> {
         let mut holder = self.inner.borrow_mut();
         let RendererIsolateHolder {
-            isolate, bootstrap, ..
+            isolate,
+            bootstrap,
+            maintenance,
+            ..
         } = &mut *holder;
+        maintenance.note_isolate_activity();
         with_entered_owned_isolate(isolate, |isolate| {
             {
                 let scope = std::pin::pin!(v8::HandleScope::new(isolate));
@@ -863,6 +994,470 @@ impl RendererIsolateHandle {
     }
 }
 
+fn saturating_fetch_add(counter: &AtomicUsize, delta: usize) {
+    let _ = counter.try_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
+        Some(current.saturating_add(delta))
+    });
+}
+
+fn saturating_fetch_sub(counter: &AtomicUsize, delta: usize) {
+    let _ = counter.try_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
+        Some(current.saturating_sub(delta))
+    });
+}
+
+#[derive(Clone, Copy, Debug)]
+struct PostGcRecalibrationValley {
+    tracked_memory: usize,
+    used_global_handles_size: usize,
+    detached_contexts: usize,
+}
+
+/// Per-isolate counters updated when JS wrappers register or release Rust-heap
+/// resources managed by V8 weak finalizers or explicit native backing stores.
+///
+/// Stored both on `RendererIsolateMaintenanceState` and in a V8 isolate slot so
+/// any frame or world in the document isolate can record native pressure without
+/// locks, `RefCell` borrows, or V8 handle drop-order hazards. Atomics allow
+/// `Send` backing stores (such as `NETWORK_BODY_SOURCES`) to hold a
+/// [`NativeMemoryLease`] and release bytes immediately on explicit consumption.
+#[derive(Debug, Default)]
+pub(crate) struct IsolateNativeMemoryPressure {
+    allocated_native_bytes_since_maintenance: AtomicUsize,
+    live_native_bytes: AtomicUsize,
+    finalizer_registrations_since_maintenance: AtomicUsize,
+    live_finalizers: AtomicUsize,
+    call_completed_epoch: AtomicU64,
+    microtask_checkpoint_side_effect_epoch: AtomicU64,
+    atomics_wait_async_used: AtomicBool,
+    major_gc_completion_epoch: AtomicU64,
+    moderate_recalibration_armed: AtomicBool,
+    has_pending_recalibration_valley: AtomicBool,
+    pending_valley_used_memory: AtomicUsize,
+    pending_valley_used_global_handles_size: AtomicUsize,
+    pending_valley_detached_contexts: AtomicUsize,
+}
+
+impl IsolateNativeMemoryPressure {
+    fn record_finalizer_registration(&self, native_bytes: usize) {
+        saturating_fetch_add(&self.finalizer_registrations_since_maintenance, 1);
+        saturating_fetch_add(&self.live_finalizers, 1);
+        if native_bytes > 0 {
+            self.record_native_bytes_allocation(native_bytes);
+        }
+    }
+
+    fn record_native_bytes_allocation(&self, native_bytes: usize) {
+        if native_bytes > 0 {
+            saturating_fetch_add(&self.allocated_native_bytes_since_maintenance, native_bytes);
+            saturating_fetch_add(&self.live_native_bytes, native_bytes);
+        }
+    }
+
+    pub(crate) fn release_finalizer(&self, native_bytes: usize) {
+        saturating_fetch_sub(&self.live_finalizers, 1);
+        if native_bytes > 0 {
+            self.release_live_native_bytes(native_bytes);
+        }
+    }
+
+    pub(crate) fn release_live_native_bytes(&self, native_bytes: usize) {
+        if native_bytes > 0 {
+            saturating_fetch_sub(&self.live_native_bytes, native_bytes);
+        }
+    }
+
+    fn reset_since_maintenance(&self) {
+        self.allocated_native_bytes_since_maintenance
+            .store(0, Ordering::Relaxed);
+        self.finalizer_registrations_since_maintenance
+            .store(0, Ordering::Relaxed);
+    }
+
+    fn record_call_completed(&self) {
+        self.call_completed_epoch.fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn call_completed_epoch(&self) -> u64 {
+        self.call_completed_epoch.load(Ordering::Relaxed)
+    }
+
+    pub(super) fn record_microtask_checkpoint_side_effect(&self) {
+        self.microtask_checkpoint_side_effect_epoch
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn microtask_checkpoint_side_effect_epoch(&self) -> u64 {
+        self.microtask_checkpoint_side_effect_epoch
+            .load(Ordering::Relaxed)
+    }
+
+    fn record_atomics_wait_async_used(&self) {
+        self.atomics_wait_async_used.store(true, Ordering::Relaxed);
+    }
+
+    fn atomics_wait_async_used(&self) -> bool {
+        self.atomics_wait_async_used.load(Ordering::Relaxed)
+    }
+
+    fn major_gc_completion_epoch(&self) -> u64 {
+        self.major_gc_completion_epoch.load(Ordering::Acquire)
+    }
+
+    fn is_moderate_recalibration_armed(&self) -> bool {
+        self.moderate_recalibration_armed.load(Ordering::Acquire)
+    }
+
+    fn arm_moderate_recalibration(&self) {
+        self.moderate_recalibration_armed
+            .store(true, Ordering::Release);
+    }
+
+    fn disarm_moderate_recalibration_and_clear_valley(&self) {
+        self.moderate_recalibration_armed
+            .store(false, Ordering::Release);
+        self.has_pending_recalibration_valley
+            .store(false, Ordering::Release);
+    }
+
+    fn record_major_gc_completion_and_take_recalibration(&self) -> bool {
+        self.major_gc_completion_epoch
+            .fetch_add(1, Ordering::AcqRel);
+        self.moderate_recalibration_armed
+            .swap(false, Ordering::AcqRel)
+    }
+
+    fn record_post_gc_recalibration_valley(&self, stats: &v8::HeapStatistics) {
+        let tracked_memory = stats
+            .used_heap_size()
+            .saturating_add(stats.external_memory());
+        self.pending_valley_used_memory
+            .store(tracked_memory, Ordering::Relaxed);
+        self.pending_valley_used_global_handles_size
+            .store(stats.used_global_handles_size(), Ordering::Relaxed);
+        self.pending_valley_detached_contexts
+            .store(stats.number_of_detached_contexts(), Ordering::Relaxed);
+        self.has_pending_recalibration_valley
+            .store(true, Ordering::Release);
+    }
+
+    fn take_pending_post_gc_valley(&self) -> Option<PostGcRecalibrationValley> {
+        if !self
+            .has_pending_recalibration_valley
+            .swap(false, Ordering::AcqRel)
+        {
+            return None;
+        }
+        Some(PostGcRecalibrationValley {
+            tracked_memory: self.pending_valley_used_memory.load(Ordering::Relaxed),
+            used_global_handles_size: self
+                .pending_valley_used_global_handles_size
+                .load(Ordering::Relaxed),
+            detached_contexts: self
+                .pending_valley_detached_contexts
+                .load(Ordering::Relaxed),
+        })
+    }
+}
+
+unsafe extern "C" fn major_gc_epilogue_callback(
+    mut isolate: v8::UnsafeRawIsolatePtr,
+    _gc_type: v8::GCType,
+    _flags: v8::GCCallbackFlags,
+    _data: *mut std::ffi::c_void,
+) {
+    if isolate.is_null() {
+        return;
+    }
+    // SAFETY: V8 invokes GC epilogue callbacks synchronously on the isolate
+    // thread while the isolate is alive and entered. Only read-only heap
+    // statistics and atomics are touched (no JS allocations or mutations).
+    let isolate = unsafe { v8::Isolate::ref_from_raw_isolate_ptr_mut(&mut isolate) };
+    let Some(pressure) = isolate.get_slot::<Arc<IsolateNativeMemoryPressure>>() else {
+        return;
+    };
+    if !pressure.record_major_gc_completion_and_take_recalibration() {
+        return;
+    }
+    let pressure = Arc::clone(pressure);
+    let stats = isolate.get_heap_statistics();
+    pressure.record_post_gc_recalibration_valley(&stats);
+}
+
+unsafe extern "C" fn call_completed_callback(isolate: v8::UnsafeRawIsolatePtr) {
+    if isolate.is_null() {
+        return;
+    }
+    // SAFETY: V8 invokes CallCompletedCallback synchronously on the isolate
+    // thread with the live isolate pointer.
+    let isolate = unsafe { v8::Isolate::ref_from_raw_isolate_ptr(&isolate) };
+    if let Some(pressure) = isolate.get_slot::<Arc<IsolateNativeMemoryPressure>>() {
+        pressure.record_call_completed();
+    }
+}
+
+unsafe extern "C" fn use_counter_callback(
+    isolate: v8::UnsafeRawIsolatePtr,
+    feature: v8::UseCounterFeature,
+) {
+    if isolate.is_null() || feature != v8::UseCounterFeature::kAtomicsWaitAsync {
+        return;
+    }
+    // SAFETY: V8 invokes UseCounterCallback synchronously on the isolate
+    // thread with the live isolate pointer.
+    let isolate = unsafe { v8::Isolate::ref_from_raw_isolate_ptr(&isolate) };
+    if let Some(pressure) = isolate.get_slot::<Arc<IsolateNativeMemoryPressure>>() {
+        pressure.record_atomics_wait_async_used();
+    }
+}
+
+/// RAII lease tying a Rust-heap backing allocation to its owning document
+/// isolate's native-memory pressure tracker.
+///
+/// Dropping the lease releases its `live_native_bytes` immediately, so explicit
+/// consumption (e.g. `Response.text()` / `body.cancel()`) clears native pressure
+/// even if the JS wrapper remains retained.
+#[derive(Debug)]
+pub(crate) struct NativeMemoryLease {
+    pressure: Arc<IsolateNativeMemoryPressure>,
+    bytes: AtomicUsize,
+}
+
+impl NativeMemoryLease {
+    fn new(pressure: Arc<IsolateNativeMemoryPressure>, bytes: usize) -> Self {
+        Self {
+            pressure,
+            bytes: AtomicUsize::new(bytes),
+        }
+    }
+}
+
+impl Drop for NativeMemoryLease {
+    fn drop(&mut self) {
+        let bytes = self.bytes.swap(0, Ordering::Relaxed);
+        if bytes > 0 {
+            self.pressure.release_live_native_bytes(bytes);
+        }
+    }
+}
+
+pub(crate) fn record_renderer_document_isolate_native_finalizer(
+    scope: &mut v8::PinScope<'_, '_>,
+    native_bytes: usize,
+) -> Option<Arc<IsolateNativeMemoryPressure>> {
+    let pressure = scope.get_slot::<Arc<IsolateNativeMemoryPressure>>()?;
+    pressure.record_finalizer_registration(native_bytes);
+    Some(Arc::clone(pressure))
+}
+
+pub(crate) fn record_renderer_document_isolate_native_memory_lease(
+    scope: &mut v8::PinScope<'_, '_>,
+    native_bytes: usize,
+) -> Option<NativeMemoryLease> {
+    if native_bytes == 0 {
+        return None;
+    }
+    let pressure = scope.get_slot::<Arc<IsolateNativeMemoryPressure>>()?;
+    pressure.record_native_bytes_allocation(native_bytes);
+    Some(NativeMemoryLease::new(Arc::clone(pressure), native_bytes))
+}
+
+pub(super) struct RendererIsolateMaintenanceState {
+    last_maintenance_used_memory: usize,
+    initial_used_global_handles_size: Option<usize>,
+    last_maintenance_used_global_handles_size: Option<usize>,
+    last_maintenance_detached_contexts: usize,
+    native_pressure: Arc<IsolateNativeMemoryPressure>,
+    activity_generation: u64,
+    last_maintenance_activity_generation: u64,
+    ticks_with_pending_native_activity: u8,
+    promise_activity_hook_installed: bool,
+}
+
+impl RendererIsolateMaintenanceState {
+    fn new(
+        native_pressure: Arc<IsolateNativeMemoryPressure>,
+        promise_activity_hook_installed: bool,
+    ) -> Self {
+        Self {
+            last_maintenance_used_memory: 0,
+            initial_used_global_handles_size: None,
+            last_maintenance_used_global_handles_size: None,
+            last_maintenance_detached_contexts: 0,
+            native_pressure,
+            activity_generation: 0,
+            last_maintenance_activity_generation: 0,
+            ticks_with_pending_native_activity: 0,
+            promise_activity_hook_installed,
+        }
+    }
+
+    fn note_isolate_activity(&mut self) {
+        self.activity_generation = self.activity_generation.wrapping_add(1);
+    }
+
+    fn call_completed_epoch(&self) -> u64 {
+        self.native_pressure.call_completed_epoch()
+    }
+
+    fn microtask_checkpoint_side_effect_epoch(&self) -> u64 {
+        self.native_pressure
+            .microtask_checkpoint_side_effect_epoch()
+    }
+
+    pub(super) fn major_gc_completion_epoch(&self) -> u64 {
+        self.native_pressure.major_gc_completion_epoch()
+    }
+
+    fn is_moderate_recalibration_armed(&self) -> bool {
+        self.native_pressure.is_moderate_recalibration_armed()
+    }
+
+    fn ensure_promise_activity_hook_if_needed(&mut self, isolate: &mut v8::OwnedIsolate) {
+        if !self.promise_activity_hook_installed && self.native_pressure.atomics_wait_async_used() {
+            isolate.set_promise_hook(promise_activity_and_trace_hook);
+            self.promise_activity_hook_installed = true;
+        }
+    }
+
+    fn note_initial_main_world_baselines(&mut self, stats: &v8::HeapStatistics) {
+        let used_global_handles_size = stats.used_global_handles_size();
+        if self.initial_used_global_handles_size.is_none() {
+            self.initial_used_global_handles_size = Some(used_global_handles_size);
+            self.last_maintenance_used_global_handles_size = Some(used_global_handles_size);
+        }
+    }
+
+    pub(super) fn apply_pending_post_gc_valley(&mut self) {
+        if let Some(valley) = self.native_pressure.take_pending_post_gc_valley() {
+            self.recalibrate_baselines_downward_values(
+                valley.tracked_memory,
+                valley.used_global_handles_size,
+                valley.detached_contexts,
+            );
+        }
+    }
+
+    pub(super) fn memory_pressure_input(
+        &self,
+        stats: &v8::HeapStatistics,
+    ) -> super::RendererDocumentIsolateMemoryPressureInput {
+        super::RendererDocumentIsolateMemoryPressureInput {
+            used_heap_size: stats.used_heap_size(),
+            external_memory: stats.external_memory(),
+            heap_size_limit: stats.heap_size_limit(),
+            last_maintenance_used_memory: self.last_maintenance_used_memory,
+            used_global_handles_size: stats.used_global_handles_size(),
+            initial_used_global_handles_size: self.initial_used_global_handles_size,
+            last_maintenance_used_global_handles_size: self
+                .last_maintenance_used_global_handles_size,
+            detached_contexts: stats.number_of_detached_contexts(),
+            last_maintenance_detached_contexts: self.last_maintenance_detached_contexts,
+            allocated_native_bytes_since_maintenance: self
+                .native_pressure
+                .allocated_native_bytes_since_maintenance
+                .load(Ordering::Relaxed),
+            live_native_bytes: self
+                .native_pressure
+                .live_native_bytes
+                .load(Ordering::Relaxed),
+            finalizer_registrations_since_maintenance: self
+                .native_pressure
+                .finalizer_registrations_since_maintenance
+                .load(Ordering::Relaxed),
+            live_finalizers: self.native_pressure.live_finalizers.load(Ordering::Relaxed),
+            has_isolate_activity_since_maintenance: self.activity_generation
+                != self.last_maintenance_activity_generation,
+            ticks_with_pending_native_activity: self.ticks_with_pending_native_activity,
+        }
+    }
+
+    pub(super) fn record_collection(&mut self, stats: &v8::HeapStatistics) {
+        self.last_maintenance_used_memory = stats
+            .used_heap_size()
+            .saturating_add(stats.external_memory());
+        let used_global_handles_size = stats.used_global_handles_size();
+        self.last_maintenance_used_global_handles_size = Some(used_global_handles_size);
+        if let Some(initial) = self.initial_used_global_handles_size {
+            self.initial_used_global_handles_size = Some(initial.min(used_global_handles_size));
+        }
+        self.last_maintenance_detached_contexts = stats.number_of_detached_contexts();
+        self.native_pressure.reset_since_maintenance();
+        self.last_maintenance_activity_generation = self.activity_generation;
+        self.ticks_with_pending_native_activity = 0;
+        self.native_pressure
+            .disarm_moderate_recalibration_and_clear_valley();
+    }
+
+    pub(super) fn record_moderate_collection(
+        &mut self,
+        stats: &v8::HeapStatistics,
+        major_gc_epoch_before: u64,
+    ) {
+        self.record_collection(stats);
+        // `MemoryPressureLevel::Moderate` normally performs GC asynchronously
+        // in V8 foreground tasks. Keep recalibration armed until the resulting
+        // `MarkSweepCompact` epilogue is observed (or a subsequent collection
+        // supersedes it); if GC already completed synchronously during
+        // `memory_pressure_notification`, `stats` already reflects the valley.
+        if self.major_gc_completion_epoch() == major_gc_epoch_before {
+            self.native_pressure.arm_moderate_recalibration();
+        }
+    }
+
+    fn recalibrate_baselines_downward(&mut self, stats: &v8::HeapStatistics) {
+        let tracked_memory = stats
+            .used_heap_size()
+            .saturating_add(stats.external_memory());
+        self.recalibrate_baselines_downward_values(
+            tracked_memory,
+            stats.used_global_handles_size(),
+            stats.number_of_detached_contexts(),
+        );
+    }
+
+    fn recalibrate_baselines_downward_values(
+        &mut self,
+        tracked_memory: usize,
+        used_global_handles_size: usize,
+        detached_contexts: usize,
+    ) {
+        self.last_maintenance_used_memory = self.last_maintenance_used_memory.min(tracked_memory);
+        self.last_maintenance_used_global_handles_size = Some(
+            self.last_maintenance_used_global_handles_size
+                .map_or(used_global_handles_size, |last| {
+                    last.min(used_global_handles_size)
+                }),
+        );
+        if let Some(initial) = self.initial_used_global_handles_size {
+            self.initial_used_global_handles_size = Some(initial.min(used_global_handles_size));
+        }
+        self.last_maintenance_detached_contexts = self
+            .last_maintenance_detached_contexts
+            .min(detached_contexts);
+    }
+
+    pub(super) fn record_skipped(
+        &mut self,
+        stats: &v8::HeapStatistics,
+        has_pending_native_activity: bool,
+    ) {
+        // Track natural memory shrinkage without ratcheting baselines upward so
+        // gradual growth still triggers moderate maintenance once total growth
+        // since the last maintenance exceeds the threshold. Keep any pending
+        // asynchronous moderate recalibration armed until V8 observes the
+        // major GC completion epilogue.
+        self.apply_pending_post_gc_valley();
+        self.recalibrate_baselines_downward(stats);
+        if has_pending_native_activity {
+            self.ticks_with_pending_native_activity =
+                self.ticks_with_pending_native_activity.saturating_add(1);
+        } else {
+            self.ticks_with_pending_native_activity = 0;
+        }
+    }
+}
+
 /// Owns the renderer isolate and the resources retired with that isolate.
 pub(super) struct RendererIsolateHolder {
     deferred_context_host_releases: RendererDeferredContextHostReleaseQueue,
@@ -877,6 +1472,7 @@ pub(super) struct RendererIsolateHolder {
     _platform_registration: V8PlatformIsolateRegistration,
     foreground_router: Option<crate::v8_platform::RendererIsolateForegroundTaskRouter>,
     isolate: v8::OwnedIsolate,
+    maintenance: RendererIsolateMaintenanceState,
     // Declared after the isolate so destroyed/live accounting changes only
     // after `OwnedIsolate::drop` has completed disposal.
     _accounting: RendererDocumentIsolateAccountingGuard,
@@ -935,11 +1531,14 @@ impl RendererIsolateHolder {
         isolate.set_modify_code_generation_from_strings_callback(
             super::security_policy::string_code_generation_check_callback,
         );
-        if moli_trace::dom_binding_timing_enabled() {
-            isolate.set_promise_hook(promise_trace_hook);
+        let promise_activity_hook_installed = moli_trace::dom_binding_timing_enabled();
+        if promise_activity_hook_installed {
+            isolate.set_promise_hook(promise_activity_and_trace_hook);
         }
         isolate.set_promise_reject_callback(promise_reject_callback);
         isolate.set_failed_access_check_callback_function(failed_access_check_callback);
+        let native_pressure = Arc::new(IsolateNativeMemoryPressure::default());
+        isolate.set_slot(Arc::clone(&native_pressure));
 
         let inspector_start = timing_enabled.then(std::time::Instant::now);
         let inspector_backend = RendererInspectorIsolateBackend::new(&mut isolate)
@@ -961,6 +1560,15 @@ impl RendererIsolateHolder {
             .map(|registry| registry.register(inspector_backend.devtools_target()))
             .transpose()
             .map_err(|error| anyhow!(error))?;
+        // Install V8 callbacks after all fallible initialization succeeds so
+        // `RendererIsolateHolder::drop` is guaranteed to remove them.
+        isolate.add_gc_epilogue_callback(
+            major_gc_epilogue_callback,
+            std::ptr::null_mut(),
+            v8::GCType::kGCTypeMarkSweepCompact,
+        );
+        isolate.add_call_completed_callback(call_completed_callback);
+        isolate.set_use_counter_callback(use_counter_callback);
         if timing_enabled {
             tracing::info!(
                 target: "moli_cdp_nav_timing",
@@ -992,11 +1600,14 @@ impl RendererIsolateHolder {
                 platform_registration,
                 foreground_router,
                 isolate,
+                native_pressure,
+                promise_activity_hook_installed,
             ),
             bridge_bindings,
         ))
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn new(
         devtools_target_shutdown_registration: Option<RendererDevToolsTargetShutdownRegistration>,
         inspector_backend: RendererInspectorIsolateBackend,
@@ -1004,6 +1615,8 @@ impl RendererIsolateHolder {
         platform_registration: V8PlatformIsolateRegistration,
         foreground_router: Option<crate::v8_platform::RendererIsolateForegroundTaskRouter>,
         isolate: v8::OwnedIsolate,
+        native_pressure: Arc<IsolateNativeMemoryPressure>,
+        promise_activity_hook_installed: bool,
     ) -> Self {
         Self {
             deferred_context_host_releases: RendererDeferredContextHostReleaseQueue::default(),
@@ -1013,6 +1626,10 @@ impl RendererIsolateHolder {
             _platform_registration: platform_registration,
             foreground_router,
             isolate,
+            maintenance: RendererIsolateMaintenanceState::new(
+                native_pressure,
+                promise_activity_hook_installed,
+            ),
             _accounting: RendererDocumentIsolateAccountingGuard::new(),
         }
     }
@@ -1039,6 +1656,10 @@ impl Drop for RendererIsolateHolder {
         unsafe {
             self.isolate.enter();
         }
+        self.isolate
+            .remove_gc_epilogue_callback(major_gc_epilogue_callback, std::ptr::null_mut());
+        self.isolate
+            .remove_call_completed_callback(call_completed_callback);
         self.deferred_context_host_releases
             .begin_isolate_shutdown(&mut self.isolate);
     }
@@ -1190,5 +1811,55 @@ mod tests {
             .expect("snapshot creator should produce a blob");
         assert!(!startup_data.is_empty());
         assert_eq!(dropped_slots.get(), 1);
+    }
+
+    #[test]
+    fn moderate_recalibration_stays_armed_until_major_gc_and_disarms_once_observed() {
+        crate::ensure_v8_for_test();
+
+        let pressure = std::sync::Arc::new(super::IsolateNativeMemoryPressure::default());
+        let mut maintenance =
+            super::RendererIsolateMaintenanceState::new(std::sync::Arc::clone(&pressure), false);
+
+        let mut isolate = v8::Isolate::new(Default::default());
+        let stats = isolate.get_heap_statistics();
+
+        // Async Moderate (major GC epoch unchanged): arms recalibration.
+        let epoch_before = maintenance.major_gc_completion_epoch();
+        maintenance.record_moderate_collection(&stats, epoch_before);
+        assert!(maintenance.is_moderate_recalibration_armed());
+
+        // Skipped ticks before async GC finishes must keep recalibration armed.
+        maintenance.record_skipped(&stats, false);
+        maintenance.record_skipped(&stats, false);
+        assert!(maintenance.is_moderate_recalibration_armed());
+
+        // First major GC completion consumes the armed flag and records a valley.
+        assert!(pressure.record_major_gc_completion_and_take_recalibration());
+        assert!(!maintenance.is_moderate_recalibration_armed());
+        pressure.record_post_gc_recalibration_valley(&stats);
+
+        // Subsequent unrelated major GCs must not re-arm or recapture valleys.
+        assert!(!pressure.record_major_gc_completion_and_take_recalibration());
+        assert!(pressure.take_pending_post_gc_valley().is_some());
+        assert!(pressure.take_pending_post_gc_valley().is_none());
+
+        // Synchronous major GC during `memory_pressure_notification(Moderate)`
+        // advances the epoch before `record_moderate_collection`, so
+        // recalibration does not stay armed.
+        let epoch_before_sync = maintenance.major_gc_completion_epoch();
+        assert!(!pressure.record_major_gc_completion_and_take_recalibration());
+        maintenance.record_moderate_collection(&stats, epoch_before_sync);
+        assert!(!maintenance.is_moderate_recalibration_armed());
+
+        // Explicit/Critical `record_collection` disarms pending recalibration
+        // and discards any unapplied valley from an earlier moderate pass.
+        let epoch_before_second = maintenance.major_gc_completion_epoch();
+        maintenance.record_moderate_collection(&stats, epoch_before_second);
+        assert!(maintenance.is_moderate_recalibration_armed());
+        pressure.record_post_gc_recalibration_valley(&stats);
+        maintenance.record_collection(&stats);
+        assert!(!maintenance.is_moderate_recalibration_armed());
+        assert!(pressure.take_pending_post_gc_valley().is_none());
     }
 }

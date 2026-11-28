@@ -25,7 +25,7 @@ use super::owner_local_store::{
 };
 use crate::local_executor::JsLocalExecutor;
 
-const ACTIVE_PAGE_MODERATE_MEMORY_PRESSURE_PERIOD: Duration = Duration::from_secs(1);
+const ACTIVE_PAGE_MODERATE_MEMORY_PRESSURE_PERIOD: Duration = Duration::from_secs(15);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum RendererOwnerMaintenanceAction {
@@ -226,5 +226,33 @@ mod tests {
         assert_eq!(residence.indexed_deadline(), None);
         assert!(residence.claim_if_due(token(), deadline).is_none());
         assert!(residence.settle(task, deadline).is_err());
+    }
+
+    #[test]
+    fn maintenance_residence_uses_fifteen_second_moderate_period() {
+        let now = Instant::now();
+        let mut residence = RendererPageOwnerMaintenanceResidence::new(now);
+        let initial_deadline = residence
+            .indexed_deadline()
+            .expect("new residence should publish its deadline");
+        assert_eq!(
+            initial_deadline.duration_since(now),
+            Duration::from_secs(15)
+        );
+
+        let task = residence
+            .claim_if_due(token(), initial_deadline)
+            .expect("initial deadline should be claimable when due");
+        let settled_at = initial_deadline + Duration::from_millis(25);
+        residence
+            .settle(task, settled_at)
+            .expect("matching admitted task should settle");
+        let next_deadline = residence
+            .indexed_deadline()
+            .expect("settlement should rearm the residence");
+        assert_eq!(
+            next_deadline.duration_since(settled_at),
+            Duration::from_secs(15)
+        );
     }
 }

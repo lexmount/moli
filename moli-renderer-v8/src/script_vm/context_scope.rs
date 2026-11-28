@@ -73,22 +73,44 @@ impl ScriptVm {
         context_ptr: *const v8::Global<v8::Context>,
         op: impl FnOnce(&mut v8::PinScope<'_, '_>, *mut PageScriptHost) -> Result<T>,
     ) -> Result<T> {
+        self.with_context_scope_by_ptr_with_activity(context_ptr, true, op)
+    }
+
+    pub(super) fn with_context_scope_by_ptr_internal<T>(
+        &mut self,
+        context_ptr: *const v8::Global<v8::Context>,
+        op: impl FnOnce(&mut v8::PinScope<'_, '_>, *mut PageScriptHost) -> Result<T>,
+    ) -> Result<T> {
+        self.with_context_scope_by_ptr_with_activity(context_ptr, false, op)
+    }
+
+    fn with_context_scope_by_ptr_with_activity<T>(
+        &mut self,
+        context_ptr: *const v8::Global<v8::Context>,
+        count_as_activity: bool,
+        op: impl FnOnce(&mut v8::PinScope<'_, '_>, *mut PageScriptHost) -> Result<T>,
+    ) -> Result<T> {
         let context_host = self._context_host.clone();
-        let result = self
-            .renderer_document_isolate
-            .with_entered_renderer_document_isolate(|isolate| {
-                let scope = pin!(v8::HandleScope::new(isolate));
-                let scope = &mut scope.init();
-                // SAFETY: callers pass a context owned by this ScriptVm. The
-                // non-escaping closure runs while the matching document isolate
-                // is entered and ScriptVm remains exclusively borrowed.
-                let context = unsafe { v8::Local::new(scope, &*context_ptr) };
-                let scope = &mut v8::ContextScope::new(scope, context);
-                // V8 callbacks are re-entrant. Keep only the owning Rc alive;
-                // a RefCell guard here would make callbacks panic on borrow_mut.
-                let runtime_ptr: *mut PageScriptHost = (*context_host).as_ptr();
-                op(scope, runtime_ptr)
-            });
+        let run = |isolate: &mut v8::OwnedIsolate| {
+            let scope = pin!(v8::HandleScope::new(isolate));
+            let scope = &mut scope.init();
+            // SAFETY: callers pass a context owned by this ScriptVm. The
+            // non-escaping closure runs while the matching document isolate
+            // is entered and ScriptVm remains exclusively borrowed.
+            let context = unsafe { v8::Local::new(scope, &*context_ptr) };
+            let scope = &mut v8::ContextScope::new(scope, context);
+            // V8 callbacks are re-entrant. Keep only the owning Rc alive;
+            // a RefCell guard here would make callbacks panic on borrow_mut.
+            let runtime_ptr: *mut PageScriptHost = (*context_host).as_ptr();
+            op(scope, runtime_ptr)
+        };
+        let result = if count_as_activity {
+            self.renderer_document_isolate
+                .with_entered_renderer_document_isolate(run)
+        } else {
+            self.renderer_document_isolate
+                .with_renderer_document_isolate_internal_mut(run)
+        };
         let publication = self.publish_prebootstrapped_isolated_window_contexts();
         result.and_then(|value| publication.map(|()| value))
     }
@@ -115,6 +137,48 @@ impl ScriptVm {
             return Ok(None);
         };
         self.with_context_scope_by_ptr(runtime.context_ptr(), op)
+            .map(Some)
+    }
+
+    /// Enter an already-materialized main Window realm for an explicit
+    /// microtask checkpoint, advancing isolate activity only when microtasks
+    /// actually execute JS or produce checkpoint side effects.
+    pub(super) fn with_current_main_world_microtask_checkpoint_scope<T>(
+        &mut self,
+        op: impl FnOnce(&mut v8::PinScope<'_, '_>, *mut PageScriptHost) -> Result<T>,
+    ) -> Result<Option<T>> {
+        let Some(runtime) = self.current_main_world() else {
+            return Ok(None);
+        };
+        let context_ptr = runtime.context_ptr();
+        let context_host = self._context_host.clone();
+        let result = self
+            .renderer_document_isolate
+            .with_renderer_document_isolate_microtask_checkpoint_mut(|isolate| {
+                let scope = pin!(v8::HandleScope::new(isolate));
+                let scope = &mut scope.init();
+                // SAFETY: `context_ptr` comes from the live main-world realm
+                // owned by this ScriptVm while the matching document isolate is
+                // entered and ScriptVm remains exclusively borrowed.
+                let context = unsafe { v8::Local::new(scope, &*context_ptr) };
+                let scope = &mut v8::ContextScope::new(scope, context);
+                let runtime_ptr: *mut PageScriptHost = (*context_host).as_ptr();
+                op(scope, runtime_ptr)
+            });
+        let publication = self.publish_prebootstrapped_isolated_window_contexts();
+        result.and_then(|value| publication.map(|()| Some(value)))
+    }
+
+    /// Enter an already-materialized main Window realm for runtime checkpoint
+    /// housekeeping without counting the entry itself as script activity.
+    pub(super) fn with_current_main_world_scope_internal<T>(
+        &mut self,
+        op: impl FnOnce(&mut v8::PinScope<'_, '_>, *mut PageScriptHost) -> Result<T>,
+    ) -> Result<Option<T>> {
+        let Some(runtime) = self.current_main_world() else {
+            return Ok(None);
+        };
+        self.with_context_scope_by_ptr_with_activity(runtime.context_ptr(), false, op)
             .map(Some)
     }
 

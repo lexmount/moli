@@ -597,6 +597,1480 @@ fn renderer_document_isolate_memory_pressure_escalates_at_one_third_of_heap_limi
         100, 100
     ));
 }
+
+#[test]
+fn renderer_document_isolate_moderate_pressure_requires_more_than_8_mib_growth() {
+    const EIGHT_MIB: usize = 8 * 1024 * 1024;
+    const LIMIT: usize = 512 * 1024 * 1024;
+    let base = RendererDocumentIsolateMemoryPressureInput {
+        heap_size_limit: LIMIT,
+        ..RendererDocumentIsolateMemoryPressureInput::default()
+    };
+
+    assert_eq!(
+        renderer_document_isolate_memory_pressure_action(base),
+        RendererDocumentIsolateMemoryPressureAction::None
+    );
+    assert_eq!(
+        renderer_document_isolate_memory_pressure_action(
+            RendererDocumentIsolateMemoryPressureInput {
+                used_heap_size: EIGHT_MIB,
+                ..base
+            }
+        ),
+        RendererDocumentIsolateMemoryPressureAction::None
+    );
+    assert_eq!(
+        renderer_document_isolate_memory_pressure_action(
+            RendererDocumentIsolateMemoryPressureInput {
+                used_heap_size: EIGHT_MIB + 1,
+                ..base
+            }
+        ),
+        RendererDocumentIsolateMemoryPressureAction::Moderate
+    );
+    assert_eq!(
+        renderer_document_isolate_memory_pressure_action(
+            RendererDocumentIsolateMemoryPressureInput {
+                used_heap_size: 20 * 1024 * 1024 + EIGHT_MIB,
+                last_maintenance_used_memory: 20 * 1024 * 1024,
+                ..base
+            }
+        ),
+        RendererDocumentIsolateMemoryPressureAction::None
+    );
+    assert_eq!(
+        renderer_document_isolate_memory_pressure_action(
+            RendererDocumentIsolateMemoryPressureInput {
+                used_heap_size: 20 * 1024 * 1024 + EIGHT_MIB + 1,
+                last_maintenance_used_memory: 20 * 1024 * 1024,
+                ..base
+            }
+        ),
+        RendererDocumentIsolateMemoryPressureAction::Moderate
+    );
+    // Heap shrinkage below the prior baseline must not underflow or trigger GC.
+    assert_eq!(
+        renderer_document_isolate_memory_pressure_action(
+            RendererDocumentIsolateMemoryPressureInput {
+                used_heap_size: 4 * 1024 * 1024,
+                last_maintenance_used_memory: 20 * 1024 * 1024,
+                ..base
+            }
+        ),
+        RendererDocumentIsolateMemoryPressureAction::None
+    );
+    // External memory growth counts toward the 8 MiB threshold even when JS heap is flat.
+    assert_eq!(
+        renderer_document_isolate_memory_pressure_action(
+            RendererDocumentIsolateMemoryPressureInput {
+                used_heap_size: 2 * 1024 * 1024,
+                external_memory: EIGHT_MIB,
+                last_maintenance_used_memory: 2 * 1024 * 1024,
+                ..base
+            }
+        ),
+        RendererDocumentIsolateMemoryPressureAction::None
+    );
+    assert_eq!(
+        renderer_document_isolate_memory_pressure_action(
+            RendererDocumentIsolateMemoryPressureInput {
+                used_heap_size: 2 * 1024 * 1024,
+                external_memory: EIGHT_MIB + 1,
+                last_maintenance_used_memory: 2 * 1024 * 1024,
+                ..base
+            }
+        ),
+        RendererDocumentIsolateMemoryPressureAction::Moderate
+    );
+    // Unreclaimed native-backed finalizer bytes trigger moderate pressure above 8 MiB,
+    // while already-finalized allocations (live_native_bytes == 0) do not trigger redundant GC.
+    assert_eq!(
+        renderer_document_isolate_memory_pressure_action(
+            RendererDocumentIsolateMemoryPressureInput {
+                allocated_native_bytes_since_maintenance: EIGHT_MIB + 1,
+                live_native_bytes: 0,
+                ..base
+            }
+        ),
+        RendererDocumentIsolateMemoryPressureAction::None
+    );
+    assert_eq!(
+        renderer_document_isolate_memory_pressure_action(
+            RendererDocumentIsolateMemoryPressureInput {
+                allocated_native_bytes_since_maintenance: EIGHT_MIB + 1,
+                live_native_bytes: EIGHT_MIB + 1,
+                ..base
+            }
+        ),
+        RendererDocumentIsolateMemoryPressureAction::Moderate
+    );
+    // Burst of unreclaimed finalizer registrations triggers immediately at 256.
+    assert_eq!(
+        renderer_document_isolate_memory_pressure_action(
+            RendererDocumentIsolateMemoryPressureInput {
+                finalizer_registrations_since_maintenance: 255,
+                live_finalizers: 255,
+                ..base
+            }
+        ),
+        RendererDocumentIsolateMemoryPressureAction::None
+    );
+    assert_eq!(
+        renderer_document_isolate_memory_pressure_action(
+            RendererDocumentIsolateMemoryPressureInput {
+                finalizer_registrations_since_maintenance: 256,
+                live_finalizers: 256,
+                ..base
+            }
+        ),
+        RendererDocumentIsolateMemoryPressureAction::Moderate
+    );
+    // Direct v8::Weak finalizer bursts are caught via global handle growth.
+    assert_eq!(
+        renderer_document_isolate_memory_pressure_action(
+            RendererDocumentIsolateMemoryPressureInput {
+                used_global_handles_size: 1024 + 256 * std::mem::size_of::<usize>(),
+                last_maintenance_used_global_handles_size: Some(1024),
+                ..base
+            }
+        ),
+        RendererDocumentIsolateMemoryPressureAction::Moderate
+    );
+    // Newly detached contexts trigger moderate maintenance once.
+    assert_eq!(
+        renderer_document_isolate_memory_pressure_action(
+            RendererDocumentIsolateMemoryPressureInput {
+                detached_contexts: 1,
+                last_maintenance_detached_contexts: 0,
+                ..base
+            }
+        ),
+        RendererDocumentIsolateMemoryPressureAction::Moderate
+    );
+    assert_eq!(
+        renderer_document_isolate_memory_pressure_action(
+            RendererDocumentIsolateMemoryPressureInput {
+                detached_contexts: 1,
+                last_maintenance_detached_contexts: 1,
+                ..base
+            }
+        ),
+        RendererDocumentIsolateMemoryPressureAction::None
+    );
+    // Smaller pending native activity falls back to a bounded collection on the 4th tick,
+    // while a truly idle isolate stays silent even after many ticks.
+    assert_eq!(
+        renderer_document_isolate_memory_pressure_action(
+            RendererDocumentIsolateMemoryPressureInput {
+                allocated_native_bytes_since_maintenance: 1024,
+                live_native_bytes: 1024,
+                finalizer_registrations_since_maintenance: 1,
+                live_finalizers: 1,
+                ticks_with_pending_native_activity: 2,
+                ..base
+            }
+        ),
+        RendererDocumentIsolateMemoryPressureAction::None
+    );
+    assert_eq!(
+        renderer_document_isolate_memory_pressure_action(
+            RendererDocumentIsolateMemoryPressureInput {
+                allocated_native_bytes_since_maintenance: 1024,
+                live_native_bytes: 1024,
+                finalizer_registrations_since_maintenance: 1,
+                live_finalizers: 1,
+                ticks_with_pending_native_activity: 3,
+                ..base
+            }
+        ),
+        RendererDocumentIsolateMemoryPressureAction::Moderate
+    );
+    assert_eq!(
+        renderer_document_isolate_memory_pressure_action(
+            RendererDocumentIsolateMemoryPressureInput {
+                ticks_with_pending_native_activity: 10,
+                ..base
+            }
+        ),
+        RendererDocumentIsolateMemoryPressureAction::None
+    );
+    // A retained native wrapper, 0-byte finalizer, detached context, or direct
+    // weak handle above initial baseline stays idle when no isolate activity
+    // occurred, while subsequent isolate activity enables the bounded fallback.
+    for retained_case in [
+        RendererDocumentIsolateMemoryPressureInput {
+            live_native_bytes: 1024 * 1024,
+            live_finalizers: 1,
+            ticks_with_pending_native_activity: 3,
+            ..base
+        },
+        RendererDocumentIsolateMemoryPressureInput {
+            live_finalizers: 1,
+            ticks_with_pending_native_activity: 3,
+            ..base
+        },
+        RendererDocumentIsolateMemoryPressureInput {
+            detached_contexts: 1,
+            last_maintenance_detached_contexts: 1,
+            ticks_with_pending_native_activity: 3,
+            ..base
+        },
+        RendererDocumentIsolateMemoryPressureInput {
+            used_global_handles_size: 1032,
+            initial_used_global_handles_size: Some(1024),
+            last_maintenance_used_global_handles_size: Some(1032),
+            ticks_with_pending_native_activity: 3,
+            ..base
+        },
+    ] {
+        assert_eq!(
+            renderer_document_isolate_memory_pressure_action(
+                RendererDocumentIsolateMemoryPressureInput {
+                    has_isolate_activity_since_maintenance: false,
+                    ..retained_case
+                }
+            ),
+            RendererDocumentIsolateMemoryPressureAction::None
+        );
+        assert_eq!(
+            renderer_document_isolate_memory_pressure_action(
+                RendererDocumentIsolateMemoryPressureInput {
+                    has_isolate_activity_since_maintenance: true,
+                    ..retained_case
+                }
+            ),
+            RendererDocumentIsolateMemoryPressureAction::Moderate
+        );
+    }
+    // Critical escalation remains active even when growth since last maintenance is <= 8 MiB.
+    assert_eq!(
+        renderer_document_isolate_memory_pressure_action(
+            RendererDocumentIsolateMemoryPressureInput {
+                used_heap_size: 34,
+                heap_size_limit: 100,
+                last_maintenance_used_memory: 34,
+                ..RendererDocumentIsolateMemoryPressureInput::default()
+            }
+        ),
+        RendererDocumentIsolateMemoryPressureAction::Critical
+    );
+}
+
+#[test]
+fn renderer_document_isolate_maintenance_skips_idle_moderate_pressure_and_triggers_after_8_mib_growth()
+ {
+    let mut vm = new_parsed_test_vm(
+        "https://idle-memory-pressure.test/",
+        "<!doctype html><body></body>",
+    );
+
+    assert_eq!(
+        vm.notify_renderer_document_isolate_memory_pressure_with_action()
+            .expect("idle maintenance check should succeed"),
+        RendererDocumentIsolateMemoryPressureAction::None,
+        "fresh idle page below 8 MiB heap growth must not trigger moderate memory pressure"
+    );
+
+    vm.eval(
+        r#"
+(() => {
+  window.__retained = [];
+  for (let i = 0; i < 160000; i++) {
+    window.__retained.push({ id: i, payload: "item-" + i + "-" + "x".repeat(32) });
+  }
+  return String(window.__retained.length);
+})()
+"#,
+    )
+    .expect("large retained allocation should evaluate");
+
+    assert_eq!(
+        vm.notify_renderer_document_isolate_memory_pressure_with_action()
+            .expect("post-growth maintenance check should succeed"),
+        RendererDocumentIsolateMemoryPressureAction::Moderate,
+        "heap growth exceeding 8 MiB must trigger moderate memory pressure once"
+    );
+
+    assert_eq!(
+        vm.notify_renderer_document_isolate_memory_pressure_with_action()
+            .expect("subsequent idle maintenance check should succeed"),
+        RendererDocumentIsolateMemoryPressureAction::None,
+        "subsequent idle maintenance ticks must not keep firing moderate memory pressure"
+    );
+
+    vm.eval(
+        r#"
+(() => {
+  window.__small = new Array(1024).fill("small");
+  return String(window.__small.length);
+})()
+"#,
+    )
+    .expect("small allocation should evaluate");
+
+    assert_eq!(
+        vm.notify_renderer_document_isolate_memory_pressure_with_action()
+            .expect("small allocation maintenance check should succeed"),
+        RendererDocumentIsolateMemoryPressureAction::None,
+        "sub-threshold heap growth must not trigger moderate memory pressure"
+    );
+}
+
+async fn drain_v8_foreground_gc_tasks_until(
+    vm: &mut crate::runtime::PageVmTaskExecutorTestHarness,
+    loader: &ResourceRequestClient,
+    mut condition: impl FnMut() -> bool,
+) {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        while vm
+            .run_one_oldest_ready_page_task_executor_turn(loader)
+            .await
+            .expect("production Page-task dispatcher should drain V8 foreground tasks")
+        {}
+        if condition() {
+            return;
+        }
+        let Some(remaining) = deadline.checked_duration_since(std::time::Instant::now()) else {
+            return;
+        };
+        let arrived = tokio::time::timeout(remaining, vm.wait_for_v8_foreground_task_arrival())
+            .await
+            .unwrap_or(false);
+        if !arrived {
+            return;
+        }
+    }
+}
+
+async fn drain_v8_foreground_gc_tasks_to_quiescence(
+    vm: &mut crate::runtime::PageVmTaskExecutorTestHarness,
+    loader: &ResourceRequestClient,
+) -> bool {
+    let mut ran_foreground_task = false;
+    loop {
+        while vm
+            .run_one_oldest_ready_page_task_executor_turn(loader)
+            .await
+            .expect("V8 GC foreground tasks should drain cleanly")
+        {
+            ran_foreground_task = true;
+        }
+        let quiet_window = if ran_foreground_task {
+            std::time::Duration::from_millis(50)
+        } else {
+            std::time::Duration::from_secs(2)
+        };
+        if !tokio::time::timeout(quiet_window, vm.wait_for_v8_foreground_task_arrival())
+            .await
+            .unwrap_or(false)
+        {
+            break;
+        }
+    }
+    ran_foreground_task
+}
+
+#[tokio::test]
+async fn renderer_document_isolate_maintenance_reclaims_native_backed_blobs_without_large_js_heap_growth()
+ {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+    let mut vm = new_storage_page_task_executor_test_vm_with_loader(
+        "https://blob-memory-pressure.test/",
+        &loader,
+    );
+    let owner_id = vm.resource_owner_id;
+
+    assert_eq!(
+        vm.notify_renderer_document_isolate_memory_pressure_with_action()
+            .expect("initial idle maintenance check should succeed"),
+        RendererDocumentIsolateMemoryPressureAction::None
+    );
+
+    assert_eq!(crate::blob::live_blob_count_for_owner_for_test(owner_id), 0);
+    vm.eval(
+        r#"
+(() => {
+  window.__blobSeed = "x".repeat(1024 * 1024);
+  for (let i = 0; i < 12; i++) {
+    new Blob([window.__blobSeed]);
+  }
+  return "created";
+})()
+"#,
+    )
+    .expect("repeated Blob creation should evaluate");
+
+    let live_blobs_after_alloc = crate::blob::live_blob_count_for_owner_for_test(owner_id);
+    assert!(
+        live_blobs_after_alloc > 0,
+        "expected uncollected Blob backing entries before maintenance (after={live_blobs_after_alloc})"
+    );
+
+    assert_eq!(
+        vm.notify_renderer_document_isolate_memory_pressure_with_action()
+            .expect("post-blob maintenance check should succeed"),
+        RendererDocumentIsolateMemoryPressureAction::Moderate,
+        "native-backed Blob allocations exceeding 8 MiB must trigger moderate memory pressure even when JS heap growth is small"
+    );
+
+    drain_v8_foreground_gc_tasks_until(&mut vm, &loader, || {
+        crate::blob::live_blob_count_for_owner_for_test(owner_id) < live_blobs_after_alloc
+    })
+    .await;
+
+    let live_blobs_after_gc = crate::blob::live_blob_count_for_owner_for_test(owner_id);
+    assert!(
+        live_blobs_after_gc < live_blobs_after_alloc,
+        "moderate memory pressure must reclaim unreferenced native-backed Blobs (after_alloc={live_blobs_after_alloc}, after_gc={live_blobs_after_gc})"
+    );
+
+    for idle_tick in 0..6 {
+        assert_eq!(
+            vm.notify_renderer_document_isolate_memory_pressure_with_action()
+                .expect("subsequent idle maintenance check should succeed"),
+            RendererDocumentIsolateMemoryPressureAction::None,
+            "once unreferenced Blobs are reclaimed, subsequent idle tick {idle_tick} must stay quiet"
+        );
+    }
+}
+
+#[test]
+fn renderer_document_isolate_maintenance_tracks_external_array_buffer_memory_growth() {
+    let mut vm = new_parsed_test_vm(
+        "https://external-memory-pressure.test/",
+        "<!doctype html><body></body>",
+    );
+
+    assert_eq!(
+        vm.notify_renderer_document_isolate_memory_pressure_with_action()
+            .expect("initial idle maintenance check should succeed"),
+        RendererDocumentIsolateMemoryPressureAction::None
+    );
+
+    vm.eval(
+        r#"
+(() => {
+  window.__externalBuffers = [];
+  for (let i = 0; i < 10; i++) {
+    const view = new Uint8Array(1024 * 1024);
+    view[0] = i;
+    window.__externalBuffers.push(view);
+  }
+  return String(window.__externalBuffers.length);
+})()
+"#,
+    )
+    .expect("ArrayBuffer allocation should evaluate");
+
+    assert_eq!(
+        vm.notify_renderer_document_isolate_memory_pressure_with_action()
+            .expect("post-external-memory maintenance check should succeed"),
+        RendererDocumentIsolateMemoryPressureAction::Moderate,
+        "external memory growth exceeding 8 MiB must trigger moderate memory pressure"
+    );
+
+    assert_eq!(
+        vm.notify_renderer_document_isolate_memory_pressure_with_action()
+            .expect("subsequent idle maintenance check should succeed"),
+        RendererDocumentIsolateMemoryPressureAction::None,
+        "retained external buffers must not trigger repeated idle moderate pressure"
+    );
+}
+
+#[tokio::test]
+async fn renderer_document_isolate_maintenance_reclaims_sub_threshold_blob_via_bounded_fallback_and_stays_idle()
+ {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+    let mut vm = new_storage_page_task_executor_test_vm_with_loader(
+        "https://sub-threshold-blob-pressure.test/",
+        &loader,
+    );
+    let owner_id = vm.resource_owner_id;
+
+    // Negative control: a completely idle page stays silent across many ticks.
+    for tick in 0..8 {
+        assert_eq!(
+            vm.notify_renderer_document_isolate_memory_pressure_with_action()
+                .expect("idle maintenance check should succeed"),
+            RendererDocumentIsolateMemoryPressureAction::None,
+            "fresh idle page must remain silent on tick {tick}"
+        );
+    }
+
+    assert_eq!(crate::blob::live_blob_count_for_owner_for_test(owner_id), 0);
+    vm.eval(
+        r#"
+(() => {
+  window.__smallSeed = "y".repeat(512 * 1024);
+  new Blob([window.__smallSeed]);
+  return "created";
+})()
+"#,
+    )
+    .expect("sub-threshold Blob creation should evaluate");
+
+    let live_blobs_after_alloc = crate::blob::live_blob_count_for_owner_for_test(owner_id);
+    assert!(
+        live_blobs_after_alloc > 0,
+        "expected uncollected Blob before bounded fallback"
+    );
+
+    for skipped_tick in 0..3 {
+        assert_eq!(
+            vm.notify_renderer_document_isolate_memory_pressure_with_action()
+                .expect("pre-fallback maintenance check should succeed"),
+            RendererDocumentIsolateMemoryPressureAction::None,
+            "sub-threshold native wrapper must wait for bounded fallback on tick {skipped_tick}"
+        );
+    }
+
+    assert_eq!(
+        vm.notify_renderer_document_isolate_memory_pressure_with_action()
+            .expect("bounded fallback maintenance check should succeed"),
+        RendererDocumentIsolateMemoryPressureAction::Moderate,
+        "sub-threshold unreferenced Blob must trigger moderate memory pressure on the 4th tick"
+    );
+
+    drain_v8_foreground_gc_tasks_until(&mut vm, &loader, || {
+        crate::blob::live_blob_count_for_owner_for_test(owner_id) < live_blobs_after_alloc
+    })
+    .await;
+
+    let live_blobs_after_gc = crate::blob::live_blob_count_for_owner_for_test(owner_id);
+    assert!(
+        live_blobs_after_gc < live_blobs_after_alloc,
+        "bounded fallback must reclaim the unreferenced Blob (after_alloc={live_blobs_after_alloc}, after_gc={live_blobs_after_gc})"
+    );
+
+    for idle_tick in 0..6 {
+        assert_eq!(
+            vm.notify_renderer_document_isolate_memory_pressure_with_action()
+                .expect("post-reclaim idle maintenance check should succeed"),
+            RendererDocumentIsolateMemoryPressureAction::None,
+            "reclaimed idle page must stay quiet on post-fallback tick {idle_tick}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn renderer_document_isolate_maintenance_reclaims_retained_blob_after_release_without_idle_churn()
+ {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+    let mut vm = new_storage_page_task_executor_test_vm_with_loader(
+        "https://retained-then-released-blob.test/",
+        &loader,
+    );
+    let owner_id = vm.resource_owner_id;
+
+    assert_eq!(
+        vm.notify_renderer_document_isolate_memory_pressure_with_action()
+            .expect("initial idle maintenance check should succeed"),
+        RendererDocumentIsolateMemoryPressureAction::None
+    );
+
+    assert_eq!(crate::blob::live_blob_count_for_owner_for_test(owner_id), 0);
+    vm.eval(
+        r#"
+(() => {
+  const seed = "z".repeat(1024 * 1024);
+  window.__retainedBlobs = [];
+  for (let i = 0; i < 10; i++) {
+    window.__retainedBlobs.push(new Blob([seed]));
+  }
+  return String(window.__retainedBlobs.length);
+})()
+"#,
+    )
+    .expect("retained Blob creation should evaluate");
+
+    let live_blobs_after_alloc = crate::blob::live_blob_count_for_owner_for_test(owner_id);
+    assert_eq!(live_blobs_after_alloc, 10);
+
+    // First maintenance observes >8 MiB newly allocated native bytes and runs once.
+    assert_eq!(
+        vm.notify_renderer_document_isolate_memory_pressure_with_action()
+            .expect("initial post-alloc maintenance should succeed"),
+        RendererDocumentIsolateMemoryPressureAction::Moderate
+    );
+
+    // Wait for V8's spawned GC foreground tasks from that moderate pass to arrive
+    // and drain to quiescence; they must not look like new script activity that
+    // re-arms idle maintenance.
+    assert!(
+        drain_v8_foreground_gc_tasks_to_quiescence(&mut vm, &loader).await,
+        "initial moderate pass must dispatch V8 GC foreground tasks"
+    );
+
+    // While retained and completely idle (including read-only heap diagnostics
+    // and keep-alive queries), repeated ticks must not churn GC.
+    for idle_tick in 0..6 {
+        let _ = vm
+            .renderer_document_isolate_heap_usage()
+            .expect("read-only heap diagnostics should succeed");
+        let _ = vm
+            .has_event_loop_keep_alive_work()
+            .expect("read-only keep-alive query should succeed");
+        assert_eq!(
+            vm.notify_renderer_document_isolate_memory_pressure_with_action()
+                .expect("idle retained-blob maintenance should succeed"),
+            RendererDocumentIsolateMemoryPressureAction::None,
+            "retained Blobs on an idle page must not cause repeated GC on tick {idle_tick}"
+        );
+    }
+
+    // Releasing the Blobs without allocating anything new counts as isolate activity,
+    // enabling the bounded fallback to reclaim them.
+    vm.eval("window.__retainedBlobs = null; 'released'")
+        .expect("releasing retained Blobs should evaluate");
+
+    let mut triggered_moderate = false;
+    for _ in 0..4 {
+        if vm
+            .notify_renderer_document_isolate_memory_pressure_with_action()
+            .expect("post-release maintenance should succeed")
+            == RendererDocumentIsolateMemoryPressureAction::Moderate
+        {
+            triggered_moderate = true;
+            break;
+        }
+    }
+    assert!(
+        triggered_moderate,
+        "releasing retained native-backed Blobs must trigger bounded moderate reclamation"
+    );
+
+    drain_v8_foreground_gc_tasks_until(&mut vm, &loader, || {
+        crate::blob::live_blob_count_for_owner_for_test(owner_id) < live_blobs_after_alloc
+    })
+    .await;
+
+    let live_blobs_after_release_gc = crate::blob::live_blob_count_for_owner_for_test(owner_id);
+    assert!(
+        live_blobs_after_release_gc < live_blobs_after_alloc,
+        "post-release moderate maintenance must reclaim dropped Blobs (after_alloc={live_blobs_after_alloc}, after_gc={live_blobs_after_release_gc})"
+    );
+
+    for idle_tick in 0..6 {
+        assert_eq!(
+            vm.notify_renderer_document_isolate_memory_pressure_with_action()
+                .expect("post-release idle maintenance should succeed"),
+            RendererDocumentIsolateMemoryPressureAction::None,
+            "post-release idle page must stay quiet on tick {idle_tick}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn renderer_document_isolate_maintenance_tracks_registry_network_body_sources_and_early_consumption()
+ {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+    let mut vm = new_storage_page_task_executor_test_vm_with_loader(
+        "https://registry-body-source-pressure.test/",
+        &loader,
+    );
+
+    assert_eq!(
+        vm.notify_renderer_document_isolate_memory_pressure_with_action()
+            .expect("initial idle maintenance check should succeed"),
+        RendererDocumentIsolateMemoryPressureAction::None
+    );
+
+    // Part 1: >8 MiB of unconsumed registry body sources must trigger immediate
+    // Moderate pressure and reclaim all backing entries via V8 finalizers.
+    let unconsumed_ids = vm
+        .with_default_context_scope(|scope, _| {
+            let mut ids = Vec::with_capacity(10);
+            for _ in 0..10 {
+                let (_source, id) = crate::network_host::register_test_network_body_source_in_scope(
+                    scope,
+                    vec![b'r'; 1024 * 1024],
+                );
+                ids.push(id);
+            }
+            Ok(ids)
+        })
+        .expect("registering unconsumed body sources should succeed");
+    assert!(
+        unconsumed_ids
+            .iter()
+            .all(|&id| crate::network_host::test_network_body_source_is_live(id)),
+        "all unconsumed registry body sources should be live before maintenance"
+    );
+
+    assert_eq!(
+        vm.notify_renderer_document_isolate_memory_pressure_with_action()
+            .expect("post-body-source maintenance check should succeed"),
+        RendererDocumentIsolateMemoryPressureAction::Moderate,
+        "unconsumed registry network body sources exceeding 8 MiB must trigger moderate pressure"
+    );
+
+    drain_v8_foreground_gc_tasks_until(&mut vm, &loader, || {
+        unconsumed_ids
+            .iter()
+            .all(|&id| !crate::network_host::test_network_body_source_is_live(id))
+    })
+    .await;
+
+    assert!(
+        unconsumed_ids
+            .iter()
+            .all(|&id| !crate::network_host::test_network_body_source_is_live(id)),
+        "moderate maintenance must reclaim all unconsumed registry network body sources"
+    );
+
+    assert_eq!(
+        vm.notify_renderer_document_isolate_memory_pressure_with_action()
+            .expect("post-reclaim idle maintenance check should succeed"),
+        RendererDocumentIsolateMemoryPressureAction::None
+    );
+
+    // Part 2: Explicitly consuming >8 MiB of registry body sources releases
+    // their NativeMemoryLease immediately even if the JS source wrappers remain
+    // retained, avoiding false-positive >8 MiB moderate triggers.
+    let retained_consumed_ids = vm
+        .with_default_context_scope(|scope, _| {
+            let global = scope.get_current_context().global(scope);
+            let retained = v8::Array::new(scope, 10);
+            let mut ids = Vec::with_capacity(10);
+            for idx in 0..10u32 {
+                let (source, id) = crate::network_host::register_test_network_body_source_in_scope(
+                    scope,
+                    vec![b'c'; 1024 * 1024],
+                );
+                let _ = retained.set_index(scope, idx, source.into());
+                ids.push(id);
+            }
+            let key = crate::util::v8str(scope, "__retainedConsumedBodySources");
+            let _ = global.set(scope, key.into(), retained.into());
+            Ok(ids)
+        })
+        .expect("registering retained body sources should succeed");
+
+    for &id in &retained_consumed_ids {
+        assert!(
+            crate::network_host::consume_test_network_body_source(id).is_some(),
+            "explicit consumption should take the buffered bytes"
+        );
+        assert!(!crate::network_host::test_network_body_source_is_live(id));
+    }
+
+    assert_eq!(
+        vm.notify_renderer_document_isolate_memory_pressure_with_action()
+            .expect("post-consumed maintenance check should succeed"),
+        RendererDocumentIsolateMemoryPressureAction::None,
+        "explicitly consumed registry body sources must release native byte leases immediately"
+    );
+}
+
+#[tokio::test]
+async fn renderer_document_isolate_maintenance_recalibrates_baselines_after_async_moderate_gc() {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+    let mut vm = new_storage_page_task_executor_test_vm_with_loader(
+        "https://async-recalibration.test/",
+        &loader,
+    );
+
+    assert_eq!(
+        vm.notify_renderer_document_isolate_memory_pressure_with_action()
+            .expect("initial idle maintenance check should succeed"),
+        RendererDocumentIsolateMemoryPressureAction::None
+    );
+
+    // Allocate >12 MiB of unreferenced JS heap garbage, trigger async Moderate GC,
+    // and drain V8 foreground tasks so the post-GC heap drops well below the pre-GC peak.
+    vm.eval(
+        r#"
+(() => {
+  let tmp = [];
+  for (let i = 0; i < 240000; i++) {
+    tmp.push({ id: i, payload: "garbage-" + i + "-" + "x".repeat(32) });
+  }
+  return String(tmp.length);
+})()
+"#,
+    )
+    .expect("transient heap allocation should evaluate");
+
+    let pre_gc_peak = vm
+        .renderer_document_isolate_heap_usage()
+        .expect("pre-gc heap usage")
+        .used_size;
+
+    assert_eq!(
+        vm.notify_renderer_document_isolate_memory_pressure_with_action()
+            .expect("first moderate pass should trigger"),
+        RendererDocumentIsolateMemoryPressureAction::Moderate
+    );
+
+    assert!(
+        drain_v8_foreground_gc_tasks_to_quiescence(&mut vm, &loader).await,
+        "async moderate pass must run V8 GC foreground tasks"
+    );
+
+    let post_gc_valley = vm
+        .renderer_document_isolate_heap_usage()
+        .expect("post-gc heap usage")
+        .used_size;
+    assert!(
+        post_gc_valley + 8 * 1024 * 1024 < pre_gc_peak,
+        "expected async moderate GC to reclaim transient heap (valley={post_gc_valley}, peak={pre_gc_peak})"
+    );
+
+    // Allocate ~9 MiB of external memory: total tracked memory stays below or near
+    // the pre-GC peak, yet exceeds post-GC valley by >8 MiB. Recalibration must catch it.
+    vm.eval(
+        r#"
+(() => {
+  window.__postValleyBuffers = [];
+  for (let i = 0; i < 9; i++) {
+    const view = new Uint8Array(1024 * 1024);
+    view[0] = i;
+    window.__postValleyBuffers.push(view);
+  }
+  return String(window.__postValleyBuffers.length);
+})()
+"#,
+    )
+    .expect("post-valley external allocation should evaluate");
+
+    assert_eq!(
+        vm.notify_renderer_document_isolate_memory_pressure_with_action()
+            .expect("post-recalibration maintenance check should succeed"),
+        RendererDocumentIsolateMemoryPressureAction::Moderate,
+        "new >8 MiB growth after async Moderate GC must not be hidden by the pre-GC peak baseline"
+    );
+
+    assert!(drain_v8_foreground_gc_tasks_to_quiescence(&mut vm, &loader).await);
+
+    // Detached context recalibration: after leaving the initial-empty document,
+    // navigating an iframe replaces its Window while reusing its WindowProxy,
+    // detaching the outgoing child v8::Context (`detach_global()`). Once async
+    // Moderate GC collects that detached context and lowers the baseline back to
+    // 0, a second replacement navigation must trigger Moderate on the next tick.
+    vm.eval(
+        r#"
+(() => {
+  window.__recalFrame = document.createElement("iframe");
+  document.body.appendChild(window.__recalFrame);
+  window.__recalFrame.srcdoc = "<p>committed-base</p>";
+  return "base";
+})()
+"#,
+    )
+    .expect("initial child srcdoc navigation should evaluate");
+    while vm
+        .run_one_oldest_ready_page_task_executor_turn(&loader)
+        .await
+        .expect("base child srcdoc commit should settle")
+    {}
+
+    vm.eval(
+        r#"
+(() => {
+  void window.__recalFrame.contentDocument.body.textContent;
+  window.__recalFrame.srcdoc = "<p>nav-1</p>";
+  return "nav-1";
+})()
+"#,
+    )
+    .expect("first replacement child navigation should evaluate");
+    while vm
+        .run_one_oldest_ready_page_task_executor_turn(&loader)
+        .await
+        .expect("first replacement child Window should settle")
+    {}
+    let detached_after_nav1 = vm
+        .renderer_document_isolate_heap_usage()
+        .expect("heap usage after first replacement navigation")
+        .number_of_detached_contexts;
+    assert!(
+        detached_after_nav1 >= 1,
+        "reused-WindowProxy child navigation must produce a detached context (got {detached_after_nav1})"
+    );
+
+    assert_eq!(
+        vm.notify_renderer_document_isolate_memory_pressure_with_action()
+            .expect("first detached iframe maintenance should trigger"),
+        RendererDocumentIsolateMemoryPressureAction::Moderate
+    );
+    assert!(drain_v8_foreground_gc_tasks_to_quiescence(&mut vm, &loader).await);
+    assert_eq!(
+        vm.renderer_document_isolate_heap_usage()
+            .expect("heap usage after first detached-context GC")
+            .number_of_detached_contexts,
+        0,
+        "async Moderate GC must collect the first detached child context"
+    );
+
+    vm.eval(
+        r#"
+(() => {
+  void window.__recalFrame.contentDocument.body.textContent;
+  window.__recalFrame.srcdoc = "<p>nav-2</p>";
+  return "nav-2";
+})()
+"#,
+    )
+    .expect("second replacement child navigation should evaluate");
+    while vm
+        .run_one_oldest_ready_page_task_executor_turn(&loader)
+        .await
+        .expect("second replacement child Window should settle")
+    {}
+    let detached_after_nav2 = vm
+        .renderer_document_isolate_heap_usage()
+        .expect("heap usage after second replacement navigation")
+        .number_of_detached_contexts;
+    assert!(
+        detached_after_nav2 >= 1,
+        "second replacement navigation must produce a new detached context (got {detached_after_nav2})"
+    );
+
+    assert_eq!(
+        vm.notify_renderer_document_isolate_memory_pressure_with_action()
+            .expect("second detached iframe maintenance must trigger after recalibration"),
+        RendererDocumentIsolateMemoryPressureAction::Moderate
+    );
+}
+
+#[tokio::test]
+async fn renderer_document_isolate_maintenance_detects_first_tick_direct_weak_wrappers() {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+    let mut vm = new_storage_page_task_executor_test_vm_with_loader(
+        "https://first-tick-direct-weak.test/",
+        &loader,
+    );
+
+    let handles_before = vm
+        .renderer_document_isolate_heap_usage()
+        .expect("initial heap usage")
+        .used_global_handles_size;
+
+    // Create direct v8::Weak::with_finalizer wrappers (CompressionStream codec
+    // state) BEFORE the first maintenance tick; the initial main-world global
+    // handles baseline must detect them instead of absorbing them into the
+    // baseline.
+    vm.eval(
+        r#"
+(() => {
+  for (let i = 0; i < 32; i++) {
+    new CompressionStream("gzip");
+  }
+  return "created";
+})()
+"#,
+    )
+    .expect("direct weak CompressionStream allocation should evaluate");
+
+    let handles_after = vm
+        .renderer_document_isolate_heap_usage()
+        .expect("post-alloc heap usage")
+        .used_global_handles_size;
+    assert!(
+        handles_after > handles_before,
+        "direct weak wrappers should grow used_global_handles_size above initial main-world baseline (before={handles_before}, after={handles_after})"
+    );
+
+    let mut triggered_moderate = false;
+    for _ in 0..4 {
+        if vm
+            .notify_renderer_document_isolate_memory_pressure_with_action()
+            .expect("first-tick direct weak maintenance should succeed")
+            == RendererDocumentIsolateMemoryPressureAction::Moderate
+        {
+            triggered_moderate = true;
+            break;
+        }
+    }
+    assert!(
+        triggered_moderate,
+        "direct v8::Weak wrappers created before the first maintenance tick must trigger bounded reclamation (before={handles_before}, after={handles_after})"
+    );
+
+    assert!(drain_v8_foreground_gc_tasks_to_quiescence(&mut vm, &loader).await);
+
+    for idle_tick in 0..6 {
+        assert_eq!(
+            vm.notify_renderer_document_isolate_memory_pressure_with_action()
+                .expect("post-direct-weak idle maintenance should succeed"),
+            RendererDocumentIsolateMemoryPressureAction::None,
+            "idle page after reclaiming direct weak wrappers must stay quiet on tick {idle_tick}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn renderer_document_isolate_maintenance_reclaims_blob_released_by_finalization_registry_foreground_task()
+ {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+    let mut vm = new_storage_page_task_executor_test_vm_with_loader(
+        "https://finalization-registry-release.test/",
+        &loader,
+    );
+    let owner_id = vm.resource_owner_id;
+
+    assert_eq!(
+        vm.notify_renderer_document_isolate_memory_pressure_with_action()
+            .expect("initial idle maintenance check should succeed"),
+        RendererDocumentIsolateMemoryPressureAction::None
+    );
+
+    assert_eq!(crate::blob::live_blob_count_for_owner_for_test(owner_id), 0);
+    vm.eval(
+        r#"
+(() => {
+  const seed = "f".repeat(1024 * 1024);
+  window.__retainedBlobs = [];
+  for (let i = 0; i < 10; i++) {
+    window.__retainedBlobs.push(new Blob([seed]));
+  }
+  window.__fr = new FinalizationRegistry(() => {
+    window.__retainedBlobs = null;
+  });
+  (() => {
+    let target = { tag: "release-trigger" };
+    window.__fr.register(target, "drop-blobs");
+    target = null;
+  })();
+  return String(window.__retainedBlobs.length);
+})()
+"#,
+    )
+    .expect("retained Blobs and FinalizationRegistry setup should evaluate");
+
+    let live_blobs_after_alloc = crate::blob::live_blob_count_for_owner_for_test(owner_id);
+    assert_eq!(live_blobs_after_alloc, 10);
+
+    // First maintenance pass observes >8 MiB newly allocated native bytes and
+    // triggers async Moderate GC while the Blobs are still strongly retained.
+    assert_eq!(
+        vm.notify_renderer_document_isolate_memory_pressure_with_action()
+            .expect("initial post-alloc maintenance should succeed"),
+        RendererDocumentIsolateMemoryPressureAction::Moderate
+    );
+
+    // Draining V8 foreground tasks finishes the Moderate GC (collecting the
+    // transient target) and then runs V8's FinalizationRegistry cleanup
+    // foreground task, releasing `window.__retainedBlobs = null` via author JS
+    // without allocating anything new.
+    assert!(
+        drain_v8_foreground_gc_tasks_to_quiescence(&mut vm, &loader).await,
+        "moderate pass must run V8 GC and FinalizationRegistry cleanup foreground tasks"
+    );
+
+    let live_blobs_after_cleanup = crate::blob::live_blob_count_for_owner_for_test(owner_id);
+    assert_eq!(
+        live_blobs_after_cleanup, live_blobs_after_alloc,
+        "Blobs must still be alive right after FinalizationRegistry released them, awaiting the next GC"
+    );
+
+    let mut triggered_moderate = false;
+    for _ in 0..4 {
+        if vm
+            .notify_renderer_document_isolate_memory_pressure_with_action()
+            .expect("post-FinalizationRegistry maintenance should succeed")
+            == RendererDocumentIsolateMemoryPressureAction::Moderate
+        {
+            triggered_moderate = true;
+            break;
+        }
+    }
+    assert!(
+        triggered_moderate,
+        "FinalizationRegistry cleanup JS releasing retained Blobs must arm the bounded fallback"
+    );
+
+    drain_v8_foreground_gc_tasks_until(&mut vm, &loader, || {
+        crate::blob::live_blob_count_for_owner_for_test(owner_id) < live_blobs_after_alloc
+    })
+    .await;
+
+    let live_blobs_after_reclaim = crate::blob::live_blob_count_for_owner_for_test(owner_id);
+    assert!(
+        live_blobs_after_reclaim < live_blobs_after_alloc,
+        "bounded fallback after FinalizationRegistry cleanup must reclaim released Blobs (before={live_blobs_after_alloc}, after={live_blobs_after_reclaim})"
+    );
+    assert_eq!(
+        vm.eval("String(window.__retainedBlobs)")
+            .expect("probe after reclaim should evaluate"),
+        "null"
+    );
+
+    // Non-vacuous idle negative control: retain a live Blob so
+    // `has_live_native_wrappers_above_baseline()` stays true, sync baselines,
+    // and verify repeated empty microtask checkpoints never bump
+    // `activity_generation` or re-enter 60s Moderate GC churn.
+    vm.eval(
+        r#"
+(() => {
+  window.__idleRetainedBlob = new Blob(["r".repeat(64 * 1024)]);
+  return "retained";
+})()
+"#,
+    )
+    .expect("idle retained Blob setup should evaluate");
+    let _ = drain_v8_foreground_gc_tasks_to_quiescence(&mut vm, &loader).await;
+    vm.collect_renderer_document_isolate_garbage()
+        .expect("post-test baseline sync should succeed");
+    assert_eq!(
+        crate::blob::live_blob_count_for_owner_for_test(owner_id),
+        1,
+        "retained Blob must remain live so the empty-checkpoint negative control is non-vacuous"
+    );
+    for idle_tick in 0..6 {
+        vm.perform_owner_lane_task_microtask_checkpoints()
+            .expect("empty microtask checkpoint should succeed");
+        assert_eq!(
+            vm.notify_renderer_document_isolate_memory_pressure_with_action()
+                .expect("post-reclaim idle maintenance should succeed"),
+            RendererDocumentIsolateMemoryPressureAction::None,
+            "idle page holding a retained Blob with empty checkpoints must remain quiet on tick {idle_tick}"
+        );
+    }
+    assert_eq!(
+        crate::blob::live_blob_count_for_owner_for_test(owner_id),
+        1,
+        "retained Blob must remain live across all idle ticks"
+    );
+}
+
+#[tokio::test]
+async fn renderer_document_isolate_maintenance_reclaims_blob_released_by_wasm_promise_reaction_checkpoint()
+ {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+    let mut vm = new_storage_page_task_executor_test_vm_with_loader(
+        "https://wasm-promise-reaction-release.test/",
+        &loader,
+    );
+    let owner_id = vm.resource_owner_id;
+
+    assert_eq!(
+        vm.notify_renderer_document_isolate_memory_pressure_with_action()
+            .expect("initial idle maintenance check should succeed"),
+        RendererDocumentIsolateMemoryPressureAction::None
+    );
+
+    assert_eq!(crate::blob::live_blob_count_for_owner_for_test(owner_id), 0);
+    vm.eval(
+        r#"
+(() => {
+  const seed = "w".repeat(1024 * 1024);
+  window.__retainedBlobs = [];
+  for (let i = 0; i < 10; i++) {
+    window.__retainedBlobs.push(new Blob([seed]));
+  }
+  WebAssembly.compile(new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0])).then(() => {
+    window.__retainedBlobs = null;
+  });
+  return String(window.__retainedBlobs.length);
+})()
+"#,
+    )
+    .expect("retained Blobs and async WebAssembly.compile setup should evaluate");
+
+    let live_blobs_after_alloc = crate::blob::live_blob_count_for_owner_for_test(owner_id);
+    assert_eq!(live_blobs_after_alloc, 10);
+
+    // Wait for V8's background Wasm compilation to enqueue its foreground
+    // continuation without executing it yet.
+    assert!(
+        tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            vm.wait_for_v8_foreground_task_arrival(),
+        )
+        .await
+        .unwrap_or(false),
+        "async WebAssembly.compile must post a V8 foreground continuation"
+    );
+
+    // Complete a collection while Blobs are still retained, resetting all
+    // since-maintenance counters and the activity generation baseline.
+    vm.collect_renderer_document_isolate_garbage()
+        .expect("preceding GC while Blobs are retained should succeed");
+    assert_eq!(
+        crate::blob::live_blob_count_for_owner_for_test(owner_id),
+        live_blobs_after_alloc,
+        "retained Blobs must survive the preceding collection"
+    );
+
+    // Drain the queued V8 foreground continuation and its task-end microtask
+    // checkpoint: the Wasm Promise resolves and its `.then(...)` reaction clears
+    // `window.__retainedBlobs = null` without any further host eval.
+    assert!(
+        drain_v8_foreground_gc_tasks_to_quiescence(&mut vm, &loader).await,
+        "Wasm foreground continuation must execute"
+    );
+    assert_eq!(
+        crate::blob::live_blob_count_for_owner_for_test(owner_id),
+        live_blobs_after_alloc,
+        "Blobs must remain pending reclamation until a follow-up GC runs"
+    );
+
+    let mut triggered_moderate = false;
+    for _ in 0..4 {
+        if vm
+            .notify_renderer_document_isolate_memory_pressure_with_action()
+            .expect("post-Wasm-reaction maintenance should succeed")
+            == RendererDocumentIsolateMemoryPressureAction::Moderate
+        {
+            triggered_moderate = true;
+            break;
+        }
+    }
+    assert!(
+        triggered_moderate,
+        "Promise reaction following async Wasm foreground continuation must arm the bounded fallback"
+    );
+
+    drain_v8_foreground_gc_tasks_until(&mut vm, &loader, || {
+        crate::blob::live_blob_count_for_owner_for_test(owner_id) < live_blobs_after_alloc
+    })
+    .await;
+
+    let live_blobs_after_reclaim = crate::blob::live_blob_count_for_owner_for_test(owner_id);
+    assert!(
+        live_blobs_after_reclaim < live_blobs_after_alloc,
+        "bounded fallback after async Wasm Promise reaction must reclaim released Blobs (before={live_blobs_after_alloc}, after={live_blobs_after_reclaim})"
+    );
+    assert_eq!(
+        vm.eval("String(window.__retainedBlobs)")
+            .expect("probe after Wasm reclaim should evaluate"),
+        "null"
+    );
+}
+
+#[tokio::test]
+async fn renderer_document_isolate_maintenance_reclaims_blob_released_by_atomics_wait_async_checkpoint()
+ {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+    let mut vm = new_storage_page_task_executor_test_vm_with_loader(
+        "https://atomics-wait-async-release.test/",
+        &loader,
+    );
+    let owner_id = vm.resource_owner_id;
+
+    assert_eq!(
+        vm.notify_renderer_document_isolate_memory_pressure_with_action()
+            .expect("initial idle maintenance check should succeed"),
+        RendererDocumentIsolateMemoryPressureAction::None
+    );
+
+    vm.eval(
+        r#"
+(() => {
+  const seed = "a".repeat(1024 * 1024);
+  window.__retainedBlobs = [];
+  for (let i = 0; i < 10; i++) {
+    window.__retainedBlobs.push(new Blob([seed]));
+  }
+  const view = new Int32Array(new SharedArrayBuffer(4));
+  Atomics.waitAsync(view, 0, 0, 5).value.then(() => {
+    window.__retainedBlobs = null;
+  });
+  return String(window.__retainedBlobs.length);
+})()
+"#,
+    )
+    .expect("retained Blobs and Atomics.waitAsync setup should evaluate");
+
+    let live_blobs_after_alloc = crate::blob::live_blob_count_for_owner_for_test(owner_id);
+    assert_eq!(live_blobs_after_alloc, 10);
+
+    // Wait for V8's delayed AsyncWaiterTimeoutTask to arrive without running it yet.
+    assert!(
+        tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            vm.wait_for_v8_foreground_task_arrival(),
+        )
+        .await
+        .unwrap_or(false),
+        "Atomics.waitAsync timeout must post a V8 foreground continuation"
+    );
+
+    // Complete a collection while Blobs are still retained, resetting all
+    // since-maintenance counters and the activity generation baseline.
+    vm.collect_renderer_document_isolate_garbage()
+        .expect("preceding GC while Blobs are retained should succeed");
+    assert_eq!(
+        crate::blob::live_blob_count_for_owner_for_test(owner_id),
+        live_blobs_after_alloc
+    );
+
+    // Drain the queued Atomics.waitAsync timeout continuation and its task-end
+    // microtask checkpoint; the `.then(...)` reaction clears `__retainedBlobs`.
+    assert!(
+        drain_v8_foreground_gc_tasks_to_quiescence(&mut vm, &loader).await,
+        "Atomics.waitAsync timeout foreground continuation must execute"
+    );
+    assert_eq!(
+        crate::blob::live_blob_count_for_owner_for_test(owner_id),
+        live_blobs_after_alloc
+    );
+
+    let mut triggered_moderate = false;
+    for _ in 0..4 {
+        if vm
+            .notify_renderer_document_isolate_memory_pressure_with_action()
+            .expect("post-Atomics.waitAsync maintenance should succeed")
+            == RendererDocumentIsolateMemoryPressureAction::Moderate
+        {
+            triggered_moderate = true;
+            break;
+        }
+    }
+    assert!(
+        triggered_moderate,
+        "Promise reaction following Atomics.waitAsync continuation must arm the bounded fallback"
+    );
+
+    drain_v8_foreground_gc_tasks_until(&mut vm, &loader, || {
+        crate::blob::live_blob_count_for_owner_for_test(owner_id) < live_blobs_after_alloc
+    })
+    .await;
+
+    let live_blobs_after_reclaim = crate::blob::live_blob_count_for_owner_for_test(owner_id);
+    assert!(
+        live_blobs_after_reclaim < live_blobs_after_alloc,
+        "bounded fallback after Atomics.waitAsync reaction must reclaim released Blobs (before={live_blobs_after_alloc}, after={live_blobs_after_reclaim})"
+    );
+    assert_eq!(
+        vm.eval("String(window.__retainedBlobs)")
+            .expect("probe after Atomics.waitAsync reclaim should evaluate"),
+        "null"
+    );
+
+    // Non-vacuous idle negative control: even with the lazy promise activity
+    // hook installed on this isolate AND a live retained Blob keeping
+    // `has_live_native_wrappers_above_baseline()` true, repeated empty
+    // microtask checkpoints must not bump `activity_generation` or re-enter
+    // 60s Moderate GC churn.
+    vm.eval(
+        r#"
+(() => {
+  window.__idleRetainedBlob = new Blob(["r".repeat(64 * 1024)]);
+  return "retained";
+})()
+"#,
+    )
+    .expect("idle retained Blob setup should evaluate");
+    let _ = drain_v8_foreground_gc_tasks_to_quiescence(&mut vm, &loader).await;
+    vm.collect_renderer_document_isolate_garbage()
+        .expect("post-test baseline sync should succeed");
+    assert_eq!(
+        crate::blob::live_blob_count_for_owner_for_test(owner_id),
+        1,
+        "retained Blob must remain live so the lazy-promise-hook negative control is non-vacuous"
+    );
+    for idle_tick in 0..6 {
+        vm.perform_owner_lane_task_microtask_checkpoints()
+            .expect("empty microtask checkpoint should succeed");
+        assert_eq!(
+            vm.notify_renderer_document_isolate_memory_pressure_with_action()
+                .expect("post-reclaim idle maintenance should succeed"),
+            RendererDocumentIsolateMemoryPressureAction::None,
+            "idle page holding a retained Blob with lazy promise hook installed must remain quiet on tick {idle_tick}"
+        );
+    }
+    assert_eq!(
+        crate::blob::live_blob_count_for_owner_for_test(owner_id),
+        1,
+        "retained Blob must remain live across all idle ticks"
+    );
+}
+
+#[tokio::test]
+async fn renderer_document_isolate_maintenance_keeps_recalibration_armed_across_skipped_ticks_until_async_gc_finishes()
+ {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+    let mut vm = new_storage_page_task_executor_test_vm_with_loader(
+        "https://async-recalibration-across-skipped-ticks.test/",
+        &loader,
+    );
+
+    assert_eq!(
+        vm.notify_renderer_document_isolate_memory_pressure_with_action()
+            .expect("initial idle maintenance check should succeed"),
+        RendererDocumentIsolateMemoryPressureAction::None
+    );
+
+    // Allocate >12 MiB of transient JS heap garbage.
+    vm.eval(
+        r#"
+(() => {
+  let tmp = [];
+  for (let i = 0; i < 240000; i++) {
+    tmp.push({ id: i, payload: "delayed-recal-" + i + "-" + "x".repeat(32) });
+  }
+  return String(tmp.length);
+})()
+"#,
+    )
+    .expect("transient heap allocation should evaluate");
+
+    let pre_gc_peak = vm
+        .renderer_document_isolate_heap_usage()
+        .expect("pre-gc heap usage")
+        .used_size;
+
+    assert_eq!(
+        vm.notify_renderer_document_isolate_memory_pressure_with_action()
+            .expect("first moderate pass should trigger"),
+        RendererDocumentIsolateMemoryPressureAction::Moderate
+    );
+
+    // Simulate one or more maintenance ticks being skipped BEFORE V8's async
+    // Moderate GC foreground tasks have finished.
+    for skipped_tick in 0..2 {
+        assert_eq!(
+            vm.notify_renderer_document_isolate_memory_pressure_with_action()
+                .expect("pre-completion skipped tick should succeed"),
+            RendererDocumentIsolateMemoryPressureAction::None,
+            "tick {skipped_tick} before async GC completes should be skipped"
+        );
+    }
+
+    // Now let the pending async Moderate GC finish and drop heap usage into the
+    // post-GC valley.
+    assert!(
+        drain_v8_foreground_gc_tasks_to_quiescence(&mut vm, &loader).await,
+        "async moderate pass must still run V8 GC foreground tasks after skipped ticks"
+    );
+
+    let post_gc_valley = vm
+        .renderer_document_isolate_heap_usage()
+        .expect("post-gc heap usage")
+        .used_size;
+    assert!(
+        post_gc_valley + 8 * 1024 * 1024 < pre_gc_peak,
+        "expected async moderate GC to reclaim transient heap (valley={post_gc_valley}, peak={pre_gc_peak})"
+    );
+
+    // Allocate ~9 MiB of external memory: total tracked memory stays below or
+    // near the pre-GC peak, yet exceeds the post-GC valley by >8 MiB.
+    vm.eval(
+        r#"
+(() => {
+  window.__postSkippedValleyBuffers = [];
+  for (let i = 0; i < 9; i++) {
+    const view = new Uint8Array(1024 * 1024);
+    view[0] = i;
+    window.__postSkippedValleyBuffers.push(view);
+  }
+  return String(window.__postSkippedValleyBuffers.length);
+})()
+"#,
+    )
+    .expect("post-valley external allocation should evaluate");
+
+    assert_eq!(
+        vm.notify_renderer_document_isolate_memory_pressure_with_action()
+            .expect("post-delayed-recalibration maintenance check should succeed"),
+        RendererDocumentIsolateMemoryPressureAction::Moderate,
+        "recalibration must remain armed across skipped ticks until async Moderate GC finishes"
+    );
+}
 #[tokio::test]
 async fn child_javascript_url_nested_frame_uses_inherited_frame_src_policy() {
     let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
