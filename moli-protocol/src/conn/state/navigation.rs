@@ -256,6 +256,12 @@ impl TargetNavigationHistoryState {
             .map(|entry| entry.url.clone())
     }
 
+    pub(crate) fn current_entry_url(&self) -> Option<&str> {
+        self.entries
+            .get(self.current_index?)
+            .map(|entry| entry.url.as_str())
+    }
+
     pub(crate) fn refresh_current_entry_title(&mut self, title: String) -> bool {
         let Some(current_entry) = self
             .current_index

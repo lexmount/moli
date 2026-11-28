@@ -1924,16 +1924,17 @@ async fn popup_initial_navigation_replaces_internal_blank_history_entry() {
     ctx.enable_background_navigation_scheduler_for_test();
     tokio::task::LocalSet::new().run_until(async {
         load_bc_with_titled_page_async(&mut ctx, "BID-popup-history", "TID-opener", "opener").await;
+        let popup_url = "data:text/html,<title>Popup history</title>#popup";
         ctx.process_async(json!({
             "id": 1, "method": "Runtime.evaluate",
-            "params": {"expression": "window.open('data:text/html,<title>Popup history</title>', 'history-window') !== null"}
+            "params": {"expression": format!("window.open('{popup_url}', 'history-window') !== null")}
         })).await;
         let messages = ctx.take_all();
-        let target_id = popup_target_id_for_url(&messages, "data:text/html,<title>Popup history</title>");
+        let target_id = popup_target_id_for_url(&messages, popup_url);
         ctx.wait_until_scheduler_state("popup document committed", |conn| {
             conn.browser_context_by_id("BID-popup-history")
                 .and_then(|context| loaded_page_for_target(context, &target_id))
-                .is_some_and(|page| page.final_url().as_str() == "data:text/html,<title>Popup history</title>")
+                .is_some_and(|page| page.final_url().as_str() == popup_url)
         }).await;
         ctx.process_async(json!({
             "id": 2, "method": "Target.attachToTarget", "params": {"targetId": target_id, "flatten": true}
@@ -1946,7 +1947,7 @@ async fn popup_initial_navigation_replaces_internal_blank_history_entry() {
         assert_eq!(history["result"]["currentIndex"], 0);
         let entries = history["result"]["entries"].as_array().unwrap();
         assert_eq!(entries.len(), 1, "the internal about:blank must not be traversable");
-        assert_eq!(entries[0]["url"], "data:text/html,<title>Popup history</title>");
+        assert_eq!(entries[0]["url"], popup_url);
         assert_eq!(entries[0]["transitionType"], "link");
         ctx.process_async(json!({
             "id": 4, "method": "Runtime.evaluate", "sessionId": session_id,
