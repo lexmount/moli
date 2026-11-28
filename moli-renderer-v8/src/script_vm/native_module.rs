@@ -49,12 +49,11 @@ use crate::module_runtime::{
     NativeDynamicImportSingleModuleClient, NativeDynamicModuleImportReady, NativeModuleGraphJob,
     NativeModuleGraphJobAdvance, NativeModuleMapSingleModuleClient, NativeModuleOwnerEvent,
     NativeModuleScriptSingleModuleClient, NativeModuleSingleFetchRequest,
-    NativeModulepreloadFetchStart, PendingDynamicModuleImport, ResolverScopeGuard,
-    WasmDependencyModuleMessages, WasmImportRecord, WasmModuleRecord,
-    ensure_wasm_dependency_module_namespace_ready, evaluate_wasm_synthetic_module,
-    module_identity_hash_from_v8_module, preserve_current_v8_module_exception,
-    resolve_static_module_callback, resolve_static_source_callback, throw_wasm_link_error,
-    wasm_dependency_export_value,
+    PendingDynamicModuleImport, ResolverScopeGuard, WasmDependencyModuleMessages, WasmImportRecord,
+    WasmModuleRecord, ensure_wasm_dependency_module_namespace_ready,
+    evaluate_wasm_synthetic_module, module_identity_hash_from_v8_module,
+    preserve_current_v8_module_exception, resolve_static_module_callback,
+    resolve_static_source_callback, throw_wasm_link_error, wasm_dependency_export_value,
 };
 use crate::module_script_continuation::{
     MainParserDeferredClassicSourceLoadCompletion, MainParserDocumentOwner,

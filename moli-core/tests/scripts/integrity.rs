@@ -25,6 +25,9 @@ const INTEGRITY: &str = "sha384-T7tuz8k7Hz0eBaWUPKiAEECRmaKHLJ1eRz7NF4VdK1fN++Ia
 #[path = "preload_integrity.rs"]
 mod preload;
 
+#[path = "runtime_modulepreload.rs"]
+mod runtime_modulepreload;
+
 struct IntegrityServers {
     origin: String,
     cross_origin: String,
@@ -173,6 +176,19 @@ fn fixture_response(
         | "/child-sri-rejected.css"
         | "/child-sri-accepted.css"
         | "/child-sri-forbidden.css" => child_stylesheet_integrity::fixture_response(path, query),
+        "/runtime-modulepreload.html" => (
+            "200 OK",
+            "Content-Type: text/html\r\n".to_owned(),
+            r#"<!doctype html><script type="importmap">{"integrity":{
+                "/echo-origin.js?map-integrity":"sha384-AAAA"
+            }}</script><body>runtime modulepreload"#
+                .to_owned(),
+        ),
+        "/module.json" => (
+            "200 OK",
+            "Content-Type: application/json\r\nCache-Control: no-store\r\n".to_owned(),
+            "{\"answer\":42}".to_owned(),
+        ),
         "/text-module.txt" => (
             "200 OK",
             "Content-Type: application/octet-stream\r\nCache-Control: no-store\r\n".to_owned(),
