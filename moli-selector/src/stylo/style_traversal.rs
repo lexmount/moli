@@ -6,6 +6,7 @@ use std::{
     marker::PhantomData,
     num::NonZeroUsize,
     ptr::NonNull,
+    rc::Rc,
     sync::Arc as SharedArc,
     vec,
 };
@@ -33,7 +34,7 @@ use style::{
     servo::restyle_damage::ServoRestyleDamage,
     servo_arc::{Arc, ArcBorrow},
     shared_lock::{Locked, SharedRwLock},
-    stylesheets::UrlExtraData,
+    stylesheets::{UrlExtraData, scope_rule::ImplicitScopeRoot},
     stylist::CascadeData,
     values::AtomIdent,
 };
@@ -125,6 +126,14 @@ struct ShadowCascadeDataStore {
     documents: RefCell<HashMap<NodeId, HashMap<NodeId, Arc<CascadeData>>>>,
 }
 
+type ShadowScopeRoots = HashMap<OpaqueElement, Rc<[Option<ImplicitScopeRoot>]>>;
+
+thread_local! {
+    // Stylo resolves cached implicit scopes using only the host identity and
+    // stylesheet index. The current binding supplies the corresponding roots.
+    static SHADOW_SCOPE_ROOTS: RefCell<ShadowScopeRoots> = RefCell::default();
+}
+
 pub type StyloDocument<'a> = StyleDocument<'a>;
 pub type StyloDomHostBinding<'a> = StyleDomHostBinding<'a>;
 pub type StyloElement<'a> = StyleElement<'a>;
@@ -168,6 +177,7 @@ struct StyleNodeData {
 
 pub struct StyleDomHostBinding<'a> {
     state: &'a StyleDomState,
+    previous_shadow_scope_roots: ShadowScopeRoots,
 }
 
 struct SnapshotHandlesReset<'a> {
@@ -239,7 +249,10 @@ impl StyloDomStyleAdapter {
             "nested style bindings would invalidate live Stylo node wrappers"
         );
         self.bind_host(host);
-        let binding = StyleDomHostBinding { state: &self.state };
+        let binding = StyleDomHostBinding {
+            state: &self.state,
+            previous_shadow_scope_roots: SHADOW_SCOPE_ROOTS.take(),
+        };
         f(&binding)
     }
 
@@ -558,8 +571,22 @@ impl<'binding> StyleDomHostBinding<'binding> {
         ))
     }
 
-    pub fn set_shadow_cascade_data(&self, root: NodeId, cascade_data: Arc<CascadeData>) {
+    pub fn set_shadow_cascade_data(
+        &self,
+        root: NodeId,
+        cascade_data: Arc<CascadeData>,
+        implicit_scope_roots: Rc<[Option<ImplicitScopeRoot>]>,
+    ) {
         self.state.set_shadow_cascade_data(root, cascade_data);
+        let host = self.state.host();
+        if let Some(host_node) = host
+            .shadow_root_host(root)
+            .and_then(|handle| host.node(handle))
+        {
+            SHADOW_SCOPE_ROOTS.with_borrow_mut(|roots| {
+                roots.insert(OpaqueElement::new(host_node), implicit_scope_roots);
+            });
+        }
     }
 
     pub fn has_element_data(&self, handle: NodeId) -> bool {
@@ -652,6 +679,7 @@ impl<'binding> StyleDomHostBinding<'binding> {
 
 impl Drop for StyleDomHostBinding<'_> {
     fn drop(&mut self) {
+        SHADOW_SCOPE_ROOTS.replace(std::mem::take(&mut self.previous_shadow_scope_roots));
         self.state.clear_node_data();
         self.state.clear_shadow_cascade_data_after_binding();
         self.state.host.set(std::ptr::null());
@@ -2095,6 +2123,14 @@ impl<'a> TShadowRoot for StyleShadowRoot<'a> {
 impl<'a> TElement for StyleElement<'a> {
     type ConcreteNode = StyleNode<'a>;
     type TraversalChildrenIterator = vec::IntoIter<StyleNode<'a>>;
+
+    fn implicit_scope_for_sheet_in_shadow_root(
+        opaque_host: OpaqueElement,
+        sheet_index: usize,
+    ) -> Option<ImplicitScopeRoot> {
+        SHADOW_SCOPE_ROOTS
+            .with_borrow(|roots| roots.get(&opaque_host)?.get(sheet_index).copied()?)
+    }
 
     fn get_attr(&self, attr: &LocalName, namespace: &Namespace) -> Option<String> {
         self.as_query().get_attr(attr, namespace)

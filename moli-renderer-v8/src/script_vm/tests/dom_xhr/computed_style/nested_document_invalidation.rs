@@ -399,6 +399,65 @@ fn implicit_scope_root_for_owner_stylesheet_matches_parent_element() {
 }
 
 #[test]
+fn shadow_implicit_scopes_resolve_against_each_stylesheet_owner() {
+    let mut vm = new_parsed_test_vm(
+        "https://implicit-shadow-scope.test/",
+        "<!doctype html><html><head></head><body></body></html>",
+    );
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const template = document.createElement('template');
+  template.innerHTML = `
+    <style media="not all">.outside { z-index: 9; }</style>
+    <style class="scoped">
+      @media all {
+        @scope {
+          :scope { z-index: 1; }
+          :scope .target { z-index: 2; }
+        }
+      }
+    </style>
+    <section><div class="target"></div></section>
+    <div class="target outside"></div>
+  `;
+  const makeTree = nested => {
+    const host = document.body.appendChild(document.createElement('div'));
+    const root = host.attachShadow({mode: 'open'});
+    root.append(template.content.cloneNode(true));
+    const section = root.querySelector('section');
+    const style = root.querySelector('.scoped');
+    if (nested) section.prepend(style);
+    return {
+      root, section, style,
+      read: () => [host, ...root.querySelectorAll('section, .target')]
+        .map(element => getComputedStyle(element).zIndex).join(','),
+    };
+  };
+  const direct = makeTree(false);
+  const nested = makeTree(true);
+  const results = [direct.read(), nested.read()];
+  direct.section.prepend(direct.style);
+  results.push(direct.read());
+  nested.root.prepend(nested.style);
+  results.push(nested.read());
+  direct.style.remove();
+  results.push(direct.read(), nested.read());
+  return results.join('|');
+})()
+"#,
+        )
+        .expect("each ShadowRoot should resolve implicit stylesheet scopes");
+
+    assert_eq!(
+        result,
+        "1,auto,2,2|auto,1,2,auto|auto,1,2,auto|1,auto,2,2|auto,auto,auto,auto|1,auto,2,2"
+    );
+}
+
+#[test]
 fn computed_style_is_empty_for_disconnected_shadow_tree_elements() {
     let mut vm = new_storage_test_vm("https://computed-style-disconnected-shadow.test/");
     let document = vm.document_handle_for_test();
