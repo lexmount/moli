@@ -10,9 +10,28 @@ pub(crate) fn track_context_owned_v8_finalizer(
     object: v8::Local<'_, v8::Object>,
     cleanup: impl FnOnce() + 'static,
 ) {
+    track_context_owned_v8_finalizer_with_native_bytes(scope, object, 0, cleanup);
+}
+
+/// Attach a finalizer to the page or worker context owning `object` and report
+/// any Rust-heap backing size tied to that wrapper to the document isolate's
+/// memory-pressure tracker.
+pub(crate) fn track_context_owned_v8_finalizer_with_native_bytes(
+    scope: &mut v8::PinScope<'_, '_>,
+    object: v8::Local<'_, v8::Object>,
+    native_bytes: usize,
+    cleanup: impl FnOnce() + 'static,
+) {
     let common = crate::common_runtime::CommonRuntimeState::from_scope(scope)
         .expect("V8 finalizer object must belong to a page or worker context");
-    V8FinalizerRegistry::track(&common.finalizers, scope, object, cleanup);
+    let pressure =
+        crate::script_vm::record_renderer_document_isolate_native_finalizer(scope, native_bytes);
+    V8FinalizerRegistry::track(&common.finalizers, scope, object, move || {
+        if let Some(pressure) = pressure {
+            pressure.release_finalizer(native_bytes);
+        }
+        cleanup();
+    });
 }
 
 #[cfg(test)]

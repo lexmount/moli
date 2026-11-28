@@ -61,7 +61,7 @@ impl ScriptVm {
     }
 
     pub(super) fn perform_owner_lane_task_microtask_checkpoints(&mut self) -> Result<()> {
-        self.with_current_main_world_scope(|scope, _| {
+        self.with_current_main_world_scope_internal(|scope, _| {
             Self::perform_microtask_checkpoints(scope, None)
         })
         .map(|_| ())

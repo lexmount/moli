@@ -357,7 +357,7 @@ impl ScriptVm {
     ) -> Result<RendererRuntimeHeapUsage> {
         let moli_counters = self.moli_memory_counters();
         self.renderer_document_isolate
-            .with_entered_renderer_document_isolate(|isolate| {
+            .with_renderer_document_isolate_internal_mut(|isolate| {
                 let stats = isolate.get_heap_statistics();
                 let heap_spaces = (0..isolate.number_of_heap_spaces())
                     .filter_map(|index| {
@@ -399,11 +399,11 @@ impl ScriptVm {
         let dom = moli_dom_memory_counters(&document);
         let main_window_proxy_identity_hash = self.current_main_world().and_then(|runtime| {
             self.renderer_document_isolate
-                .with_entered_renderer_document_isolate(|isolate| {
+                .with_renderer_document_isolate_internal_mut(|isolate| {
                     let scope = pin!(v8::HandleScope::new(isolate));
                     let scope = &mut scope.init();
                     let context = v8::Local::new(scope, &runtime.context);
-                    Ok(context.global(scope).get_identity_hash().get())
+                    Ok::<_, anyhow::Error>(context.global(scope).get_identity_hash().get())
                 })
                 .ok()
         });
@@ -469,15 +469,12 @@ impl ScriptVm {
     #[cfg(any(test, feature = "devtools"))]
     pub(super) fn collect_renderer_document_isolate_garbage(&mut self) -> Result<()> {
         self.renderer_document_isolate
-            .with_entered_renderer_document_isolate_maintenance(
-                |isolate, last_maintenance_used_heap_size| {
-                    isolate.memory_pressure_notification(v8::MemoryPressureLevel::Critical);
-                    isolate.low_memory_notification();
-                    *last_maintenance_used_heap_size =
-                        isolate.get_heap_statistics().used_heap_size();
-                    Ok(())
-                },
-            )?;
+            .with_entered_renderer_document_isolate_maintenance(|isolate, maintenance| {
+                isolate.memory_pressure_notification(v8::MemoryPressureLevel::Critical);
+                isolate.low_memory_notification();
+                maintenance.record_collection(&isolate.get_heap_statistics());
+                Ok(())
+            })?;
         self.prune_collected_native_caches();
         Ok(())
     }
@@ -492,43 +489,31 @@ impl ScriptVm {
     ) -> Result<RendererDocumentIsolateMemoryPressureAction> {
         let action = self
             .renderer_document_isolate
-            .with_entered_renderer_document_isolate_maintenance(
-                |isolate, last_maintenance_used_heap_size| {
-                    let stats = isolate.get_heap_statistics();
-                    let used_heap_size = stats.used_heap_size();
-                    let action = renderer_document_isolate_memory_pressure_action(
-                        used_heap_size,
-                        stats.heap_size_limit(),
-                        *last_maintenance_used_heap_size,
-                    );
-                    match action {
-                        RendererDocumentIsolateMemoryPressureAction::Critical => {
-                            // One renderer process can host several Page isolates. A
-                            // target with a rapidly replaced child realm must not hit
-                            // V8's process-fatal heap limit before its owner can close
-                            // that target. Escalate the existing periodic maintenance
-                            // once this isolate consumes a third of its own limit.
-                            isolate.memory_pressure_notification(v8::MemoryPressureLevel::Critical);
-                            isolate.low_memory_notification();
-                            *last_maintenance_used_heap_size =
-                                isolate.get_heap_statistics().used_heap_size();
-                        }
-                        RendererDocumentIsolateMemoryPressureAction::Moderate => {
-                            isolate.memory_pressure_notification(v8::MemoryPressureLevel::Moderate);
-                            *last_maintenance_used_heap_size =
-                                isolate.get_heap_statistics().used_heap_size();
-                        }
-                        RendererDocumentIsolateMemoryPressureAction::None => {
-                            // Track natural heap shrinkage without ratcheting upward so
-                            // slow growth still triggers moderate maintenance once total
-                            // growth since the last maintenance exceeds 8 MiB.
-                            *last_maintenance_used_heap_size =
-                                (*last_maintenance_used_heap_size).min(used_heap_size);
-                        }
+            .with_entered_renderer_document_isolate_maintenance(|isolate, maintenance| {
+                let stats = isolate.get_heap_statistics();
+                let input = maintenance.memory_pressure_input(&stats);
+                let action = renderer_document_isolate_memory_pressure_action(input);
+                match action {
+                    RendererDocumentIsolateMemoryPressureAction::Critical => {
+                        // One renderer process can host several Page isolates. A
+                        // target with a rapidly replaced child realm must not hit
+                        // V8's process-fatal heap limit before its owner can close
+                        // that target. Escalate the existing periodic maintenance
+                        // once this isolate consumes a third of its own limit.
+                        isolate.memory_pressure_notification(v8::MemoryPressureLevel::Critical);
+                        isolate.low_memory_notification();
+                        maintenance.record_collection(&isolate.get_heap_statistics());
                     }
-                    Ok(action)
-                },
-            )?;
+                    RendererDocumentIsolateMemoryPressureAction::Moderate => {
+                        isolate.memory_pressure_notification(v8::MemoryPressureLevel::Moderate);
+                        maintenance.record_moderate_collection(&isolate.get_heap_statistics());
+                    }
+                    RendererDocumentIsolateMemoryPressureAction::None => {
+                        maintenance.record_skipped(&stats, input.has_pending_native_activity());
+                    }
+                }
+                Ok(action)
+            })?;
         self.prune_collected_native_caches();
         Ok(action)
     }
@@ -541,7 +526,7 @@ impl ScriptVm {
         // The snapshot operation only reads a context slot; it does not mutate or remove any
         // context while the raw pointer is used.
         // This is an internal console snapshot, not an owner-visible script turn.
-        self.with_context_scope_by_ptr(context_ptr, |scope, _| {
+        self.with_context_scope_by_ptr_internal(context_ptr, |scope, _| {
             Ok(crate::context_bootstrap::snapshot_console_messages_for_current_context(scope))
         })
         .context("failed to snapshot console output")
@@ -556,7 +541,7 @@ impl ScriptVm {
         // context while the raw pointer is used.
         // This is an internal console snapshot, not an owner-visible script turn.
         let mut details = self
-            .with_context_scope_by_ptr(context_ptr, |scope, _| {
+            .with_context_scope_by_ptr_internal(context_ptr, |scope, _| {
                 Ok(
                     crate::context_bootstrap::snapshot_console_message_details_for_current_context(
                         scope,

@@ -51,8 +51,6 @@ pub(in crate::network_host) use self::body::{
     PreparedBodyInit, PreparedBodySource, body_init, body_stream_object,
     readable_body_stream_unusable,
 };
-#[cfg(test)]
-pub(crate) use self::body_source::pending_network_body_source_buffered_len_for_test;
 pub(in crate::network_host) use self::body_source::{
     NetworkBodyConsumption, NetworkBodyConsumptionKind,
     clone_filtered_response_internal_body_source, consume_fetch_body_value_from_object,
@@ -71,6 +69,11 @@ pub(crate) use self::body_source::{
     enqueue_pending_network_body_chunk, error_pending_network_body_stream,
     error_pending_network_body_stream_with_reason, new_network_body_source_id,
     pending_network_body_stream, retain_pending_network_body_state_in_retired_realm,
+};
+#[cfg(test)]
+pub(crate) use self::body_source::{
+    consume_test_network_body_source, pending_network_body_source_buffered_len_for_test,
+    register_test_network_body_source_in_scope, test_network_body_source_is_live,
 };
 pub(crate) use self::browser_response::{
     LocalUrlError, local_url_response, local_url_response_result,

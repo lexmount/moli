@@ -93,12 +93,76 @@ impl MainWindowProxyNavigationCommit {
 }
 
 const MODERATE_MEMORY_PRESSURE_HEAP_GROWTH_BYTES: usize = 8 * 1024 * 1024;
+const MODERATE_MEMORY_PRESSURE_NATIVE_BYTES_THRESHOLD: usize = 8 * 1024 * 1024;
+const MODERATE_MEMORY_PRESSURE_FINALIZER_REGISTRATION_THRESHOLD: usize = 256;
+const MODERATE_MEMORY_PRESSURE_GLOBAL_HANDLES_GROWTH_BYTES: usize =
+    256 * std::mem::size_of::<usize>();
+// With a 15-second maintenance cadence, 3 skipped ticks bound reclamation of
+// smaller pending native-backed wrappers to one moderate pass after 60 seconds.
+const MODERATE_MEMORY_PRESSURE_NATIVE_FALLBACK_SKIPPED_TICKS: u8 = 3;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum RendererDocumentIsolateMemoryPressureAction {
     None,
     Moderate,
     Critical,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(super) struct RendererDocumentIsolateMemoryPressureInput {
+    pub(super) used_heap_size: usize,
+    pub(super) external_memory: usize,
+    pub(super) heap_size_limit: usize,
+    pub(super) last_maintenance_used_memory: usize,
+    pub(super) used_global_handles_size: usize,
+    pub(super) initial_used_global_handles_size: Option<usize>,
+    pub(super) last_maintenance_used_global_handles_size: Option<usize>,
+    pub(super) detached_contexts: usize,
+    pub(super) last_maintenance_detached_contexts: usize,
+    pub(super) allocated_native_bytes_since_maintenance: usize,
+    pub(super) live_native_bytes: usize,
+    pub(super) finalizer_registrations_since_maintenance: usize,
+    pub(super) live_finalizers: usize,
+    pub(super) has_isolate_activity_since_maintenance: bool,
+    pub(super) ticks_with_pending_native_activity: u8,
+}
+
+impl RendererDocumentIsolateMemoryPressureInput {
+    fn tracked_v8_memory(self) -> usize {
+        self.used_heap_size.saturating_add(self.external_memory)
+    }
+
+    fn global_handles_growth_bytes(self) -> usize {
+        self.last_maintenance_used_global_handles_size
+            .map_or(0, |last| self.used_global_handles_size.saturating_sub(last))
+    }
+
+    fn unreclaimed_allocated_native_bytes(self) -> usize {
+        self.allocated_native_bytes_since_maintenance
+            .min(self.live_native_bytes)
+    }
+
+    fn unreclaimed_finalizer_registrations(self) -> usize {
+        self.finalizer_registrations_since_maintenance
+            .min(self.live_finalizers)
+    }
+
+    fn has_live_native_wrappers_above_baseline(self) -> bool {
+        self.live_native_bytes > 0
+            || self.live_finalizers > 0
+            || self.detached_contexts > 0
+            || self
+                .initial_used_global_handles_size
+                .is_some_and(|initial| self.used_global_handles_size > initial)
+    }
+
+    pub(super) fn has_pending_native_activity(self) -> bool {
+        self.unreclaimed_allocated_native_bytes() > 0
+            || self.unreclaimed_finalizer_registrations() > 0
+            || self.global_handles_growth_bytes() > 0
+            || (self.has_live_native_wrappers_above_baseline()
+                && self.has_isolate_activity_since_maintenance)
+    }
 }
 
 fn renderer_document_isolate_critical_pressure_required(
@@ -113,15 +177,28 @@ fn renderer_document_isolate_critical_pressure_required(
 }
 
 fn renderer_document_isolate_memory_pressure_action(
-    used_heap_size: usize,
-    heap_size_limit: usize,
-    last_maintenance_used_heap_size: usize,
+    input: RendererDocumentIsolateMemoryPressureInput,
 ) -> RendererDocumentIsolateMemoryPressureAction {
-    if renderer_document_isolate_critical_pressure_required(used_heap_size, heap_size_limit) {
+    if renderer_document_isolate_critical_pressure_required(
+        input.used_heap_size,
+        input.heap_size_limit,
+    ) {
         return RendererDocumentIsolateMemoryPressureAction::Critical;
     }
-    if used_heap_size.saturating_sub(last_maintenance_used_heap_size)
+    if input
+        .tracked_v8_memory()
+        .saturating_sub(input.last_maintenance_used_memory)
         > MODERATE_MEMORY_PRESSURE_HEAP_GROWTH_BYTES
+        || input.unreclaimed_allocated_native_bytes()
+            > MODERATE_MEMORY_PRESSURE_NATIVE_BYTES_THRESHOLD
+        || input.unreclaimed_finalizer_registrations()
+            >= MODERATE_MEMORY_PRESSURE_FINALIZER_REGISTRATION_THRESHOLD
+        || input.global_handles_growth_bytes()
+            >= MODERATE_MEMORY_PRESSURE_GLOBAL_HANDLES_GROWTH_BYTES
+        || input.detached_contexts > input.last_maintenance_detached_contexts
+        || (input.has_pending_native_activity()
+            && input.ticks_with_pending_native_activity
+                >= MODERATE_MEMORY_PRESSURE_NATIVE_FALLBACK_SKIPPED_TICKS)
     {
         return RendererDocumentIsolateMemoryPressureAction::Moderate;
     }
@@ -855,10 +932,12 @@ pub(crate) use standalone_test_harness::StandaloneScriptVmHarness;
 use crate::document_runtime::{DeferredPageTaskLane, FollowupPageTaskDisposition};
 use document_isolate::*;
 pub(crate) use document_isolate::{
-    RendererDeferredContextHostReleaseQueue, RendererDocumentIsolateBootstrap,
+    NativeMemoryLease, RendererDeferredContextHostReleaseQueue, RendererDocumentIsolateBootstrap,
     RendererDocumentIsolateReservationAccounting, RendererIsolateHandle,
     RendererPageScriptEnvironment, ScriptVmDefaultWorldBootstrap,
-    WeakRendererPageScriptEnvironment, renderer_document_isolate_accounting_diagnostics,
+    WeakRendererPageScriptEnvironment, record_renderer_document_isolate_native_finalizer,
+    record_renderer_document_isolate_native_memory_lease,
+    renderer_document_isolate_accounting_diagnostics,
 };
 pub(crate) use eval_exec::execute_source_text_on_current_stack;
 pub(crate) use input_helpers::*;
@@ -1179,7 +1258,7 @@ impl ScriptVm {
         task: moli_v8_platform::V8ForegroundTask,
     ) -> bool {
         self.renderer_document_isolate
-            .with_renderer_document_isolate_mut(|_| task.run())
+            .with_renderer_document_isolate_v8_foreground_task_mut(|_| task.run())
     }
 
     #[cfg(test)]
@@ -2567,6 +2646,8 @@ impl ScriptVmDefaultWorldBootstrap {
                     let scope = &mut scope.init();
                     vm.retain_native_hosts_in_scope(scope, runtime);
                 });
+            vm.renderer_document_isolate
+                .capture_initial_main_world_maintenance_baselines();
         }
         Ok(vm)
     }

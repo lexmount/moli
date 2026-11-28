@@ -163,6 +163,8 @@ impl ScriptVm {
                     let scope = pin!(v8::HandleScope::new(isolate));
                     self.retain_native_hosts_in_scope(&mut scope.init(), &runtime);
                 });
+            self.renderer_document_isolate
+                .capture_initial_main_world_maintenance_baselines();
             self.main_world = MainWorld::Ready {
                 runtime,
                 _baseline_globals: baseline_globals,

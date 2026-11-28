@@ -45,9 +45,15 @@ pub(crate) const RUNTIME: BlobRuntime = BlobRuntime {
     mime_type: |id| blob_store().blob_mime_type(id),
     release_wrapper: release_blob_wrapper_ref,
     track_wrapper: |scope, blob, id| {
-        crate::v8_finalizer::track_context_owned_v8_finalizer(scope, blob, move || {
-            release_blob_wrapper_ref(id);
-        });
+        let native_bytes = blob_store().blob_size(id).unwrap_or(0);
+        crate::v8_finalizer::track_context_owned_v8_finalizer_with_native_bytes(
+            scope,
+            blob,
+            native_bytes,
+            move || {
+                release_blob_wrapper_ref(id);
+            },
+        );
     },
     read: reading::read_blob,
     stream: reading::stream_blob,
@@ -69,6 +75,11 @@ fn current_blob_storage_partition_identity(
 #[cfg(test)]
 pub(crate) fn live_blob_count_for_test() -> usize {
     blob_store().live_blob_count()
+}
+
+#[cfg(test)]
+pub(crate) fn live_blob_count_for_owner_for_test(owner_id: ResourceOwnerId) -> usize {
+    blob_store().live_blob_count_for_owner(owner_id)
 }
 
 #[cfg(feature = "devtools")]

@@ -36,7 +36,7 @@ pub(crate) enum IndexedDbStaleTaskCleanupEffect {
 impl ScriptVm {
     pub(crate) fn has_pending_indexed_db_work(&mut self) -> Result<bool> {
         for context in self.page_runtime_observable_contexts() {
-            if self.with_context_scope_by_ptr(context.context, |scope, _| {
+            if self.with_context_scope_by_ptr_internal(context.context, |scope, _| {
                 Ok(crate::context_bootstrap::indexed_db_has_pending_work(scope))
             })? {
                 return Ok(true);
@@ -48,7 +48,7 @@ impl ScriptVm {
     #[cfg(test)]
     pub(crate) fn has_in_flight_indexed_db_tasks_for_test(&mut self) -> Result<bool> {
         for context in self.page_runtime_observable_contexts() {
-            if self.with_context_scope_by_ptr(context.context, |scope, _| {
+            if self.with_context_scope_by_ptr_internal(context.context, |scope, _| {
                 Ok(crate::context_bootstrap::indexed_db_has_in_flight_sql_tasks_for_test(scope))
             })? {
                 return Ok(true);
@@ -63,7 +63,7 @@ impl ScriptVm {
         kind: crate::context_bootstrap::IndexedDbTaskKind,
     ) -> Result<bool> {
         for context in self.page_runtime_observable_contexts() {
-            if self.with_context_scope_by_ptr(context.context, |scope, _| {
+            if self.with_context_scope_by_ptr_internal(context.context, |scope, _| {
                 Ok(crate::context_bootstrap::indexed_db_has_queued_task_kind_for_test(scope, kind))
             })? {
                 return Ok(true);

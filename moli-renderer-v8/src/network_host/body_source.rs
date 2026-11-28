@@ -48,8 +48,28 @@ pub(in crate::network_host) const BODY_FORM_DATA_UNSUPPORTED_CONTENT_TYPE_ERROR_
     "Body.formData only supports application/x-www-form-urlencoded or multipart/form-data bodies";
 
 static NEXT_NETWORK_BODY_SOURCE_ID: AtomicU64 = AtomicU64::new(1);
-static NETWORK_BODY_SOURCES: OnceLock<Mutex<HashMap<NetworkBodySourceId, NetworkBodySourceState>>> =
-    OnceLock::new();
+static NETWORK_BODY_SOURCES: OnceLock<
+    Mutex<HashMap<NetworkBodySourceId, RegisteredNetworkBodySource>>,
+> = OnceLock::new();
+
+#[derive(Debug)]
+struct RegisteredNetworkBodySource {
+    state: NetworkBodySourceState,
+    _native_memory_lease: Option<crate::script_vm::NativeMemoryLease>,
+}
+
+impl RegisteredNetworkBodySource {
+    fn new(
+        id: NetworkBodySourceId,
+        bytes: Vec<u8>,
+        native_memory_lease: Option<crate::script_vm::NativeMemoryLease>,
+    ) -> Self {
+        Self {
+            state: NetworkBodySourceState::new(id, bytes),
+            _native_memory_lease: native_memory_lease,
+        }
+    }
+}
 
 #[derive(WebApiObject)]
 #[webapi(plain)]
@@ -696,12 +716,14 @@ fn set_network_body_registry_bytes<'s>(
     set_network_body_source_object(scope, object, source);
 }
 
-pub(in crate::network_host) fn network_body_source_object_from_bytes<'s>(
+fn build_registry_network_body_source_object<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     owner: Option<v8::Local<'s, v8::Object>>,
     bytes: Vec<u8>,
-) -> v8::Local<'s, v8::Object> {
-    let id = register_network_body_bytes(bytes);
+) -> (v8::Local<'s, v8::Object>, NetworkBodySourceId) {
+    let native_memory_lease =
+        crate::script_vm::record_renderer_document_isolate_native_memory_lease(scope, bytes.len());
+    let id = register_network_body_bytes(bytes, native_memory_lease);
     let source = RegisteredNetworkBodySourceDeclaration::new(
         BODY_SOURCE_KIND_REGISTRY_BYTES,
         v8::BigInt::new_from_u64(scope, id),
@@ -710,7 +732,33 @@ pub(in crate::network_host) fn network_body_source_object_from_bytes<'s>(
     .bind(scope)
     .expect("registry network body source declaration should bind");
     track_registry_body_source_lifetime(scope, source, id);
-    source
+    (source, id)
+}
+
+pub(in crate::network_host) fn network_body_source_object_from_bytes<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    owner: Option<v8::Local<'s, v8::Object>>,
+    bytes: Vec<u8>,
+) -> v8::Local<'s, v8::Object> {
+    build_registry_network_body_source_object(scope, owner, bytes).0
+}
+
+#[cfg(test)]
+pub(crate) fn register_test_network_body_source_in_scope<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    bytes: Vec<u8>,
+) -> (v8::Local<'s, v8::Object>, NetworkBodySourceId) {
+    build_registry_network_body_source_object(scope, None, bytes)
+}
+
+#[cfg(test)]
+pub(crate) fn consume_test_network_body_source(id: NetworkBodySourceId) -> Option<Vec<u8>> {
+    take_remaining_network_body_bytes(id)
+}
+
+#[cfg(test)]
+pub(crate) fn test_network_body_source_is_live(id: NetworkBodySourceId) -> bool {
+    network_body_source_has_remaining(id)
 }
 
 pub(in crate::network_host) fn network_body_stream_from_response_body<'s>(
@@ -1739,12 +1787,18 @@ fn inspect_pending_body_source_for_materialization<'s>(
     }
 }
 
-fn register_network_body_bytes(bytes: Vec<u8>) -> NetworkBodySourceId {
+fn register_network_body_bytes(
+    bytes: Vec<u8>,
+    native_memory_lease: Option<crate::script_vm::NativeMemoryLease>,
+) -> NetworkBodySourceId {
     let id = new_network_body_source_id();
     NETWORK_BODY_SOURCES
         .get_or_init(|| Mutex::new(HashMap::new()))
         .lock()
-        .insert(id, NetworkBodySourceState::new(id, bytes));
+        .insert(
+            id,
+            RegisteredNetworkBodySource::new(id, bytes, native_memory_lease),
+        );
     id
 }
 
@@ -1795,7 +1849,7 @@ fn try_clone_remaining_network_body_bytes(
         .get_or_init(|| Mutex::new(HashMap::new()))
         .lock()
         .get(&id)
-        .map(NetworkBodySourceState::clone_remaining)
+        .map(|entry| entry.state.clone_remaining())
         .transpose()
         .map_err(|error| error.to_string())
 }
@@ -1811,7 +1865,7 @@ fn try_take_remaining_network_body_bytes(
         .get_or_init(|| Mutex::new(HashMap::new()))
         .lock()
         .remove(&id)
-        .map(NetworkBodySourceState::into_remaining)
+        .map(|entry| entry.state.into_remaining())
         .transpose()
         .map_err(|error| error.to_string())
 }
@@ -1820,12 +1874,12 @@ fn try_take_next_network_body_chunk(id: NetworkBodySourceId) -> Result<Option<Ve
     let mut sources = NETWORK_BODY_SOURCES
         .get_or_init(|| Mutex::new(HashMap::new()))
         .lock();
-    let Some(source) = sources.get_mut(&id) else {
+    let Some(entry) = sources.get_mut(&id) else {
         return Ok(None);
     };
-    match source.take_next_chunk(NETWORK_BODY_SOURCE_CHUNK_SIZE) {
+    match entry.state.take_next_chunk(NETWORK_BODY_SOURCE_CHUNK_SIZE) {
         Ok(chunk) => {
-            if chunk.is_none() || source.is_done() {
+            if chunk.is_none() || entry.state.is_done() {
                 sources.remove(&id);
             }
             Ok(chunk)
@@ -1934,7 +1988,7 @@ fn network_body_source_has_remaining(id: NetworkBodySourceId) -> bool {
         .get_or_init(|| Mutex::new(HashMap::new()))
         .lock()
         .get(&id)
-        .map(|source| !source.is_done())
+        .map(|entry| !entry.state.is_done())
         .unwrap_or(false)
 }
 
@@ -1947,6 +2001,9 @@ fn track_registry_body_source_lifetime<'s>(
     // asks for them. Tie that registry entry to the JS source object as well
     // as to explicit pull/cancel/body-method consumption so unconsumed
     // responses do not leak Rust memory after V8 collects the source.
+    // The entry itself owns its `NativeMemoryLease`, so explicit consumption
+    // releases native byte pressure immediately even if the JS wrapper stays
+    // retained.
     crate::v8_finalizer::track_context_owned_v8_finalizer(scope, source, move || {
         let _ = take_remaining_network_body_bytes(id);
     });
@@ -2381,11 +2438,14 @@ mod tests {
             .lock()
             .insert(
                 id,
-                NetworkBodySourceState::File {
-                    path: missing_path,
-                    file: None,
-                    offset: 0,
-                    len: 5,
+                RegisteredNetworkBodySource {
+                    state: NetworkBodySourceState::File {
+                        path: missing_path,
+                        file: None,
+                        offset: 0,
+                        len: 5,
+                    },
+                    _native_memory_lease: None,
                 },
             );
 
@@ -2404,11 +2464,14 @@ mod tests {
             .lock()
             .insert(
                 id,
-                NetworkBodySourceState::File {
-                    path: missing_path,
-                    file: None,
-                    offset: 0,
-                    len: 5,
+                RegisteredNetworkBodySource {
+                    state: NetworkBodySourceState::File {
+                        path: missing_path,
+                        file: None,
+                        offset: 0,
+                        len: 5,
+                    },
+                    _native_memory_lease: None,
                 },
             );
 
