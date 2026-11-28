@@ -580,22 +580,25 @@ pub(crate) fn css_style_sheet_title_getter_callback<'s>(
     if !ensure_css_style_sheet_object(scope, args.this(), "StyleSheet", "title") {
         return;
     }
-    let Some(owner) = css_style_sheet_owner_node(scope, args.this()) else {
-        rv.set(v8::null(scope).into());
-        return;
-    };
-    let Some(name) = v8_string(scope, "title") else {
-        rv.set(v8::null(scope).into());
-        return;
-    };
-    let title = call_object_method(scope, owner, "getAttribute", &[name.into()])
-        .filter(|value| !value.is_null_or_undefined())
-        .and_then(|value| value.to_string(scope))
-        .map(|value| value.to_rust_string_lossy(scope))
-        .filter(|value| !value.is_empty());
-    match title {
-        Some(title) => rv.set(v8_dynamic_string_value(scope, &title)),
-        None => rv.set(v8::null(scope).into()),
+    let title = css_style_sheet_owner_node(scope, args.this()).and_then(|owner| {
+        let (runtime, handle) =
+            crate::native_bridge::node_runtime_and_handle_from_object_or_detached(scope, owner)
+                .ok()?;
+        let dom = unsafe { &*runtime }.dom_host();
+        let root = dom.root_node_handle(handle)?;
+        if !dom.node(root)?.is_document() {
+            return None;
+        }
+        dom.node(handle)?
+            .as_element()?
+            .attribute_ns("", "title")
+            .filter(|title| !title.is_empty())
+            .map(str::to_owned)
+    });
+    if let Some(title) = title {
+        rv.set(v8_dynamic_string_value(scope, &title));
+    } else {
+        rv.set_null();
     }
 }
 
