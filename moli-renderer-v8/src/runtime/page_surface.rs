@@ -5141,6 +5141,24 @@ pub enum RendererPageCommand {
     #[cfg(feature = "molio")]
     ReadViewportSelection(RendererDocumentLifecycleIdentity),
     #[cfg(feature = "molio")]
+    CopyViewportSelection(RendererDocumentLifecycleIdentity),
+    #[cfg(feature = "molio")]
+    CutViewportSelection {
+        document: RendererDocumentLifecycleIdentity,
+        sequence: Option<u64>,
+    },
+    #[cfg(feature = "molio")]
+    PasteViewportText {
+        document: RendererDocumentLifecycleIdentity,
+        text: Option<String>,
+        sequence: Option<u64>,
+    },
+    #[cfg(feature = "molio")]
+    CompleteCanceledClipboardEdit {
+        document: RendererDocumentLifecycleIdentity,
+        sequence: u64,
+    },
+    #[cfg(feature = "molio")]
     ApplyViewportEdit(super::RendererViewportEdit),
     #[cfg(feature = "molio")]
     DropViewportFiles {
@@ -5401,7 +5419,10 @@ pub enum RendererPageReply {
     #[cfg(feature = "molio")]
     ViewportNavigation(bool),
     #[cfg(feature = "molio")]
-    ViewportEditor(Option<super::RendererViewportEditor>),
+    ViewportEditor {
+        editor: Option<super::RendererViewportEditor>,
+        last_frame_sequence: u64,
+    },
     #[cfg(feature = "molio")]
     ViewportEdit(super::RendererViewportEditReply),
     #[cfg(feature = "devtools")]

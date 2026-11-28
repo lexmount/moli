@@ -31,6 +31,7 @@ pub(super) fn clear_input_dispatch_state(vm: &mut ScriptVm) {
             });
         }
         vm.pending_drag_gesture = None;
+        vm.text_control_mouse_selection = None;
     }
     vm.active_scrollbar_drag = None;
     vm.suppress_compat_mouse_events = false;

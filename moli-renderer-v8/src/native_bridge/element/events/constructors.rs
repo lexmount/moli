@@ -58,6 +58,8 @@ pub(crate) enum TextEditInputType {
     InsertFromDrop,
     #[cfg(feature = "molio")]
     InsertFromPaste,
+    #[cfg(feature = "molio")]
+    DeleteByCut,
     #[cfg(feature = "devtools")]
     DeleteContentBackward,
     #[cfg(feature = "devtools")]
@@ -79,6 +81,8 @@ impl TextEditInputType {
             Self::InsertFromDrop => "insertFromDrop",
             #[cfg(feature = "molio")]
             Self::InsertFromPaste => "insertFromPaste",
+            #[cfg(feature = "molio")]
+            Self::DeleteByCut => "deleteByCut",
             #[cfg(feature = "devtools")]
             Self::DeleteContentBackward => "deleteContentBackward",
             #[cfg(feature = "devtools")]
@@ -94,6 +98,8 @@ impl TextEditInputType {
             #[cfg(feature = "devtools")]
             Self::InsertFromDrop => Some(text),
             Self::None => None,
+            #[cfg(feature = "molio")]
+            Self::DeleteByCut => None,
             #[cfg(feature = "devtools")]
             Self::InsertLineBreak
             | Self::InsertParagraph

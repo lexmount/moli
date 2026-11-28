@@ -77,6 +77,78 @@ impl Page {
         }
     }
 
+    /// Dispatches a native copy action and returns the clipboard's plain text.
+    pub async fn copy_viewport_selection(
+        &mut self,
+        document: crate::RendererDocumentLifecycleIdentity,
+    ) -> Result<Option<String>> {
+        self.write_viewport_clipboard(RendererPageCommand::CopyViewportSelection(document))
+            .await
+    }
+
+    /// Dispatches a native cut action and returns the clipboard's plain text.
+    pub async fn cut_viewport_selection(
+        &mut self,
+        document: crate::RendererDocumentLifecycleIdentity,
+    ) -> Result<Option<String>> {
+        self.cut_viewport_selection_with_sequence(document, None)
+            .await
+    }
+
+    /// Dispatches a native cut and completes the optional platform editor sequence.
+    pub async fn cut_viewport_selection_with_sequence(
+        &mut self,
+        document: crate::RendererDocumentLifecycleIdentity,
+        sequence: Option<u64>,
+    ) -> Result<Option<String>> {
+        self.write_viewport_clipboard(RendererPageCommand::CutViewportSelection {
+            document,
+            sequence,
+        })
+        .await
+    }
+
+    async fn write_viewport_clipboard(
+        &mut self,
+        command: RendererPageCommand,
+    ) -> Result<Option<String>> {
+        match self.dispatch_page_command_async(command).await? {
+            RendererPageReply::OptionalString(text) => Ok(text),
+            _ => anyhow::bail!("unexpected viewport clipboard reply"),
+        }
+    }
+
+    /// Dispatches a native paste action with the plain text supplied by the browser.
+    /// The optional sequence acknowledges the platform editor's predicted edit.
+    pub async fn paste_viewport_text(
+        &mut self,
+        document: crate::RendererDocumentLifecycleIdentity,
+        text: Option<String>,
+        sequence: Option<u64>,
+    ) -> Result<bool> {
+        let reply = self
+            .dispatch_page_command_async(RendererPageCommand::PasteViewportText {
+                document,
+                text,
+                sequence,
+            })
+            .await?;
+        Self::decode_bool_page_reply(reply, "paste viewport text")
+    }
+
+    /// Completes the editor sequence when keydown cancels a clipboard shortcut.
+    pub async fn acknowledge_canceled_viewport_clipboard_edit(
+        &mut self,
+        document: crate::RendererDocumentLifecycleIdentity,
+        sequence: u64,
+    ) -> Result<()> {
+        self.dispatch_unit_page_command_async(
+            RendererPageCommand::CompleteCanceledClipboardEdit { document, sequence },
+            "complete canceled clipboard edit",
+        )
+        .await
+    }
+
     pub async fn drop_viewport_files(
         &mut self,
         document: crate::RendererDocumentLifecycleIdentity,
@@ -97,11 +169,23 @@ impl Page {
     }
 
     pub async fn viewport_editor(&mut self) -> Result<Option<crate::RendererViewportEditor>> {
+        self.viewport_editor_with_frame_sequence()
+            .await
+            .map(|(editor, _)| editor)
+    }
+
+    /// Reads the editor with the last published frame sequence on this subscription.
+    pub async fn viewport_editor_with_frame_sequence(
+        &mut self,
+    ) -> Result<(Option<crate::RendererViewportEditor>, u64)> {
         match self
             .dispatch_page_command_async(RendererPageCommand::ReadViewportEditor)
             .await?
         {
-            RendererPageReply::ViewportEditor(editor) => Ok(editor),
+            RendererPageReply::ViewportEditor {
+                editor,
+                last_frame_sequence,
+            } => Ok((editor, last_frame_sequence)),
             _ => anyhow::bail!("unexpected viewport editor reply"),
         }
     }

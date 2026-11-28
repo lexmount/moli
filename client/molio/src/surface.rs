@@ -16,7 +16,7 @@ use moli_core::{
 };
 use tokio::sync::{mpsc, oneshot, watch};
 
-use crate::host::{KeyInput, TabCommand};
+use crate::host::{ClipboardAction, KeyInput, TabCommand};
 use crate::text_input::MoliTextInputBridge;
 
 #[derive(Clone, Copy)]
@@ -698,29 +698,46 @@ impl MoliSurface {
             event.keystroke.modifiers.control
         };
         if primary && !event.keystroke.modifiers.alt {
-            match (event.keystroke.key.as_str(), self.document) {
-                ("c", Some(document)) => {
-                    let (reply, text) = oneshot::channel();
-                    self.send(TabCommand::Copy { document, reply });
-                    cx.spawn_in(window, async move |_, cx| {
-                        if let Ok(Some(text)) = text.await {
-                            let _ = cx.update(|_, cx| {
-                                cx.write_to_clipboard(ClipboardItem::new_string(text))
-                            });
-                        }
-                    })
-                    .detach();
-                }
-                ("v", _) if self.text_input.editor().is_some() => {
-                    if let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) {
-                        self.apply_text_edit(RendererViewportEditAction::Paste { text });
+            let (Some(document), shortcut @ ("c" | "x" | "v")) =
+                (self.document, event.keystroke.key.as_str())
+            else {
+                self.key("keydown", &event.keystroke, event.is_held);
+                return;
+            };
+            let action = if shortcut == "v" {
+                let text = cx.read_from_clipboard().and_then(|item| item.text());
+                let sequence = text
+                    .as_ref()
+                    .filter(|text| !text.is_empty())
+                    .and_then(|text| {
+                        self.text_input
+                            .edit(RendererViewportEditAction::Paste { text: text.clone() })
+                            .map(|edit| edit.sequence)
+                    });
+                ClipboardAction::Paste { text, sequence }
+            } else {
+                let (reply, text) = oneshot::channel();
+                cx.spawn_in(window, async move |_, cx| {
+                    if let Ok(Some(text)) = text.await {
+                        let _ = cx
+                            .update(|_, cx| cx.write_to_clipboard(ClipboardItem::new_string(text)));
                     }
+                })
+                .detach();
+                if shortcut == "x" {
+                    ClipboardAction::Cut {
+                        reply,
+                        sequence: self.text_input.cut(),
+                    }
+                } else {
+                    ClipboardAction::Copy(reply)
                 }
-                _ => {
-                    self.key("keydown", &event.keystroke, event.is_held);
-                    return;
-                }
-            }
+            };
+            self.send(TabCommand::Clipboard {
+                document,
+                key: viewport_key_input("keydown", &event.keystroke, event.is_held),
+                action,
+            });
             cx.stop_propagation();
             window.prevent_default();
             return;
@@ -749,14 +766,9 @@ impl MoliSurface {
     }
 
     fn key(&self, event: &'static str, keystroke: &Keystroke, repeat: bool) {
-        let (key, code) = dom_key(keystroke);
-        self.send(TabCommand::Key(KeyInput {
-            event,
-            key,
-            code,
-            repeat,
-            modifiers: modifiers(keystroke.modifiers),
-        }));
+        self.send(TabCommand::Key(viewport_key_input(
+            event, keystroke, repeat,
+        )));
     }
 }
 
@@ -992,6 +1004,17 @@ fn mouse_button(button: MouseButton) -> (i32, i32) {
         MouseButton::Middle => (1, 4),
         MouseButton::Right => (2, 2),
         _ => (-1, 0),
+    }
+}
+
+fn viewport_key_input(event: &'static str, keystroke: &Keystroke, repeat: bool) -> KeyInput {
+    let (key, code) = dom_key(keystroke);
+    KeyInput {
+        event,
+        key,
+        code,
+        repeat,
+        modifiers: modifiers(keystroke.modifiers),
     }
 }
 

@@ -13,6 +13,26 @@ pub(super) struct ClipboardInit<'s> {
     clipboard_data: Option<v8::Local<'s, v8::Object>>,
 }
 
+pub fn construct_native_clipboard_event<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    event_type: &str,
+    clipboard_data: v8::Local<'s, v8::Object>,
+) -> Option<v8::Local<'s, v8::Object>> {
+    construct_trusted_subclass(
+        scope,
+        EventSubclassKind::ClipboardEvent,
+        event_type,
+        SubclassInit::Values(ValueEventInit::Clipboard(ClipboardInit {
+            base: EventInit {
+                bubbles: true,
+                cancelable: true,
+                composed: true,
+            },
+            clipboard_data: Some(clipboard_data),
+        })),
+    )
+}
+
 #[derive(webidl::WebIdlDictionary)]
 #[webidl(prefix = "CloseEventInit", snapshot)]
 pub(super) struct CloseInit {

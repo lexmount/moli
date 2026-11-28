@@ -30,14 +30,19 @@ impl ViewportEditSequence {
         editor: &RendererViewportEditor,
         action: RendererViewportEditAction,
     ) -> RendererViewportEdit {
-        self.sequence += 1;
+        let (sequence, previous) = self.reserve();
         RendererViewportEdit {
             document,
             target: editor.target,
             revision: editor.revision,
-            sequence: self.sequence,
-            previous: self.pending.replace(self.sequence),
+            sequence,
+            previous,
             action,
         }
+    }
+
+    pub(crate) fn reserve(&mut self) -> (u64, Option<u64>) {
+        self.sequence += 1;
+        (self.sequence, self.pending.replace(self.sequence))
     }
 }

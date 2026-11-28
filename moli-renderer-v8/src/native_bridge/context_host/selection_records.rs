@@ -1,7 +1,7 @@
 use super::range_records::RangeRecordRegistry;
 use super::*;
 use crate::dom::native::{DomHost, NodeType};
-use crate::range_boundary::RangeBoundaryPoint;
+use crate::range_boundary::{RangeBoundaryPoint, point_order_in_dom};
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub(crate) struct SelectionRecordHandle(u64);
@@ -34,6 +34,26 @@ pub(crate) struct SelectionBoundarySnapshot {
 pub(crate) struct DocumentSelectionSnapshot {
     pub(crate) start: SelectionBoundarySnapshot,
     pub(crate) end: SelectionBoundarySnapshot,
+}
+
+impl DocumentSelectionSnapshot {
+    pub(crate) fn ordered_in_dom(
+        self,
+        dom: &DomHost,
+    ) -> Option<(SelectionBoundarySnapshot, SelectionBoundarySnapshot)> {
+        let order = point_order_in_dom(
+            dom,
+            self.start.container,
+            self.start.offset,
+            self.end.container,
+            self.end.offset,
+        )?;
+        Some(if order.is_gt() {
+            (self.end, self.start)
+        } else {
+            (self.start, self.end)
+        })
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

@@ -976,6 +976,8 @@ pub(super) struct ScriptVm {
     active_drag_session: Option<ActiveDragSession>,
     #[cfg(feature = "devtools")]
     pending_drag_gesture: Option<PendingDragGesture>,
+    #[cfg(feature = "devtools")]
+    text_control_mouse_selection: Option<input_dispatch::TextControlMouseSelection>,
     promise_reject_dispatch: PromiseRejectDispatchSlot,
     next_internal_runtime_evaluate_call_id: i32,
     #[cfg(feature = "devtools")]
@@ -2504,6 +2506,8 @@ impl ScriptVmDefaultWorldBootstrap {
             active_drag_session: None,
             #[cfg(feature = "devtools")]
             pending_drag_gesture: None,
+            #[cfg(feature = "devtools")]
+            text_control_mouse_selection: None,
             promise_reject_dispatch,
             next_internal_runtime_evaluate_call_id: 1,
             #[cfg(feature = "devtools")]

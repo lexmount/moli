@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-use std::{borrow::Cow, fmt::Debug, hash::Hash, sync::Arc};
+use std::{borrow::Cow, fmt::Debug, hash::Hash, ops::Range, sync::Arc};
 
 use taffy::Size;
 use unicode_segmentation::UnicodeSegmentation;
@@ -20,23 +20,31 @@ where
     N: Copy + Debug + Eq + Hash,
     R: LayoutStyleResolver<N>,
 {
+    world.password_offsets.clear();
     let controls = (0..world.boxes.len())
         .map(|index| world.boxes.id_at(index))
         .filter_map(|id| {
             let control = &world.boxes[id];
+            let mut password_offsets = PasswordOffsetMap::default();
             form_control_texts(
                 &control.element_semantics,
                 control.style.text_transform(),
                 control.text_selection,
+                &mut password_offsets,
             )
-            .map(|(texts, placeholder, selection)| (id, texts, placeholder, selection))
+            .map(|(texts, placeholder, selection)| {
+                (id, texts, placeholder, selection, password_offsets)
+            })
         })
-        .filter(|(_, texts, _, selection)| !texts.is_empty() || selection.is_some())
+        .filter(|(_, texts, _, selection, _)| !texts.is_empty() || selection.is_some())
         .collect::<Vec<_>>();
-    for (control, mut texts, placeholder, selection) in controls {
+    for (control, mut texts, placeholder, selection, password_offsets) in controls {
         let Some(owner) = world.boxes[control].source else {
             continue;
         };
+        if !password_offsets.0.is_empty() {
+            world.password_offsets.insert(owner, password_offsets);
+        }
         if world.boxes[control]
             .element_semantics
             .as_ref()
@@ -117,6 +125,7 @@ fn form_control_texts(
     semantics: &Option<LayoutElementSemantics>,
     text_transform: TextTransform,
     selection: Option<LayoutTextSelection>,
+    password_offsets: &mut PasswordOffsetMap,
 ) -> Option<(Vec<Arc<str>>, bool, Option<LayoutTextSelection>)> {
     let semantics = semantics.as_ref()?;
     let LayoutElementCategory::FormControl(kind) = semantics.category else {
@@ -140,6 +149,7 @@ fn form_control_texts(
         &data.placeholder,
         text_transform,
         selection,
+        Some(password_offsets),
     );
     Some((
         if text.is_empty() {
@@ -180,7 +190,7 @@ pub fn form_control_text(
     text_transform: TextTransform,
 ) -> (String, bool) {
     let (text, placeholder, _) =
-        form_control_text_with_selection(kind, value, placeholder_text, text_transform, None);
+        form_control_text_with_selection(kind, value, placeholder_text, text_transform, None, None);
     (text, placeholder)
 }
 
@@ -190,9 +200,18 @@ fn form_control_text_with_selection(
     placeholder_text: &str,
     text_transform: TextTransform,
     selection: Option<LayoutTextSelection>,
+    password_offsets: Option<&mut PasswordOffsetMap>,
 ) -> (String, bool, Option<LayoutTextSelection>) {
     if kind == LayoutFormControlKind::Input(LayoutInputControlKind::Password) && !value.is_empty() {
-        let (text, selection) = mask_password(value, text_transform, selection);
+        let (text, offsets) = mask_password(
+            value,
+            text_transform,
+            password_offsets.is_some() || selection.is_some(),
+        );
+        let selection = selection.and_then(|selection| offsets.project_selection(selection));
+        if let Some(password_offsets) = password_offsets {
+            *password_offsets = offsets;
+        }
         return (text, false, selection);
     }
     let placeholder = value.is_empty()
@@ -278,63 +297,82 @@ fn form_control_text_with_selection(
     (text, placeholder, selection)
 }
 
+/// The original UTF-16 range covered by each displayed bullet. Case
+/// expansion can associate several bullets with one source character.
+#[derive(Debug, Default)]
+pub(crate) struct PasswordOffsetMap(Vec<Range<usize>>);
+
+impl PasswordOffsetMap {
+    pub(crate) fn source_offset(&self, display_offset: usize) -> usize {
+        display_offset
+            .min(self.0.len())
+            .checked_sub(1)
+            .map_or(0, |index| self.0[index].end)
+    }
+
+    fn project_selection(&self, selection: LayoutTextSelection) -> Option<LayoutTextSelection> {
+        let display_offset = |offset| self.0.partition_point(|range| range.start < offset);
+        let masked = LayoutTextSelection::new(
+            display_offset(selection.start),
+            display_offset(selection.end),
+        );
+        (selection.is_caret() || !masked.is_caret()).then_some(masked)
+    }
+}
+
 fn mask_password(
     value: &str,
     text_transform: TextTransform,
-    selection: Option<LayoutTextSelection>,
-) -> (String, Option<LayoutTextSelection>) {
-    // Project the selection through case conversion and then through the
-    // grapheme boundaries of the displayed text.
-    let (value, transformed_selection) = transform_password(value, text_transform, selection);
-    let mut text = String::with_capacity(value.len());
-    let mut source_offset = 0;
-    let mut masked_selection = LayoutTextSelection::new(0, 0);
-    for grapheme in value.graphemes(true) {
+    with_offsets: bool,
+) -> (String, PasswordOffsetMap) {
+    // Record where each source character ends during case conversion.
+    let mut character_ends = Vec::new();
+    let display = if text_transform == TextTransform::None {
+        Cow::Borrowed(value)
+    } else {
+        let mut transform = TextTransformState::default();
+        let mut transformed = String::with_capacity(value.len());
+        let mut source_end = 0;
+        for character in value.chars() {
+            transformed.extend(transform.transform(character, text_transform));
+            if with_offsets {
+                source_end += character.len_utf16();
+                character_ends.push((transformed.len(), source_end));
+            }
+        }
+        Cow::Owned(transformed)
+    };
+
+    let mut text = String::with_capacity(display.len());
+    let mut offsets = PasswordOffsetMap::default();
+    let mut character = 0;
+    let mut source_end = 0;
+    for (start, grapheme) in display.grapheme_indices(true) {
         text.push('\u{2022}');
-        if let Some(selection) = transformed_selection {
-            // A UTF-16 offset inside a grapheme maps to the end of its bullet.
-            masked_selection.start += usize::from(source_offset < selection.start);
-            masked_selection.end += usize::from(source_offset < selection.end);
-            source_offset += grapheme.encode_utf16().count();
+        if !with_offsets {
+            continue;
         }
+        let source_start = if character_ends.is_empty() {
+            let start = source_end;
+            source_end += grapheme.encode_utf16().count();
+            start
+        } else {
+            while character_ends[character].0 <= start {
+                character += 1;
+            }
+            let source_start = character
+                .checked_sub(1)
+                .map_or(0, |index| character_ends[index].1);
+            let end = start + grapheme.len();
+            while character_ends[character].0 < end {
+                character += 1;
+            }
+            source_end = character_ends[character].1;
+            source_start
+        };
+        offsets.0.push(source_start..source_end);
     }
-    let selection = selection
-        .filter(|original| original.is_caret() || !masked_selection.is_caret())
-        .map(|_| masked_selection);
-    (text, selection)
-}
-
-fn transform_password(
-    value: &str,
-    text_transform: TextTransform,
-    selection: Option<LayoutTextSelection>,
-) -> (Cow<'_, str>, Option<LayoutTextSelection>) {
-    if text_transform == TextTransform::None {
-        return (Cow::Borrowed(value), selection);
-    }
-
-    let mut transform = TextTransformState::default();
-    let mut transformed = String::with_capacity(value.len());
-    let mut source_offset = 0;
-    let mut transformed_selection = LayoutTextSelection::new(0, 0);
-    for character in value.chars() {
-        let mut transformed_units = 0;
-        for converted in transform.transform(character, text_transform) {
-            transformed.push(converted);
-            transformed_units += converted.len_utf16();
-        }
-        if let Some(selection) = selection {
-            transformed_selection.start +=
-                usize::from(source_offset < selection.start) * transformed_units;
-            transformed_selection.end +=
-                usize::from(source_offset < selection.end) * transformed_units;
-            source_offset += character.len_utf16();
-        }
-    }
-    (
-        Cow::Owned(transformed),
-        selection.map(|_| transformed_selection),
-    )
+    (text, offsets)
 }
 
 pub(crate) fn select_row_height(font_size: f32, line_height: f32) -> f32 {

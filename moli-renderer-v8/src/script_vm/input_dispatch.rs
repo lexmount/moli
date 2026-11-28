@@ -13,11 +13,13 @@ mod ace_page_tasks;
 mod cursor;
 mod drag_source;
 mod mouse_boundary;
+mod text_control_selection;
 mod touch_tap;
 mod wheel;
 use crate::native_bridge::element::InputSurfaceHit;
 use drag_source::dispatch_drag_source_event;
 use mouse_boundary::dispatch_mouse_boundary_events;
+pub(super) use text_control_selection::TextControlMouseSelection;
 use touch_tap::dispatch_touch_tap_activation;
 
 use super::input_dispatch_outcome;
@@ -50,8 +52,7 @@ use crate::native_bridge::element::{
     perform_mouse_focus_default_action, perform_scrollbar_scroll_default_action,
     perform_text_input, perform_wheel_scroll_default_action, replace_contenteditable_selection,
     replace_text_control_selection, select_contenteditable_contents,
-    text_control_set_selection_range_internal,
-    text_control_set_selection_range_with_direction_internal, text_control_value, update_focus,
+    text_control_set_selection_range_internal, text_control_value, update_focus,
 };
 use crate::native_bridge::{
     CurrentInputEvent, CurrentInputEventScope, MouseReleaseFollowUp, PageScriptHost,
@@ -61,12 +62,14 @@ use crate::runtime::{
     RendererDragData, RendererInputDispatchOutcome, RendererInterceptedDrag,
     RendererPointerEventProperties, RendererTouchPoint, RendererWheelDispatchOutcome,
 };
-use crate::util::{
-    node_wrapper_from_handle, utf16_len, utf16_next_scalar_boundary,
-    utf16_previous_scalar_boundary, utf16_scalar_boundary_at_or_after, utf16_units,
-};
+use crate::util::{node_wrapper_from_handle, utf16_len};
 #[cfg(feature = "molio")]
-use crate::{host::EventTargetHandle, native_bridge::OwnerDispatchScope};
+use crate::{
+    context_bootstrap::viewport_edit::{self, ViewportEditing},
+    host::EventTargetHandle,
+    native_bridge::OwnerDispatchScope,
+    runtime::RendererViewportEditAction,
+};
 
 fn related_target_value<'s>(
     scope: &mut v8::PinScope<'s, '_>,
@@ -949,13 +952,65 @@ fn prepare_touch_point<'s>(
 impl ScriptVm {
     pub(crate) fn viewport_selected_text(&mut self) -> Result<Option<String>> {
         self.with_default_context_scope(|scope, host| {
-            Ok(crate::context_bootstrap::viewport_edit::selected_viewport_text(scope, host))
+            Ok(viewport_edit::selected_viewport_text(scope, host))
         })
+    }
+
+    pub(crate) fn copy_or_cut_viewport_selection(
+        &mut self,
+        editing: &mut ViewportEditing,
+        cut: bool,
+        sequence: Option<u64>,
+    ) -> Result<Option<String>> {
+        self.with_viewport_clipboard_edit(editing, sequence, |scope, host, _| {
+            viewport_edit::copy_or_cut_viewport_selection(scope, host, cut)
+        })
+    }
+
+    pub(crate) fn paste_viewport_text(
+        &mut self,
+        editing: &mut ViewportEditing,
+        text: Option<&str>,
+        sequence: Option<u64>,
+    ) -> Result<bool> {
+        self.with_viewport_clipboard_edit(editing, sequence, |scope, host, editing| {
+            editing.paste_from_clipboard(scope, host, text)
+        })
+    }
+
+    pub(crate) fn complete_canceled_clipboard_edit(
+        &mut self,
+        editing: &mut ViewportEditing,
+        sequence: u64,
+    ) -> Result<()> {
+        self.with_viewport_clipboard_edit(editing, Some(sequence), |_, _, _| ())
+    }
+
+    fn with_viewport_clipboard_edit<T>(
+        &mut self,
+        editing: &mut ViewportEditing,
+        sequence: Option<u64>,
+        dispatch: impl FnOnce(&mut v8::PinScope<'_, '_>, *mut PageScriptHost, &mut ViewportEditing) -> T,
+    ) -> Result<T> {
+        let result = self.with_native_input_event_scope(|scope, host| {
+            let document =
+                sequence.and_then(|_| viewport_edit::clipboard_document(unsafe { &*host }));
+            Ok((dispatch(scope, host, editing), document))
+        });
+        let (outcome, document) = self.finish_input_event_dispatch_turn(result)?;
+        // The next queued edit depends on the live editor even when this edit was canceled.
+        if let (Some(sequence), Some(document)) = (sequence, document) {
+            self.with_default_context_scope(|scope, host| {
+                editing.complete_clipboard_edit(scope, host, document, sequence);
+                Ok(())
+            })?;
+        }
+        Ok(outcome)
     }
 
     pub(crate) fn viewport_editor_snapshot(
         &mut self,
-        editing: &crate::context_bootstrap::viewport_edit::ViewportEditing,
+        editing: &ViewportEditing,
     ) -> Option<crate::runtime::RendererViewportEditor> {
         self.with_current_main_world_scope(|scope, host| {
             unsafe { &*host }.ensure_observable_layout()?;
@@ -968,20 +1023,23 @@ impl ScriptVm {
 
     pub(crate) fn apply_viewport_editor_input(
         &mut self,
-        editing: &mut crate::context_bootstrap::viewport_edit::ViewportEditing,
+        editing: &mut ViewportEditing,
         edit: crate::runtime::RendererViewportEdit,
     ) -> Result<bool> {
-        let result =
-            self.with_default_context_scope(|scope, host| Ok(editing.apply(scope, host, edit)));
+        let result = if matches!(edit.action, RendererViewportEditAction::Paste { .. }) {
+            self.with_native_input_event_scope(|scope, host| Ok(editing.apply(scope, host, edit)))
+        } else {
+            self.with_default_context_scope(|scope, host| Ok(editing.apply(scope, host, edit)))
+        };
         self.finish_input_command_checkpoint(result)
     }
 }
 
 impl ScriptVm {
-    /// Native keyboard delivery has no outer JavaScript invocation. Checkpoint
+    /// Native input delivery has no outer JavaScript invocation. Checkpoint
     /// when each outermost callback returns, including between listeners and
     /// before defaults. Nested dispatchEvent() stays inside its calling script.
-    fn with_native_keyboard_event_scope<T>(
+    fn with_native_input_event_scope<T>(
         &mut self,
         operation: impl FnOnce(&mut v8::PinScope<'_, '_>, *mut PageScriptHost) -> Result<T>,
     ) -> Result<T> {
@@ -1194,6 +1252,9 @@ impl ScriptVm {
         );
         if is_release {
             self.suppress_compat_mouse_events = false;
+            if prepared.button == 0 || full_release {
+                self.text_control_mouse_selection = None;
+            }
         }
         if full_release {
             self.mouse_routed_frame = None;
@@ -1224,6 +1285,7 @@ impl ScriptVm {
         self.pressed_mouse_buttons = 0;
         self.mouse_routed_frame = None;
         self.pending_drag_gesture = None;
+        self.text_control_mouse_selection = None;
         self.active_scrollbar_drag = None;
 
         let _current_input_event = CurrentInputEventScope::enter(
@@ -1472,8 +1534,12 @@ impl ScriptVm {
             #[cfg(feature = "molio")]
             runtime.set_compat_mouse_press_owner(button, None);
             self.pending_drag_gesture = None;
+            self.text_control_mouse_selection = None;
         } else if event_name == "mouseup" || self.pressed_mouse_buttons & 1 == 0 {
             self.pending_drag_gesture = None;
+        }
+        if event_name == "mousemove" && buttons & 1 == 0 {
+            self.text_control_mouse_selection = None;
         }
         PreparedMouseInputDispatch {
             button,
@@ -1722,6 +1788,7 @@ impl ScriptVm {
         let active_drag_session: *mut Option<ActiveDragSession> = &mut self.active_drag_session;
         let intercepted_drag = Cell::new(None);
         let mouse_down_allows_drag = Cell::new(true);
+        let mut text_control_selection = self.text_control_mouse_selection;
 
         let mut suppress_compat_mouse_events = self.suppress_compat_mouse_events;
 
@@ -1987,11 +2054,33 @@ impl ScriptVm {
                         // their default action was not canceled. Focus the
                         // actual hit target rather than a pointer-capture
                         // target retained from an earlier event.
-                        perform_mouse_focus_default_action(
-                            scope,
-                            runtime_ptr,
-                            routed_target.unwrap_or(initial_target),
-                        );
+                        let target = routed_target.unwrap_or(initial_target);
+                        perform_mouse_focus_default_action(scope, runtime_ptr, target);
+                        if button == 0 {
+                            text_control_selection = TextControlMouseSelection::begin(
+                                scope,
+                                runtime_ptr,
+                                target,
+                                position,
+                                click_count,
+                                moli_input::InputModifiers::from_bits(modifiers),
+                            )?;
+                        }
+                    }
+                    if dispatched.allows_default() {
+                        if event_name == "mousemove"
+                            && buttons & 1 != 0
+                            && let Some(selection) = &mut text_control_selection
+                            && !selection.extend(scope, runtime_ptr, position)?
+                        {
+                            text_control_selection = None;
+                        }
+                        if event_name == "mouseup"
+                            && button == 0
+                            && let Some(selection) = text_control_selection.take()
+                        {
+                            selection.release(scope, runtime_ptr, position);
+                        }
                     }
                 }
             }
@@ -2152,7 +2241,7 @@ impl ScriptVm {
                         click_count.max(1),
                         modifiers,
                     );
-                    if click_count >= 2
+                    if click_count == 2
                         && let Some(event) = construct_mouse_event_with_detail_for_target(
                             scope,
                             runtime_ptr,
@@ -2227,9 +2316,10 @@ impl ScriptVm {
         self.hovered_mouse_handle = next_hover
             .filter(|target| self._context_host.borrow().dom_host().is_connected(*target));
         self.suppress_compat_mouse_events = suppress_compat_mouse_events;
-        if !mouse_down_allows_drag.get() {
+        if text_control_selection.is_some() || !mouse_down_allows_drag.get() {
             self.pending_drag_gesture = None;
         }
+        self.text_control_mouse_selection = text_control_selection;
         result.map(|mut outcome| {
             outcome.intercepted_drag = intercepted_drag.take();
             outcome
@@ -2962,7 +3052,7 @@ impl ScriptVm {
         let shift = modifiers & 8 == 8;
         let canceled_raw_keydown = Cell::new(false);
 
-        let result = self.with_native_keyboard_event_scope(|scope, runtime_ptr| {
+        let result = self.with_native_input_event_scope(|scope, runtime_ptr| {
             let Some(event) = construct_keyboard_event(
                 scope,
                 event_name,
@@ -3262,95 +3352,14 @@ impl ScriptVm {
                 )));
             }
 
-            if target.is_text_control
-                && matches!(
-                    key_lower.as_str(),
-                    "arrowleft" | "left" | "arrowright" | "right" | "home" | "end"
-                )
-            {
-                let value_units = utf16_units(&text_control_value(runtime, handle));
-                let value_len = value_units.len() as u32;
-                let (start, end, direction) = current_selection_state(runtime, handle);
-                let start = utf16_scalar_boundary_at_or_after(&value_units, start as usize) as u32;
-                let end = utf16_scalar_boundary_at_or_after(&value_units, end as usize) as u32;
-                if shift {
-                    let (anchor, focus) = match direction.as_str() {
-                        "backward" => (end, start),
-                        "forward" => (start, end),
-                        _ => (end, end),
-                    };
-                    let next_focus = match key_lower.as_str() {
-                        "arrowleft" | "left" => {
-                            utf16_previous_scalar_boundary(&value_units, focus as usize) as u32
-                        }
-                        "arrowright" | "right" => {
-                            utf16_next_scalar_boundary(&value_units, focus as usize) as u32
-                        }
-                        "home" => 0,
-                        "end" => value_len,
-                        _ => focus,
-                    };
-                    if next_focus == focus
-                        && matches!(
-                            key_lower.as_str(),
-                            "arrowleft" | "left" | "arrowright" | "right"
-                        )
-                    {
-                        return Ok(input_dispatch_outcome(true));
-                    }
-                    let (next_start, next_end, next_direction) = if next_focus < anchor {
-                        (next_focus, anchor, "backward")
-                    } else if next_focus > anchor {
-                        (anchor, next_focus, "forward")
-                    } else {
-                        (anchor, anchor, "none")
-                    };
-                    let _ = text_control_set_selection_range_with_direction_internal(
-                        scope,
-                        runtime_ptr,
-                        handle,
-                        next_start,
-                        next_end,
-                        next_direction,
-                    );
-                    return Ok(input_dispatch_outcome(true));
-                }
-                let caret = match key_lower.as_str() {
-                    "arrowleft" | "left" => {
-                        if start != end {
-                            start
-                        } else {
-                            utf16_previous_scalar_boundary(&value_units, start as usize) as u32
-                        }
-                    }
-                    "arrowright" | "right" => {
-                        if start != end {
-                            end
-                        } else {
-                            utf16_next_scalar_boundary(&value_units, end as usize) as u32
-                        }
-                    }
-                    "home" => 0,
-                    "end" => value_len,
-                    _ => end,
-                };
-                if start == end
-                    && caret == start
-                    && matches!(
-                        key_lower.as_str(),
-                        "arrowleft" | "left" | "arrowright" | "right"
-                    )
-                {
-                    return Ok(input_dispatch_outcome(true));
-                }
-                let _ = text_control_set_selection_range_internal(
+            if target.is_text_control {
+                text_control_selection::move_text_control_selection(
                     scope,
                     runtime_ptr,
                     handle,
-                    caret,
-                    caret,
+                    &key_lower,
+                    moli_input::InputModifiers::from_bits(modifiers),
                 );
-                return Ok(input_dispatch_outcome(true));
             }
 
             Ok(input_dispatch_outcome(true))
