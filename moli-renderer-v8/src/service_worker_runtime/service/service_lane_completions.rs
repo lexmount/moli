@@ -195,6 +195,21 @@ impl ServiceWorkerRuntimeService {
         self.signal_service_lane_wake();
     }
 
+    pub(in crate::service_worker_runtime) fn enqueue_registration_update_requested(
+        &self,
+        request: ServiceWorkerRegistrationUpdate,
+        source_host: SharedRendererServiceWorkerHost,
+    ) {
+        self.enqueue_service_lane_completion(
+            ServiceWorkerRuntimeCompletion::registration_update_requested(
+                self.downgrade(),
+                request,
+                source_host,
+            ),
+        );
+        self.signal_service_lane_wake();
+    }
+
     pub(in crate::service_worker_runtime) fn enqueue_sync_registration_requested(
         &self,
         request: ServiceWorkerSyncRegistration,
@@ -647,6 +662,18 @@ impl WeakServiceWorkerRuntimeService {
             return;
         };
         service.finish_get_notifications_requested(request, run, source_host);
+    }
+
+    pub(in crate::service_worker_runtime) fn finish_registration_update_requested(
+        &self,
+        request: ServiceWorkerRegistrationUpdate,
+        run: RendererServiceWorkerRunIdentity,
+        source_host: SharedRendererServiceWorkerHost,
+    ) {
+        let Some(service) = self.upgrade() else {
+            return;
+        };
+        service.finish_registration_update_requested(request, run, source_host);
     }
 
     pub(in crate::service_worker_runtime) fn finish_sync_registration_requested(

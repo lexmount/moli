@@ -50,6 +50,7 @@ pub(crate) fn dispatch_worker_event<'s>(
         | WorkerToParentMessage::ServiceWorkerPushUnsubscribe(_)
         | WorkerToParentMessage::ServiceWorkerSyncCompleted(_)
         | WorkerToParentMessage::ServiceWorkerPeriodicSyncCompleted(_)
+        | WorkerToParentMessage::ServiceWorkerRegistrationUpdate(_)
         | WorkerToParentMessage::ServiceWorkerShowNotification(_)
         | WorkerToParentMessage::ServiceWorkerGetNotifications(_)
         | WorkerToParentMessage::ServiceWorkerSyncRegistration(_)

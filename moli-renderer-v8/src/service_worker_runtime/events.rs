@@ -217,6 +217,19 @@ pub(crate) struct ServiceWorkerSyncRegistrationResult {
 }
 
 #[derive(Clone, Debug)]
+pub(crate) struct ServiceWorkerRegistrationUpdate {
+    pub(crate) request_id: u64,
+    pub(crate) registration_id: ServiceWorkerRegistrationId,
+    pub(crate) version_id: ServiceWorkerVersionId,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct ServiceWorkerRegistrationUpdateResult {
+    pub(crate) request_id: u64,
+    pub(crate) result: Result<(), super::errors::ServiceWorkerRegistrationError>,
+}
+
+#[derive(Clone, Debug)]
 pub(crate) struct ServiceWorkerSyncGetTags {
     pub(crate) request_id: u64,
     pub(crate) registration_id: ServiceWorkerRegistrationId,

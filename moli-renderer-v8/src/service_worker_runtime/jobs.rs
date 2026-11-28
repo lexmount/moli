@@ -6,19 +6,27 @@ use url::Url;
 use crate::{
     network::{BrowserResourceRuntimeBinding, ResourceRequestClient},
     page_task_queue::RendererPageServiceWorkerTaskSender,
-    runtime::{RendererBrowserContextRuntime, RendererWorkerContextRuntime},
+    runtime::RendererWorkerContextRuntime,
     types::{ServiceWorkerRegisterCompletion, ServiceWorkerUnregisterCompletion},
     worker::{WorkerNetworkPolicy, WorkerScriptKind},
 };
 
 use super::{
     errors::ServiceWorkerRegistrationError,
+    events::ServiceWorkerRegistrationUpdateResult,
+    host::SharedRendererServiceWorkerHost,
     ids::{ServiceWorkerRegistrationId, ServiceWorkerVersionId},
     registration::ServiceWorkerUpdateViaCache,
     run_owner::ServiceWorkerRunOwner,
     script_loading::ServiceWorkerScriptUpdateCheckParams,
     snapshots::ServiceWorkerRegistrationSnapshot,
 };
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum ServiceWorkerRegistrationJobKind {
+    Register,
+    Update,
+}
 
 #[derive(Clone)]
 pub(crate) struct ServiceWorkerLaunchParams {
@@ -38,14 +46,57 @@ pub(crate) struct ServiceWorkerLaunchParams {
     pub(super) pause_evaluation_until_debugger: bool,
 }
 
-#[derive(Clone, Debug)]
-pub(super) struct ServiceWorkerRegisterJob {
-    pub(super) request_id: u64,
-    pub(super) document_owner: crate::window_document_identity::WindowDocumentOwner,
-    pub(super) completion_tx: RendererPageServiceWorkerTaskSender,
+#[derive(Clone)]
+pub(super) enum ServiceWorkerRegisterJob {
+    Window {
+        request_id: u64,
+        document_owner: crate::window_document_identity::WindowDocumentOwner,
+        completion_tx: RendererPageServiceWorkerTaskSender,
+    },
+    Worker {
+        request_id: u64,
+        host: SharedRendererServiceWorkerHost,
+    },
+}
+
+impl std::fmt::Debug for ServiceWorkerRegisterJob {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Window {
+                request_id,
+                document_owner,
+                ..
+            } => f
+                .debug_struct("ServiceWorkerRegisterJob::Window")
+                .field("request_id", request_id)
+                .field("document_owner", document_owner)
+                .finish_non_exhaustive(),
+            Self::Worker { request_id, host } => f
+                .debug_struct("ServiceWorkerRegisterJob::Worker")
+                .field("request_id", request_id)
+                .field("owner", &host.run_owner())
+                .finish_non_exhaustive(),
+        }
+    }
 }
 
 impl ServiceWorkerRegisterJob {
+    pub(super) fn window(
+        request_id: u64,
+        document_owner: crate::window_document_identity::WindowDocumentOwner,
+        completion_tx: RendererPageServiceWorkerTaskSender,
+    ) -> Self {
+        Self::Window {
+            request_id,
+            document_owner,
+            completion_tx,
+        }
+    }
+
+    pub(super) fn worker(request_id: u64, host: SharedRendererServiceWorkerHost) -> Self {
+        Self::Worker { request_id, host }
+    }
+
     pub(super) fn send(
         self,
         result: std::result::Result<
@@ -53,13 +104,26 @@ impl ServiceWorkerRegisterJob {
             ServiceWorkerRegistrationError,
         >,
     ) {
-        let _ = self
-            .completion_tx
-            .send_service_worker_register(ServiceWorkerRegisterCompletion {
-                request_id: self.request_id,
-                document_owner: self.document_owner,
-                result,
-            });
+        match self {
+            Self::Window {
+                request_id,
+                document_owner,
+                completion_tx,
+            } => {
+                let _ =
+                    completion_tx.send_service_worker_register(ServiceWorkerRegisterCompletion {
+                        request_id,
+                        document_owner,
+                        result,
+                    });
+            }
+            Self::Worker { request_id, host } => {
+                host.dispatch_registration_update_result(ServiceWorkerRegistrationUpdateResult {
+                    request_id,
+                    result: result.map(|_| ()),
+                });
+            }
+        }
     }
 
     pub(super) fn send_all(
@@ -293,6 +357,7 @@ impl ServiceWorkerQueuedUnregisterJob {
 
 #[derive(Clone)]
 pub(super) struct ServiceWorkerQueuedRegisterJob {
+    pub(super) job_kind: ServiceWorkerRegistrationJobKind,
     pub(super) script_url: Url,
     pub(super) scope_url: Url,
     pub(super) document_url: Url,
@@ -305,7 +370,7 @@ pub(super) struct ServiceWorkerQueuedRegisterJob {
     pub(super) force_update_page_load_waiter_ids: Vec<u64>,
     pub(super) request_client: ResourceRequestClient,
     pub(super) network_policy: WorkerNetworkPolicy,
-    pub(super) browser_context_runtime: RendererBrowserContextRuntime,
+    pub(super) worker_context_runtime: RendererWorkerContextRuntime,
     pub(super) broadcast_channel_top_level_site: Option<String>,
     pub(super) indexed_db_manager: Option<crate::context_bootstrap::WeakIndexedDbManager>,
     pub(super) storage_bucket_store: Option<crate::context_bootstrap::SharedStorageBucketStore>,
@@ -321,7 +386,8 @@ impl ServiceWorkerQueuedRegisterJob {
     }
 
     pub(super) fn matches_registration_job(&self, other: &Self) -> bool {
-        self.scope_url == other.scope_url
+        self.job_kind == other.job_kind
+            && self.scope_url == other.scope_url
             && self.storage_key == other.storage_key
             && self.script_url == other.script_url
             && self.script_kind == other.script_kind
@@ -402,6 +468,7 @@ pub(super) enum ServiceWorkerMainScriptUpdateCheckStart {
 impl std::fmt::Debug for ServiceWorkerQueuedRegisterJob {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ServiceWorkerQueuedRegisterJob")
+            .field("job_kind", &self.job_kind)
             .field("script_url", &self.script_url)
             .field("scope_url", &self.scope_url)
             .field("document_url", &self.document_url)
@@ -532,6 +599,16 @@ impl ServiceWorkerJobCoordinator {
         self.queues.get(key).is_some_and(|queue| !queue.is_empty())
     }
 
+    pub(super) fn peek_next_is_update(&self, key: &ServiceWorkerRegistrationKey) -> bool {
+        self.queues.get(key).is_some_and(|queue| {
+            matches!(
+                queue.front(),
+                Some(ServiceWorkerQueuedJob::Register(job))
+                    if job.job_kind == ServiceWorkerRegistrationJobKind::Update
+            )
+        })
+    }
+
     pub(super) fn has_queued_unregistration(&self, key: &ServiceWorkerRegistrationKey) -> bool {
         self.queues.get(key).is_some_and(|queue| {
             queue
@@ -659,7 +736,7 @@ impl ServiceWorkerVersionLaunchConfig {
             document_url: job.document_url.clone(),
             request_client: ServiceWorkerRequestClientSource::Captured(job.request_client.clone()),
             network_policy: job.network_policy.clone(),
-            worker_context_runtime: job.browser_context_runtime.worker_context_runtime(),
+            worker_context_runtime: job.worker_context_runtime.clone(),
             broadcast_channel_top_level_site: job.broadcast_channel_top_level_site.clone(),
             indexed_db_manager: job.indexed_db_manager.clone(),
             storage_bucket_store: job.storage_bucket_store.clone(),
@@ -737,11 +814,11 @@ mod tests {
     #[test]
     fn pending_register_job_resolves_when_install_starts() {
         let queue = crate::page_task_queue::RendererPageServiceWorkerTestHarness::new();
-        let mut job = ServiceWorkerPendingRegisterJob::new(vec![ServiceWorkerRegisterJob {
-            request_id: 1,
-            document_owner: crate::window_document_identity::WindowDocumentOwner::for_test(1),
-            completion_tx: queue.sender(),
-        }]);
+        let mut job = ServiceWorkerPendingRegisterJob::new(vec![ServiceWorkerRegisterJob::window(
+            1,
+            crate::window_document_identity::WindowDocumentOwner::for_test(1),
+            queue.sender(),
+        )]);
 
         job.start_current_moli_job();
         assert_eq!(job.phase(), ServiceWorkerRegisterJobPhase::Update);

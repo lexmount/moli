@@ -53,6 +53,7 @@ fn build_service_worker_global_registration<'s>(
         installing: (),
         waiting: (),
         active: (),
+        update: (),
         unregister: (),
         show_notification: (),
         get_notifications: (),
@@ -197,6 +198,81 @@ pub(in crate::worker) fn build_service_worker_global_service_worker<'s>(
     );
     initialize_simple_event_target(scope, worker);
     Ok(worker)
+}
+
+pub(super) fn service_worker_registration_update_callback<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    mut rv: v8::ReturnValue<'s, v8::Value>,
+) {
+    let Some(resolver) = v8::PromiseResolver::new(scope) else {
+        return;
+    };
+    let promise = resolver.get_promise(scope);
+    rv.set(promise.into());
+
+    let Some((registration_id, version_id, parent_tx)) = service_worker_runtime_identity(scope)
+    else {
+        let _ = resolver.reject(
+            scope,
+            v8::Exception::type_error(
+                scope,
+                v8str(
+                    scope,
+                    "Failed to execute 'update' on 'ServiceWorkerRegistration': registration is unavailable.",
+                ),
+            ),
+        );
+        return;
+    };
+    let Some(state) = get_worker_state(scope) else {
+        let _ = resolver.reject(
+            scope,
+            v8::Exception::type_error(
+                scope,
+                v8str(
+                    scope,
+                    "Failed to execute 'update' on 'ServiceWorkerRegistration': Service Worker runtime is unavailable.",
+                ),
+            ),
+        );
+        return;
+    };
+    let request_id = {
+        let mut state = state.borrow_mut();
+        state.register_pending_service_worker_registration_update(
+            v8::Global::new(scope, resolver),
+            v8::Global::new(scope, args.this()),
+        )
+    };
+    if parent_tx
+        .send(WorkerToParentMessage::ServiceWorkerRegistrationUpdate(
+            crate::runtime::ServiceWorkerRegistrationUpdate {
+                request_id,
+                registration_id,
+                version_id,
+            },
+        ))
+        .is_err()
+    {
+        let pending = {
+            let mut state = state.borrow_mut();
+            state.take_pending_service_worker_registration_update(request_id)
+        };
+        if let Some(pending) = pending {
+            let resolver = v8::Local::new(scope, &pending.resolver);
+            let _ = resolver.reject(
+                scope,
+                v8::Exception::type_error(
+                    scope,
+                    v8str(
+                        scope,
+                        "Failed to execute 'update' on 'ServiceWorkerRegistration': Service Worker runtime is unavailable.",
+                    ),
+                ),
+            );
+        }
+    }
 }
 
 pub(super) fn service_worker_registration_unregister_callback<'s>(
@@ -1863,6 +1939,15 @@ struct ServiceWorkerGlobalRegistrationDeclaration<'scope> {
         getter = service_worker_registration_active_getter
     )]
     active: (),
+
+    #[webapi(
+        method,
+        returns_promise,
+        receiver = web_api_interfaces::ServiceWorkerRegistration::is_instance,
+        callback = service_worker_registration_update_callback,
+        length = 0
+    )]
+    update: (),
 
     #[webapi(method, callback = service_worker_registration_unregister_callback, length = 0)]
     unregister: (),

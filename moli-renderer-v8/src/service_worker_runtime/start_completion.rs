@@ -12,8 +12,9 @@ use super::{
         ServiceWorkerPeriodicSyncGetTags, ServiceWorkerPeriodicSyncRegistration,
         ServiceWorkerPeriodicSyncUnregistration, ServiceWorkerPushCompletion,
         ServiceWorkerPushGetSubscription, ServiceWorkerPushSubscribe, ServiceWorkerPushUnsubscribe,
-        ServiceWorkerShowNotification, ServiceWorkerSyncCompletion, ServiceWorkerSyncGetTags,
-        ServiceWorkerSyncRegistration, ServiceWorkerWorkerMessage,
+        ServiceWorkerRegistrationUpdate, ServiceWorkerShowNotification,
+        ServiceWorkerSyncCompletion, ServiceWorkerSyncGetTags, ServiceWorkerSyncRegistration,
+        ServiceWorkerWorkerMessage,
     },
     host::SharedRendererServiceWorkerHost,
     ids::{ServiceWorkerRegistrationId, ServiceWorkerVersionId},
@@ -80,6 +81,10 @@ enum ServiceWorkerRuntimeCompletionKind {
     },
     ShowNotificationRequested {
         request: Box<ServiceWorkerShowNotification>,
+        source_host: SharedRendererServiceWorkerHost,
+    },
+    RegistrationUpdateRequested {
+        request: ServiceWorkerRegistrationUpdate,
         source_host: SharedRendererServiceWorkerHost,
     },
     GetNotificationsRequested {
@@ -324,6 +329,20 @@ impl ServiceWorkerRuntimeCompletion {
             runtime_service,
             kind: ServiceWorkerRuntimeCompletionKind::ShowNotificationRequested {
                 request: Box::new(request),
+                source_host,
+            },
+        }
+    }
+
+    pub(super) fn registration_update_requested(
+        runtime_service: WeakServiceWorkerRuntimeService,
+        request: ServiceWorkerRegistrationUpdate,
+        source_host: SharedRendererServiceWorkerHost,
+    ) -> Self {
+        Self {
+            runtime_service,
+            kind: ServiceWorkerRuntimeCompletionKind::RegistrationUpdateRequested {
+                request,
                 source_host,
             },
         }
@@ -681,6 +700,17 @@ impl ServiceWorkerRuntimeCompletion {
                 self.runtime_service
                     .finish_show_notification_requested(*request, run, source_host);
             }
+            ServiceWorkerRuntimeCompletionKind::RegistrationUpdateRequested {
+                request,
+                source_host,
+            } => {
+                let run = source_host.run_identity();
+                self.runtime_service.finish_registration_update_requested(
+                    request,
+                    run,
+                    source_host,
+                );
+            }
             ServiceWorkerRuntimeCompletionKind::GetNotificationsRequested {
                 request,
                 source_host,
@@ -914,6 +944,16 @@ impl fmt::Debug for ServiceWorkerRuntimeCompletion {
                 source_host,
             } => f
                 .debug_struct("ServiceWorkerRuntimeCompletion::ShowNotificationRequested")
+                .field("request_id", &request.request_id)
+                .field("registration_id", &request.registration_id)
+                .field("version_id", &request.version_id)
+                .field("owner", &source_host.run_owner())
+                .finish_non_exhaustive(),
+            ServiceWorkerRuntimeCompletionKind::RegistrationUpdateRequested {
+                request,
+                source_host,
+            } => f
+                .debug_struct("ServiceWorkerRuntimeCompletion::RegistrationUpdateRequested")
                 .field("request_id", &request.request_id)
                 .field("registration_id", &request.registration_id)
                 .field("version_id", &request.version_id)

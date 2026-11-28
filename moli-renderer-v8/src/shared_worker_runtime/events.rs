@@ -82,6 +82,9 @@ impl RendererSharedWorkerHost {
             WorkerToParentMessage::ServiceWorkerPeriodicSyncCompleted(_) => {
                 trace!(url = %script_url, ?message, "dropping service worker periodic sync event completion on shared worker host");
             }
+            WorkerToParentMessage::ServiceWorkerRegistrationUpdate(_) => {
+                trace!(url = %script_url, ?message, "dropping service worker registration update request on shared worker host");
+            }
             WorkerToParentMessage::ServiceWorkerShowNotification(_) => {
                 trace!(url = %script_url, ?message, "dropping service worker showNotification request on shared worker host");
             }

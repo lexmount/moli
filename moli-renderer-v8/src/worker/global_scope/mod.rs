@@ -79,8 +79,8 @@ use crate::runtime::{
     ServiceWorkerNavigationPreloadState, ServiceWorkerNavigationPreloadStateError,
     ServiceWorkerPushGetSubscriptionResult, ServiceWorkerPushSubscribeResult,
     ServiceWorkerPushSubscriptionSnapshot, ServiceWorkerPushUnsubscribeResult,
-    ServiceWorkerShowNotificationResult, ServiceWorkerSyncGetTagsResult,
-    ServiceWorkerSyncRegistrationResult,
+    ServiceWorkerRegistrationUpdateResult, ServiceWorkerShowNotificationResult,
+    ServiceWorkerSyncGetTagsResult, ServiceWorkerSyncRegistrationResult,
 };
 use crate::types::{BroadcastChannelId, DedicatedWorkerId, MessagePortId, NetworkBodySourceId};
 use crate::util::{
@@ -202,17 +202,18 @@ pub(super) use service_worker_results::{
     PendingServiceWorkerPeriodicSyncGetTags, PendingServiceWorkerPeriodicSyncRegistration,
     PendingServiceWorkerPeriodicSyncUnregistration, PendingServiceWorkerPushGetSubscription,
     PendingServiceWorkerPushSubscribe, PendingServiceWorkerPushUnsubscribe,
-    PendingServiceWorkerShowNotification, PendingServiceWorkerSyncGetTags,
-    PendingServiceWorkerSyncRegistration, WorkerServiceWorkerRequestIdAllocator,
-    drain_service_worker_client_focus_result, drain_service_worker_client_navigate_result,
-    drain_service_worker_client_query_result, drain_service_worker_clients_open_window_result,
-    drain_service_worker_get_notifications_result,
+    PendingServiceWorkerRegistrationUpdate, PendingServiceWorkerShowNotification,
+    PendingServiceWorkerSyncGetTags, PendingServiceWorkerSyncRegistration,
+    WorkerServiceWorkerRequestIdAllocator, drain_service_worker_client_focus_result,
+    drain_service_worker_client_navigate_result, drain_service_worker_client_query_result,
+    drain_service_worker_clients_open_window_result, drain_service_worker_get_notifications_result,
     drain_service_worker_periodic_sync_get_tags_result,
     drain_service_worker_periodic_sync_registration_result,
     drain_service_worker_periodic_sync_unregistration_result,
     drain_service_worker_push_get_subscription_result, drain_service_worker_push_subscribe_result,
-    drain_service_worker_push_unsubscribe_result, drain_service_worker_show_notification_result,
-    drain_service_worker_sync_get_tags_result, drain_service_worker_sync_registration_result,
+    drain_service_worker_push_unsubscribe_result, drain_service_worker_registration_update_result,
+    drain_service_worker_show_notification_result, drain_service_worker_sync_get_tags_result,
+    drain_service_worker_sync_registration_result,
 };
 use state::worker_close_callback;
 pub(crate) use state::{

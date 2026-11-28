@@ -502,6 +502,20 @@ impl RendererServiceWorkerHost {
         handle.dispatch_service_worker_show_notification_result(result);
     }
 
+    pub(super) fn dispatch_registration_update_result(
+        &self,
+        result: crate::runtime::ServiceWorkerRegistrationUpdateResult,
+    ) {
+        let state = self.state.lock();
+        let RendererServiceWorkerHostState::Running {
+            handle: Some(handle),
+        } = &*state
+        else {
+            return;
+        };
+        handle.dispatch_service_worker_registration_update_result(result);
+    }
+
     pub(super) fn dispatch_sync_registration_result(
         &self,
         result: crate::runtime::ServiceWorkerSyncRegistrationResult,
@@ -699,9 +713,7 @@ impl RendererServiceWorkerHost {
             script,
             bootstrap_completion_tx,
         );
-        if let Some(receiver) = handle.take_receiver() {
-            spawn_parent_message_pump(service.clone(), Arc::clone(self), receiver);
-        }
+        let receiver = handle.take_receiver();
         let mut state = self.state.lock();
         if !matches!(*state, RendererServiceWorkerHostState::Loading) {
             drop(state);
@@ -712,6 +724,9 @@ impl RendererServiceWorkerHost {
             handle: Some(handle),
         };
         drop(state);
+        if let Some(receiver) = receiver {
+            spawn_parent_message_pump(service.clone(), Arc::clone(self), receiver);
+        }
         #[cfg(feature = "devtools")]
         if service.take_devtools_evaluation_release_for_version(params.run_owner.version_id()) {
             self.run_if_waiting_for_debugger_for_devtools();
@@ -774,6 +789,12 @@ fn spawn_parent_message_pump(
                     WorkerToParentMessage::ServiceWorkerGetNotifications(request) => {
                         service
                             .enqueue_get_notifications_requested(request, Arc::clone(&source_host));
+                    }
+                    WorkerToParentMessage::ServiceWorkerRegistrationUpdate(request) => {
+                        service.enqueue_registration_update_requested(
+                            request,
+                            Arc::clone(&source_host),
+                        );
                     }
                     WorkerToParentMessage::ServiceWorkerSyncRegistration(request) => {
                         service

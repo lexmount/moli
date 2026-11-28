@@ -192,6 +192,9 @@ pub(crate) struct WorkerGlobalState {
     /// In-flight Service Worker `clients.openWindow()` requests keyed by request id.
     pub(in crate::worker) pending_service_worker_clients_open_windows:
         HashMap<u64, PendingServiceWorkerClientsOpenWindow>,
+    /// In-flight Service Worker `registration.update()` requests keyed by request id.
+    pub(in crate::worker) pending_service_worker_registration_updates:
+        HashMap<u64, PendingServiceWorkerRegistrationUpdate>,
     /// In-flight Service Worker `registration.showNotification()` requests keyed by request id.
     pub(in crate::worker) pending_service_worker_show_notifications:
         HashMap<u64, PendingServiceWorkerShowNotification>,
@@ -229,6 +232,8 @@ pub(crate) struct WorkerGlobalState {
     pub(in crate::worker) service_worker_client_focus_request_ids:
         WorkerServiceWorkerRequestIdAllocator,
     pub(in crate::worker) service_worker_clients_open_window_request_ids:
+        WorkerServiceWorkerRequestIdAllocator,
+    pub(in crate::worker) service_worker_registration_update_request_ids:
         WorkerServiceWorkerRequestIdAllocator,
     pub(in crate::worker) service_worker_show_notification_request_ids:
         WorkerServiceWorkerRequestIdAllocator,
