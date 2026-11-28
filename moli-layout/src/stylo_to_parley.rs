@@ -15,7 +15,7 @@ use parley::{
 use style::{
     computed_values::{
         font_optical_sizing::T as FontOpticalSizing,
-        text_decoration_style::T as StyloTextDecorationStyle,
+        text_decoration_style::T as StyloTextDecorationStyle, writing_mode::T as StyloWritingMode,
     },
     properties::ComputedValues,
     values::{
@@ -94,6 +94,16 @@ pub(crate) fn text_style(computed: &ComputedValues) -> TextStyle<'static, 'stati
     let font = computed.get_font();
     let inherited_text = computed.get_inherited_text();
     let font_size = font.font_size.used_size.0.px();
+    // Vertical flow advances down a column, so every character may start a new
+    // line. Without this an unbreakable word such as "Workspace" stays on one
+    // line and overflows the one-character column the inline size resolves to.
+    // Latin text then also stacks one letter per line, which is why this stays
+    // a partial implementation of `writing-mode` rather than real vertical
+    // layout.
+    let vertical_writing_mode = !matches!(
+        computed.clone_writing_mode(),
+        StyloWritingMode::HorizontalTb
+    );
     let line_height = match font.line_height {
         style::values::computed::font::LineHeight::Normal => LineHeight::MetricsRelative(1.0),
         style::values::computed::font::LineHeight::Number(number) => {
@@ -215,6 +225,7 @@ pub(crate) fn text_style(computed: &ComputedValues) -> TextStyle<'static, 'stati
             StyloOverflowWrap::Anywhere => OverflowWrap::Anywhere,
         },
         word_break: match inherited_text.word_break {
+            _ if vertical_writing_mode => WordBreak::BreakAll,
             StyloWordBreak::Normal => WordBreak::Normal,
             StyloWordBreak::BreakAll => WordBreak::BreakAll,
             StyloWordBreak::KeepAll => WordBreak::KeepAll,

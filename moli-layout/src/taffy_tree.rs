@@ -2873,9 +2873,19 @@ where
         // exceed the containing block. Clamp both known and measured widths:
         // the float slots are nonnegative, and Parley requires each line's
         // available width to be no greater than the paragraph's width.
+        // Vertical flow measures the column length down the block axis, so the
+        // inline size is one character wide. Taffy and Parley both report the
+        // horizontal extent of the unbroken line here, which would size the
+        // column to the whole run.
+        let owner_layout_style = &self.boxes[owner.index()].style;
+        let vertical_writing_mode = !matches!(
+            owner_layout_style.writing_mode(),
+            taffy::WritingMode::HorizontalTb
+        );
         let mut width = known_dimensions
             .width
             .unwrap_or_else(|| match available_space.width {
+                _ if vertical_writing_mode => owner_layout_style.font_size(),
                 AvailableSpace::MinContent => content_widths.min.max(float_min_width),
                 AvailableSpace::MaxContent => content_widths.max + float_max_width,
                 // Taffy has already resolved and clamped the content-box
@@ -2932,9 +2942,20 @@ where
         } else {
             width
         };
-        let max_advance = match available_space.width {
-            AvailableSpace::MaxContent => None,
-            AvailableSpace::MinContent | AvailableSpace::Definite(_) => Some(line_break_width),
+        // Vertical flow stacks characters down a column, and Parley only breaks
+        // lines horizontally. Constrain the line to one em instead: every
+        // character then starts its own line, so the stacked lines reproduce a
+        // column of text. A narrower bound is rejected as too small to place a
+        // single cluster and leaves the text on one line. Latin text also
+        // stacks one letter per line, which is why this stays a partial
+        // implementation of `writing-mode` rather than real vertical layout.
+        let max_advance = if vertical_writing_mode {
+            Some(owner_layout_style.font_size())
+        } else {
+            match available_space.width {
+                AvailableSpace::MaxContent => None,
+                AvailableSpace::MinContent | AvailableSpace::Definite(_) => Some(line_break_width),
+            }
         };
         let has_inline_float = context
             .objects
