@@ -13,6 +13,7 @@ use crate::{
 use super::super::{
     PageScriptHost, node::node_runtime_and_handle_from_object_or_detached, throw_dom_exception,
 };
+use super::focus::update_top_layer_membership;
 use super::toggle_event::queue_element_toggle_event;
 use super::{
     construct_simple_event, dispatch_public_event, element_has_attribute,
@@ -262,10 +263,9 @@ fn dialog_set_open_state_for_handle(
     set_reflected_boolean_attribute(scope, runtime_ptr, handle, "open", open);
     let runtime = unsafe { &mut *runtime_ptr };
     let old_state = runtime.retained_current_element_state(handle);
-    if runtime
-        .dom_host_mut()
-        .set_dialog_modal(handle, open && modal)
-    {
+    if update_top_layer_membership(runtime, handle, |dom| {
+        dom.set_dialog_modal(handle, open && modal)
+    }) {
         runtime.note_element_state_style_activity_with_old_state(
             handle,
             StyloElementState::MODAL,

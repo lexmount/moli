@@ -1,4 +1,5 @@
-use crate::dom::native::{ContentEditableState, Element, FocusSupport, Node};
+use crate::dom::native::{ContentEditableState, DomHost, Element, FocusSupport, Node};
+use dom::ElementState as StyloElementState;
 
 use super::super::{
     PageScriptHost, PendingWindowMessageEndpoint, document, node::node_runtime_and_handle_from_args,
@@ -589,6 +590,38 @@ fn update_focus_from_previous_with_previous_focus_within(
     if let Some((_, next_window)) = window_focus_transition {
         dispatch_window_focus_event(scope, runtime_ptr, next_window, "focus");
     }
+}
+
+pub(super) fn update_top_layer_membership(
+    runtime: &mut PageScriptHost,
+    handle: DomHandle,
+    update: impl FnOnce(&mut DomHost) -> bool,
+) -> bool {
+    let was_in_top_layer = runtime.dom_host().is_in_top_layer(handle);
+    if !update(runtime.dom_host_mut()) {
+        return false;
+    }
+    let in_top_layer = runtime.dom_host().is_in_top_layer(handle);
+    if was_in_top_layer != in_top_layer {
+        let ancestors = runtime
+            .dom_host()
+            .focus_within_ancestors_above(handle)
+            .collect::<Vec<_>>();
+        for ancestor in ancestors {
+            let old_state = runtime
+                .retained_current_element_state(ancestor)
+                .map(|mut state| {
+                    state.set(StyloElementState::FOCUS_WITHIN, in_top_layer);
+                    state
+                });
+            runtime.note_element_state_style_activity_with_old_state(
+                ancestor,
+                StyloElementState::FOCUS_WITHIN,
+                old_state,
+            );
+        }
+    }
+    true
 }
 
 fn window_focus_transition_for_handles(

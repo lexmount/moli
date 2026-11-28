@@ -1424,6 +1424,18 @@ impl DocumentRuntime {
         state: StyloElementState,
     ) -> Vec<(DomHandle, StyloElementState)> {
         let mut impacts = Vec::new();
+        if state.contains(StyloElementState::POPOVER_OPEN)
+            && self
+                .dom_host
+                .element(handle)
+                .is_some_and(Element::popover_open)
+        {
+            impacts.extend(
+                self.dom_host
+                    .focus_within_ancestors_above(handle)
+                    .map(|ancestor| (ancestor, StyloElementState::FOCUS_WITHIN)),
+            );
+        }
         if state.intersects(StyloElementState::VALIDITY_STATES) {
             self.push_validity_container_impacts(handle, &mut impacts);
         }
@@ -2281,6 +2293,9 @@ fn style_state_impact_for_attribute_mutation(
 }
 
 fn style_state_impact_for_attribute(name: &str) -> StyloElementState {
+    if name == "popover" {
+        return StyloElementState::POPOVER_OPEN;
+    }
     if name == "checked" || name == "selected" {
         return StyloElementState::CHECKED
             | StyloElementState::DEFAULT

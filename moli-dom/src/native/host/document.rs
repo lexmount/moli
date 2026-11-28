@@ -746,21 +746,8 @@ impl DomHost {
         let Some(active) = self.active_element_handle() else {
             return false;
         };
-        let mut current = Some(active);
-        while let Some(candidate) = current {
-            if candidate == handle {
-                return true;
-            }
-            let Some(parent) = self.node(candidate).and_then(Node::parent_node) else {
-                return false;
-            };
-            current = if self.is_shadow_root(parent) {
-                self.shadow_root_host(parent)
-            } else {
-                Some(parent)
-            };
-        }
-        false
+        self.focus_within_ancestors(active)
+            .any(|ancestor| ancestor == handle)
     }
 
     pub fn hovered_element_handles(&self) -> Vec<DomHandle> {

@@ -11,6 +11,41 @@ impl DomHost {
         Some(self.shadow_root_host(parent).unwrap_or(parent))
     }
 
+    /// A focused node and its ancestors through the first top-layer element,
+    /// crossing shadow roots to their hosts.
+    pub fn focus_within_ancestors(&self, focused: DomHandle) -> impl Iterator<Item = DomHandle> {
+        std::iter::successors(Some(focused), |&node| {
+            if self.is_in_top_layer(node) {
+                return None;
+            }
+            self.focus_within_parent(node)
+        })
+    }
+
+    fn focus_within_parent(&self, node: DomHandle) -> Option<DomHandle> {
+        let parent = self.parent_node(node)?;
+        Some(self.shadow_root_host(parent).unwrap_or(parent))
+    }
+
+    /// Ancestors whose selector state can change when `element` enters or
+    /// leaves the top layer while focus is inside it.
+    pub fn focus_within_ancestors_above(
+        &self,
+        element: DomHandle,
+    ) -> impl Iterator<Item = DomHandle> {
+        self.focus_within_parent(element)
+            .filter(|_| self.element_matches_focus_within(element))
+            .into_iter()
+            .flat_map(|parent| self.focus_within_ancestors(parent))
+            .filter(|&handle| self.element(handle).is_some())
+    }
+
+    pub fn is_in_top_layer(&self, handle: DomHandle) -> bool {
+        self.element(handle)
+            .is_some_and(|element| element.dialog_modal() || element.popover_open())
+            && self.is_connected(handle)
+    }
+
     /// Includes the ShadowRoot as a transparent link. Unassigned light nodes
     /// and replaced slot fallback have no parent in the composed tree.
     pub fn composed_parent(&self, node: DomHandle) -> Option<DomHandle> {
