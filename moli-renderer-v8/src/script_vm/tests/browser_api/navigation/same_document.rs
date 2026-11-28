@@ -946,3 +946,68 @@ events, settled})"#,
         }
     }
 }
+
+#[tokio::test]
+async fn window_stop_discards_the_child_frames_queued_src_navigation() {
+    let server = StaticHttpServer::spawn(2).await;
+    let base_url = server.url_for_host("child-stop.test", "/page.html");
+    let loader = static_http_loader([server.resolve_entry("child-stop.test")]);
+    let mut vm = new_storage_page_task_executor_test_vm_with_loader(base_url.as_str(), &loader);
+    vm.eval(
+        r#"
+globalThis.frame = document.createElement('iframe');
+globalThis.loads = 0;
+frame.onload = () => ++loads;
+frame.src = '/first.html';
+(document.body || document.documentElement || document).appendChild(frame);
+"#,
+    )
+    .unwrap();
+    advance_page_task_executor_until_eval_equals(
+        &mut vm,
+        &loader,
+        "String(loads)",
+        "1",
+        "first child load",
+    )
+    .await;
+    vm.eval(
+        r#"
+globalThis.original = frame.contentDocument;
+globalThis.sibling = document.createElement('iframe');
+sibling.srcdoc = '<p>still loading siblings</p>';
+sibling.onload = () => { globalThis.siblingLoaded = true; };
+frame.src = '/stopped.html';
+frame.contentWindow.stop();
+frame.contentWindow.stop();
+(document.body || document.documentElement || document).appendChild(sibling);
+"#,
+    )
+    .unwrap();
+    advance_page_task_executor_until_eval_equals(
+        &mut vm,
+        &loader,
+        "String(globalThis.siblingLoaded)",
+        "true",
+        "sibling child load",
+    )
+    .await;
+    assert_eq!(
+        vm.eval("String(frame.contentDocument === original && loads === 1)")
+            .unwrap(),
+        "true"
+    );
+    vm.eval("frame.src = '/after-stop.html'").unwrap();
+    advance_page_task_executor_until_eval_equals(
+        &mut vm,
+        &loader,
+        "String(loads)",
+        "2",
+        "navigation after stop",
+    )
+    .await;
+    assert_eq!(
+        server.finish_targets().await,
+        ["/first.html", "/after-stop.html"]
+    );
+}

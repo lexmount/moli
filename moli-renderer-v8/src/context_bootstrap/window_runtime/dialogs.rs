@@ -135,6 +135,9 @@ pub(crate) fn window_stop_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     _rv: v8::ReturnValue<'_, v8::Value>,
 ) {
+    if super::super::navigation_window::navigation_unload_event_active(scope, args.this()) {
+        return;
+    }
     inform_about_canceled_navigation_for_window(
         scope,
         args.this(),
