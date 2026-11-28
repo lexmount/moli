@@ -1360,3 +1360,80 @@ async fn navigator_service_worker_periodic_sync_register_respects_permission() {
         .await
         .expect("service worker periodic sync permission script server should finish");
 }
+
+#[tokio::test]
+async fn service_worker_post_message_rejects_retired_window_wrappers() {
+    let (base_url, server) = spawn_service_worker_response_server(vec![
+        (
+            "/app/empty.js",
+            "text/javascript",
+            "// empty service worker",
+        ),
+        ("/app/before.html", "text/html", "<!doctype html>Before"),
+        ("/app/after.html", "text/html", "<!doctype html>After"),
+    ])
+    .await;
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
+    let (mut vm, runtime) = new_service_worker_page_test_vm_with_loader_and_browser_context_runtime(
+        &format!("{base_url}/app/root.html"),
+        &loader,
+    );
+    vm.eval(r#"
+        globalThis.registrationLifetimeResult = '';
+        (async () => {
+            const container = navigator.serviceWorker;
+            const registration = await container.register('empty.js', { scope: './controlled/' });
+            const worker = registration.installing || registration.waiting || registration.active;
+            if (worker.state !== 'activated') await new Promise(resolve => {
+                worker.addEventListener('statechange', () => {
+                    if (worker.state === 'activated') resolve();
+                });
+            });
+            const clientURL = new URL('controlled/client.html', location.href).href;
+            const frame = document.createElement('iframe');
+            const load = url => new Promise(resolve => {
+                frame.onload = resolve;
+                frame.src = url;
+                if (!frame.isConnected) document.body.appendChild(frame);
+            });
+            await load('before.html');
+            const old = await frame.contentWindow.navigator.serviceWorker.getRegistration(clientURL);
+            const oldWorker = old.active;
+            await load('after.html');
+            const current = await frame.contentWindow.navigator.serviceWorker.getRegistration(clientURL);
+            const currentWorker = current.active;
+            const messageErrors = [];
+            function useRetiredWorker(worker) {
+                try {
+                    worker.postMessage('retired');
+                    messageErrors.push('returned');
+                } catch (error) {
+                    messageErrors.push(error.name);
+                }
+            }
+            useRetiredWorker(oldWorker);
+            currentWorker.postMessage('current');
+            frame.remove();
+            useRetiredWorker(currentWorker);
+            const found = await container.getRegistration(clientURL);
+            const removed = await registration.unregister();
+            registrationLifetimeResult = JSON.stringify({
+                messageErrors, differentWindows: old !== current,
+                found: found === registration, removed
+            });
+        })().catch(error => { registrationLifetimeResult = 'error:' + error; });
+    "#).unwrap();
+    drain_service_worker_test_until_eval_equals(
+        &mut vm,
+        &runtime,
+        &loader,
+        "String(registrationLifetimeResult !== '')",
+        "true",
+    )
+    .await;
+    assert_eq!(
+        vm.eval("registrationLifetimeResult").unwrap(),
+        r#"{"messageErrors":["InvalidStateError","InvalidStateError"],"differentWindows":true,"found":true,"removed":true}"#
+    );
+    server.await.unwrap();
+}
