@@ -357,13 +357,12 @@ impl<'a> TElement for QueryElement<'a> {
         override_lang: Option<Option<SelectorAttrValue>>,
         value: &Lang,
     ) -> bool {
-        if let Some(lang) = override_lang {
-            return lang
-                .as_deref()
-                .is_some_and(|lang| lang_matches(lang, value.as_ref()));
-        }
-
-        let mut current = Some(self.as_node());
+        let mut current = match override_lang {
+            Some(Some(lang)) => return lang_matches(lang.as_ref(), value.as_ref()),
+            // The snapshot matcher already searched the ancestor chain.
+            Some(None) => None,
+            None => Some(self.as_node()),
+        };
         while let Some(node) = current {
             if let Some(element) = node.as_element()
                 && let Some(lang) = element.lang_attr()
@@ -382,9 +381,8 @@ impl<'a> TElement for QueryElement<'a> {
                     })
             });
         }
-        self.host
-            .document_default_language_for_node(self.handle)
-            .is_some_and(|lang| lang_matches(&lang, value.as_ref()))
+        let lang = self.host.document_default_language_for_node(self.handle);
+        lang_matches(lang.as_deref().unwrap_or_default(), value.as_ref())
     }
 
     fn is_html_document_body_element(&self) -> bool {
