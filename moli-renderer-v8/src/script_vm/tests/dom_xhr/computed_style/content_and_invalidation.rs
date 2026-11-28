@@ -480,6 +480,49 @@ fn focus_visible_uses_user_agent_outline_and_allows_author_styles() {
 }
 
 #[test]
+fn focus_visible_follows_the_focused_element_through_a_shadow_host() {
+    let mut vm = new_parsed_test_vm(
+        "https://focus-visible-shadow.test/",
+        r#"<!doctype html>
+        <style>
+          #host { color: black; }
+          #host:focus-visible { color: red; }
+        </style>
+        <div id="host" tabindex="0"></div>"#,
+    );
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const host = document.getElementById('host');
+  const root = host.attachShadow({ mode: 'open' });
+  root.innerHTML = '<input>';
+  const input = root.querySelector('input');
+  const style = getComputedStyle(host);
+  const state = () => [
+    host.matches(':focus'),
+    host.matches(':focus-visible'),
+    root.querySelector(':focus-visible') === input,
+    style.color,
+  ];
+  host.focus();
+  const onHost = state();
+  input.focus();
+  const inShadow = state();
+  host.focus();
+  return JSON.stringify([onHost, inShadow, state()]);
+})()
+"#,
+        )
+        .expect("focus-visible should follow the focused element");
+    assert_eq!(
+        result,
+        r#"[[true,true,false,"rgb(255, 0, 0)"],[true,false,true,"rgb(0, 0, 0)"],[true,true,false,"rgb(255, 0, 0)"]]"#
+    );
+}
+
+#[test]
 fn dialog_user_agent_display_tracks_open_state() {
     let mut vm = new_parsed_test_vm(
         "https://dialog-user-agent-display.test/",

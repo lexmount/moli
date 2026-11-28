@@ -610,9 +610,8 @@ impl SelectorsElement for QueryElement<'_> {
             NonTSPseudoClass::PopoverOpen => {
                 self.element().popover_open() && self.host.is_connected(self.handle)
             }
-            NonTSPseudoClass::Focus | NonTSPseudoClass::FocusVisible => {
-                self.host.element_matches_focus(self.handle)
-            }
+            NonTSPseudoClass::Focus => self.host.element_matches_focus(self.handle),
+            NonTSPseudoClass::FocusVisible => self.host.element_matches_focus_visible(self.handle),
             NonTSPseudoClass::FocusWithin => self.host.element_matches_focus_within(self.handle),
             NonTSPseudoClass::Defined => self.matches_defined_pseudo(),
             NonTSPseudoClass::Checked => self.matches_checked_pseudo(),
