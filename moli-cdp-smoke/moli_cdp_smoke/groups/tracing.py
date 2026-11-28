@@ -8,6 +8,9 @@ from collections import Counter, defaultdict
 from dataclasses import dataclass
 from typing import Any
 
+from playwright.async_api import Error as PlaywrightError
+
+from ..config import is_moli_browser
 from ..diagnostics import new_cdp_session, write_artifact
 from . import SmokeState
 from ..assertions import SmokeError, assert_equal, record, wait_until
@@ -505,35 +508,34 @@ async def _verify_return_as_stream(state: SmokeState) -> None:
 
 async def _verify_owner_detach_cleanup(state: SmokeState) -> None:
     owner = await new_cdp_session(state.context, state.page)
-    await owner.send(
-        "Tracing.start",
-        {
-            "traceConfig": {
-                "includedCategories": [
-                    "__metadata",
-                    "disabled-by-default-v8.cpu_profiler",
-                ]
-            }
+    start_params = {
+        "traceConfig": {
+            "includedCategories": ["__metadata", "disabled-by-default-v8.cpu_profiler"],
         },
-    )
+    }
+    await owner.send("Tracing.start", start_params)
     await state.page.evaluate(_hot_function_expression("moliCpuTraceDetachedOwner"))
     await owner.detach()
 
     replacement = await new_cdp_session(state.context, state.page)
     complete: list[dict[str, Any]] = []
     replacement.on("Tracing.tracingComplete", lambda params: complete.append(params))
+
+    async def start_replacement() -> bool:
+        try:
+            await replacement.send("Tracing.start", start_params)
+        except PlaywrightError as error:
+            if (
+                is_moli_browser()
+                and "Tracing has already been started (possibly in another tab)." in str(error)
+            ):
+                return False
+            raise
+        return True
+
     try:
-        await replacement.send(
-            "Tracing.start",
-            {
-                "traceConfig": {
-                    "includedCategories": [
-                        "__metadata",
-                        "disabled-by-default-v8.cpu_profiler",
-                    ]
-                }
-            },
-        )
+        # The detach reply precedes CPU profiler cleanup on the V8 owners.
+        await wait_until(start_replacement, "CPU trace release after owner detach")
         await state.page.evaluate(_hot_function_expression("moliCpuTraceReplacementOwner"))
         await replacement.send("Tracing.end")
         await wait_until(lambda: bool(complete), "trace restart after owner detach")
