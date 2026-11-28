@@ -946,3 +946,29 @@ events, settled})"#,
         }
     }
 }
+
+#[test]
+fn stop_inside_precommit_rejects_both_transition_promises() {
+    let mut vm = new_storage_test_vm("https://precommit-stop.test/page");
+    vm.eval(r#"
+      const log = [];
+      let reason;
+      navigation.addEventListener('navigate', event => {
+        event.signal.addEventListener('abort', () => { reason = event.signal.reason; });
+        event.intercept({precommitHandler() {
+          const transition = navigation.transition;
+          transition.committed.catch(error => log.push(['committed', error === reason, error.name]));
+          transition.finished.catch(error => log.push(['finished', error === reason, error.name]));
+          window.stop();
+        }});
+      }, {once: true});
+      const result = navigation.navigate('#canceled');
+      result.committed.catch(() => {});
+      result.finished.catch(() => {});
+    "#).unwrap();
+    assert_eq!(
+        vm.eval("JSON.stringify([location.hash, navigation.transition, log])")
+            .unwrap(),
+        r#"["",null,[["committed",true,"AbortError"],["finished",true,"AbortError"]]]"#,
+    );
+}

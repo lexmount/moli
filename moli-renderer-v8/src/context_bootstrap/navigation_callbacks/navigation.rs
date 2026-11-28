@@ -1047,7 +1047,7 @@ fn cancel_precommit_commit_attempt<'s>(
     }
 }
 
-fn precommit_transition_resolver_from_event<'s>(
+pub(in crate::context_bootstrap) fn precommit_transition_resolver_from_event<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     event: v8::Local<'s, v8::Object>,
 ) -> Option<v8::Local<'s, v8::PromiseResolver>> {

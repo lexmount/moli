@@ -1,7 +1,12 @@
 use super::events::{construct_original_event, run_navigate_event_precommit_handlers};
 use super::location_runtime::{is_same_document_fragment_navigation, location_href_slot};
 use super::media_queries::dispatch_simple_event_target_event;
-use super::navigation_callbacks::cancel_active_intercepted_same_document_navigation;
+use super::navigation_activation::{
+    navigation_transition_matches_resolver, take_navigation_transition_committed_resolver,
+};
+use super::navigation_callbacks::{
+    cancel_active_intercepted_same_document_navigation, precommit_transition_resolver_from_event,
+};
 use super::navigation_entry::{
     history_entries, navigation_current_entry, navigation_entries_share_document,
     navigation_entry_id_value, navigation_entry_index_value, navigation_entry_key_value,
@@ -12,7 +17,9 @@ use super::navigation_handler_callbacks::{
     NAVIGATE_EVENT_ADDED_HANDLERS_SLOT, NAVIGATE_EVENT_DEFERRED_HANDLERS_SLOT,
     run_navigation_handler_arrays,
 };
-use super::navigation_lifecycle::finish_navigation_error_events;
+use super::navigation_lifecycle::{
+    finish_navigation_error_events, settle_navigation_transition_finished_local,
+};
 use super::navigation_result::navigation_dom_exception;
 use super::navigation_window::{
     child_browsing_context_handle_for_runtime_owner, navigation_document_is_active,
@@ -481,10 +488,18 @@ pub(super) fn cancel_active_navigation_event<'s>(
         NAVIGATE_EVENT_ABORT_ERROR_SLOT,
         error,
     );
+    let transition = precommit_transition_resolver_from_event(scope, event);
+    let committed = transition
+        .filter(|resolver| navigation_transition_matches_resolver(scope, navigation, *resolver))
+        .and_then(|_| take_navigation_transition_committed_resolver(scope, navigation));
     if let Some(signal) = signal {
         crate::native_bridge::abort::abort_signal(scope, signal, error);
     }
     finish_navigation_error_events(scope, navigation, error, &href);
+    if let Some(resolver) = committed {
+        let _ = resolver.reject(scope, error);
+    }
+    settle_navigation_transition_finished_local(scope, navigation, transition, Some(error));
     Some(error)
 }
 

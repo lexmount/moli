@@ -47,5 +47,6 @@ pub(super) use navigation::{
     cancel_pending_precommit_same_document_navigation,
     cancel_pending_precommit_same_document_navigation_for_window_stop, navigation_entries_callback,
     navigation_navigate_callback, navigation_update_current_entry_callback,
-    queue_pending_precommit_same_document_navigation, settle_intercepted_same_document_navigation,
+    precommit_transition_resolver_from_event, queue_pending_precommit_same_document_navigation,
+    settle_intercepted_same_document_navigation,
 };
