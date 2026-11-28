@@ -73,6 +73,60 @@ fn stable_box_handles_preserve_fresh_geometry_and_paint_across_reparenting() {
     }
 }
 
+#[test]
+fn reordered_inline_text_preserves_collapsed_space_hit_and_caret_order() {
+    use moli_layout::{FrozenLayoutTree, LayoutFlushReason, LayoutPassRequest, LayoutPoint};
+
+    let mut vm = realtime_vm(concat!(
+        "<!doctype html><style>body,p{margin:0;font:20px/1 monospace}</style>",
+        "<p id=paragraph><span id=a> A </span><span id=b> B </span></p>",
+    ));
+    let host = vm.context_host_weak_for_test().upgrade().unwrap();
+    vm.publish_layout_for_test().unwrap();
+    vm.eval("paragraph.insertBefore(b,a)").unwrap();
+    vm.publish_layout_for_test().unwrap();
+    let metrics = vm.layout_pass_observability_for_test().3.unwrap();
+    assert_eq!(metrics.retained_box_count, metrics.box_count, "{metrics:?}");
+
+    let host = host.borrow();
+    let document = host.document_handle();
+    let viewport = host.layout_viewport_for_document(document);
+    let [a, b] = ["a", "b"].map(|id| {
+        let span = vm.document_runtime.get_element_by_id(id).unwrap();
+        host.dom_host().first_child(span).unwrap()
+    });
+    let fresh = host
+        .build_layout_pass_for_document(
+            document,
+            LayoutPassRequest::new(viewport, LayoutFlushReason::SynchronousGeometry),
+        )
+        .unwrap()
+        .unwrap();
+    let space = fresh.text_range_rects(a, 0..1);
+    assert_eq!(space, fresh.text_range_rects(b, 2..3));
+    assert_eq!(space.len(), 1);
+    let space = space[0].bounding_rect();
+    assert!(space.width > 0.0 && space.height > 0.0, "{space:?}");
+    for (fraction, offset) in [(0.25, 0), (0.75, 1)] {
+        let point = LayoutPoint::new(
+            space.x + space.width * fraction,
+            space.y + space.height * 0.5,
+        );
+        let query = |tree: &FrozenLayoutTree<_>| {
+            let hit = tree.hit_test(point, false).unwrap();
+            let caret = tree.caret_position(point).unwrap();
+            assert!(hit.is_text, "{hit:?}");
+            (hit.source, caret.source, caret.utf16_offset)
+        };
+        let retained = host
+            .with_latest_layout_tree_for_document(document, query)
+            .unwrap();
+        let expected = query(&fresh);
+        assert_eq!(expected, (a, a, Some(offset)));
+        assert_eq!(retained, expected, "shared space at {fraction}");
+    }
+}
+
 fn assert_published_layout_matches_fresh(
     vm: &mut super::StandaloneScriptVmHarness,
     nodes: &[&str],

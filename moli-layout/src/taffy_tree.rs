@@ -2575,12 +2575,8 @@ where
                 if let Some(clamp) = inline_context.line_clamp.as_mut() {
                     clamp.show_marker = measurement.show_clamp_marker;
                 }
-                let fragments = build_inline_fragments(
-                    self.boxes.order(),
-                    &inline_context,
-                    text_layout,
-                    line_placements,
-                );
+                let fragments =
+                    build_inline_fragments(&inline_context, text_layout, line_placements);
                 self.position_inline_objects(
                     &inline_context,
                     text_layout,

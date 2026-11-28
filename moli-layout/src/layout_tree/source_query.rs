@@ -35,11 +35,12 @@ where
 {
     /// Derives the source view from canonical box provenance.
     ///
-    /// No source hash table survives the pass. The returned IDs are copied
-    /// into one short-lived query value.
+    /// Ordinary sources need only the box's provenance. Split inline geometry
+    /// also follows the recorded construction order for that source.
     pub fn source_output(&self, source: N) -> Option<LayoutNodeOutput> {
         let mut found = false;
         let mut output = LayoutNodeOutput::default();
+        let split_inline = self.split_inline_boxes.get(&source);
         for layout_box in &self.boxes {
             #[cfg(test)]
             SOURCE_OUTPUT_BOX_VISITS.with(|count| count.set(count.get() + 1));
@@ -47,16 +48,16 @@ where
                 output.principal_box = Some(layout_box.id);
                 found = true;
             }
-            if layout_box.geometry_source == Some(source) {
-                output
-                    .fragments
-                    .extend(layout_box.fragments.iter().copied().filter(|id| {
-                        self.fragment(*id).is_some_and(|fragment| {
-                            !matches!(fragment.kind, LayoutFragmentKind::Line { .. })
-                        })
-                    }));
+            if split_inline.is_none() && layout_box.geometry_source == Some(source) {
+                self.extend_source_fragments(layout_box, &mut output);
                 found = true;
             }
+        }
+        if let Some(boxes) = split_inline {
+            for id in boxes {
+                self.extend_source_fragments(&self.boxes[id.index()], &mut output);
+            }
+            found = true;
         }
         for (proxy_source, box_id) in &self.scroll_proxy_links {
             if *proxy_source == source {
@@ -74,8 +75,8 @@ where
     }
 
     /// Builds provenance only for this operation's requested sources. Absent
-    /// sources remain explicit None entries; fragment and proxy order follow
-    /// the canonical vectors exactly as in the direct source query.
+    /// sources remain explicit None entries. Split inlines follow their
+    /// construction order in both the batched and direct queries.
     pub(super) fn source_outputs(&self, outputs: &mut HashMap<N, Option<LayoutNodeOutput>>) {
         for (index, object) in self.object_geometry.iter().enumerate() {
             if let Some(output) = outputs.get_mut(&object.source) {
@@ -91,17 +92,19 @@ where
             {
                 output.get_or_insert_default().principal_box = Some(layout_box.id);
             }
-            if let Some(output) = layout_box
-                .geometry_source
-                .and_then(|source| outputs.get_mut(&source))
+            if let Some(source) = layout_box.geometry_source
+                && let Some(output) = outputs.get_mut(&source)
+                && !self.split_inline_boxes.contains_key(&source)
             {
-                output.get_or_insert_default().fragments.extend(
-                    layout_box.fragments.iter().copied().filter(|id| {
-                        self.fragment(*id).is_some_and(|fragment| {
-                            !matches!(fragment.kind, LayoutFragmentKind::Line { .. })
-                        })
-                    }),
-                );
+                self.extend_source_fragments(layout_box, output.get_or_insert_default());
+            }
+        }
+        for (source, boxes) in &self.split_inline_boxes {
+            if let Some(output) = outputs.get_mut(source) {
+                let output = output.get_or_insert_default();
+                for id in boxes {
+                    self.extend_source_fragments(&self.boxes[id.index()], output);
+                }
             }
         }
         for (source, box_id) in &self.scroll_proxy_links {
@@ -112,6 +115,20 @@ where
                     .push(*box_id);
             }
         }
+    }
+
+    fn extend_source_fragments(
+        &self,
+        layout_box: &FrozenLayoutBox<N>,
+        output: &mut LayoutNodeOutput,
+    ) {
+        output
+            .fragments
+            .extend(layout_box.fragments.iter().copied().filter(|id| {
+                self.fragment(*id).is_some_and(|fragment| {
+                    !matches!(fragment.kind, LayoutFragmentKind::Line { .. })
+                })
+            }));
     }
 
     pub fn element_metrics_for_source(&self, source: N) -> Option<LayoutElementMetrics<N>> {
@@ -1182,6 +1199,39 @@ mod tests {
         );
         assert_eq!(geometry.size, LayoutSize::new(0.0, 5.0));
     }
+    #[test]
+    fn split_inline_queries_use_construction_order_for_all_fragments() {
+        let mut tree = inline_fragment_tree();
+        let principal = tree.boxes[0].id;
+        let mut expected = tree.boxes[0].fragments.clone();
+        let (earlier_continuation, later_continuation) = (
+            LayoutOutputBoxId::from_index(2),
+            LayoutOutputBoxId::from_index(1),
+        );
+        let mut fragments = Vec::new();
+        for box_id in [later_continuation, earlier_continuation] {
+            let mut fragment = tree.fragments[1].clone();
+            fragment.id = LayoutFragmentId::from_index(tree.fragments.len());
+            fragment.kind = LayoutFragmentKind::Box { box_id };
+            fragments.push(fragment.id);
+            let mut layout_box = tree.boxes[0].clone();
+            layout_box.geometry.id = box_id;
+            layout_box.geometry.fragments = vec![fragment.id];
+            layout_box.principal_source = None;
+            tree.boxes.push(layout_box);
+            tree.fragments.push(fragment);
+        }
+        tree.split_inline_boxes
+            .insert(1, vec![principal, earlier_continuation, later_continuation]);
+        expected.extend(fragments.into_iter().rev());
+        let output = tree.source_output(1).unwrap();
+        assert_eq!(output.principal_box, Some(principal));
+        assert_eq!(output.fragments, expected);
+        let mut batch = HashMap::from([(1, None)]);
+        tree.source_outputs(&mut batch);
+        assert_eq!(batch[&1].as_ref().unwrap().fragments, expected);
+    }
+
     #[test]
     fn batch_fragment_queries_scan_boxes_once_and_preserve_missing_sources() {
         use crate::{LayoutFlushReason, LayoutQuery, LayoutQueryBatch};

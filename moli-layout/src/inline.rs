@@ -685,7 +685,6 @@ pub(crate) struct InlineBoxFragment {
 }
 
 pub(crate) fn build_inline_fragments(
-    order: &crate::world::BoxOrder,
     context: &InlineFormattingContext,
     layout: &Layout<TextBrush>,
     line_placements: &[InlineLinePlacement],
@@ -696,8 +695,8 @@ pub(crate) fn build_inline_fragments(
     debug_assert!(output_ranges_are_monotonic(&context.text_units));
     debug_assert!(output_ranges_are_monotonic(&context.source_map));
     let mut fragments = InlineFragments::default();
-    let mut box_fragments = HashMap::<(usize, usize), FragmentAccumulator>::new();
-    let mut source_fragments = HashMap::<SourceFragmentKey, FragmentAccumulator>::new();
+    let mut box_fragments = HashMap::<(LayoutBoxId, usize), FragmentAccumulator>::new();
+    let mut source_fragments = HashMap::<SourceFragmentKey, SourceFragmentAccumulator>::new();
     let style_paint_outsets = layout
         .styles()
         .iter()
@@ -735,7 +734,7 @@ pub(crate) fn build_inline_fragments(
         if let Some(placement) = placement {
             for box_placement in &placement.box_block_placements {
                 box_fragments
-                    .entry((order.index_of(box_placement.box_id), line_index))
+                    .entry((box_placement.box_id, line_index))
                     .or_default()
                     .include_block_axis(box_placement.top, box_placement.height);
             }
@@ -786,15 +785,16 @@ pub(crate) fn build_inline_fragments(
             for unit in overlapping_output_ranges(&context.text_units, &range) {
                 for ancestor in &unit.ancestors {
                     box_fragments
-                        .entry((order.index_of(ancestor), line_index))
+                        .entry((*ancestor, line_index))
                         .or_default()
                         .include_inline_axis(rect.x, rect.width);
                 }
             }
-            for source in overlapping_output_ranges(&context.source_map, &range) {
+            for index in overlapping_output_indices(&context.source_map, &range) {
+                let source = &context.source_map[index];
                 let accumulator = source_fragments
                     .entry(SourceFragmentKey {
-                        box_index: order.index_of(source.box_id),
+                        box_id: source.box_id,
                         source_byte_start: source.source_byte_range.start,
                         source_byte_end: source.source_byte_range.end,
                         source_utf16_start: source.source_utf16_range.start,
@@ -802,15 +802,19 @@ pub(crate) fn build_inline_fragments(
                         line_index,
                         rtl: cluster.is_rtl(),
                     })
-                    .or_default();
-                accumulator.include(rect);
-                accumulator.output_range = Some(match accumulator.output_range {
-                    Some((start, end)) => (
-                        start.min(source.output_range.start),
-                        end.max(source.output_range.end),
-                    ),
-                    None => (source.output_range.start, source.output_range.end),
-                });
+                    .or_insert_with(|| SourceFragmentAccumulator {
+                        bounds: FragmentAccumulator::default(),
+                        output_range: source.output_range.clone(),
+                        first_source_index: index,
+                    });
+                accumulator.bounds.include(rect);
+                accumulator.output_range.start = accumulator
+                    .output_range
+                    .start
+                    .min(source.output_range.start);
+                accumulator.output_range.end =
+                    accumulator.output_range.end.max(source.output_range.end);
+                accumulator.first_source_index = accumulator.first_source_index.min(index);
             }
         }
 
@@ -831,9 +835,7 @@ pub(crate) fn build_inline_fragments(
                 )
             });
             for ancestor in &object.ancestors {
-                let accumulator = box_fragments
-                    .entry((order.index_of(ancestor), line_index))
-                    .or_default();
+                let accumulator = box_fragments.entry((*ancestor, line_index)).or_default();
                 if let Some(rect) = rect {
                     accumulator.include_inline_axis(rect.x, rect.width);
                 } else if matches!(
@@ -846,7 +848,7 @@ pub(crate) fn build_inline_fragments(
             match object.role {
                 InlineObjectRole::StartEdge | InlineObjectRole::EndEdge => {
                     let accumulator = box_fragments
-                        .entry((order.index_of(object.box_id), line_index))
+                        .entry((object.box_id, line_index))
                         .or_default();
                     accumulator.include_inline_axis(positioned.x, positioned.width);
                     accumulator.has_start_edge |= object.role == InlineObjectRole::StartEdge;
@@ -880,14 +882,24 @@ pub(crate) fn build_inline_fragments(
     }
 
     let mut box_fragments = box_fragments.into_iter().collect::<Vec<_>>();
-    box_fragments.sort_unstable_by_key(|(key, _)| *key);
+    if box_fragments.len() > 1 {
+        // Structural boxes were collected in opening-tag order. In
+        // particular an outer inline paints its background before its children.
+        let order: HashMap<_, _> = context
+            .structural_boxes
+            .iter()
+            .enumerate()
+            .map(|(index, state)| (state.box_id, index))
+            .collect();
+        box_fragments.sort_unstable_by_key(|((box_id, line), _)| (order[box_id], *line));
+    }
     fragments.boxes = box_fragments
         .into_iter()
-        .filter_map(|((box_index, line_index), accumulator)| {
+        .filter_map(|((box_id, line_index), accumulator)| {
             let line_rect = fragments.lines.get(line_index)?.rect;
             Some(InlineBoxFragment {
                 line_index,
-                box_id: order.id_at(box_index),
+                box_id,
                 rect: accumulator.rect(line_rect)?,
                 has_start_edge: accumulator.has_start_edge,
                 has_end_edge: accumulator.has_end_edge,
@@ -895,22 +907,29 @@ pub(crate) fn build_inline_fragments(
         })
         .collect();
     let mut source_fragments = source_fragments.into_iter().collect::<Vec<_>>();
-    source_fragments.sort_unstable_by_key(|(key, _)| *key);
+    // A collapsed space can cover several source nodes. Use normalization
+    // order to break ties so retained box identities cannot change the hit.
+    source_fragments.sort_unstable_by_key(|(key, value)| {
+        (
+            value.output_range.start,
+            value.output_range.end,
+            value.first_source_index,
+            key.line_index,
+            key.rtl,
+        )
+    });
     fragments.text = source_fragments
         .into_iter()
         .filter_map(|(key, accumulator)| {
             let line_rect = fragments.lines.get(key.line_index)?.rect;
             Some(InlineSourceFragment {
-                output_range: {
-                    let (start, end) = accumulator.output_range?;
-                    start..end
-                },
+                output_range: accumulator.output_range,
                 line_index: key.line_index,
-                box_id: order.id_at(key.box_index),
+                box_id: key.box_id,
                 source_byte_range: key.source_byte_start..key.source_byte_end,
                 source_utf16_range: key.source_utf16_start..key.source_utf16_end,
                 rtl: key.rtl,
-                rect: accumulator.rect(line_rect)?,
+                rect: accumulator.bounds.rect(line_rect)?,
             })
         })
         .collect();
@@ -2128,9 +2147,9 @@ fn non_edge_vertical_offset(
     alignment_shift + baseline_shift
 }
 
-#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
 struct SourceFragmentKey {
-    box_index: usize,
+    box_id: LayoutBoxId,
     source_byte_start: usize,
     source_byte_end: usize,
     source_utf16_start: usize,
@@ -2139,9 +2158,14 @@ struct SourceFragmentKey {
     rtl: bool,
 }
 
+struct SourceFragmentAccumulator {
+    bounds: FragmentAccumulator,
+    output_range: Range<usize>,
+    first_source_index: usize,
+}
+
 #[derive(Clone, Copy, Debug, Default)]
 struct FragmentAccumulator {
-    output_range: Option<(usize, usize)>,
     min_x: Option<f32>,
     min_y: Option<f32>,
     max_x: Option<f32>,
@@ -2213,12 +2237,19 @@ fn overlapping_output_ranges<'a, T>(items: &'a [T], target: &Range<usize>) -> &'
 where
     T: HasInlineOutputRange,
 {
+    &items[overlapping_output_indices(items, target)]
+}
+
+fn overlapping_output_indices<T>(items: &[T], target: &Range<usize>) -> Range<usize>
+where
+    T: HasInlineOutputRange,
+{
     if target.is_empty() {
-        return &items[..0];
+        return 0..0;
     }
     let start = items.partition_point(|item| item.output_range().end <= target.start);
     let end = start + items[start..].partition_point(|item| item.output_range().start < target.end);
-    &items[start..end]
+    start..end
 }
 
 fn output_ranges_are_monotonic<T>(items: &[T]) -> bool
@@ -3986,12 +4017,7 @@ mod tests {
                     line_placements: Vec::new(),
                     fragments: InlineFragments::default(),
                 };
-                let fragments = build_inline_fragments(
-                    &crate::world::BoxOrder::new(vec![root]),
-                    &context,
-                    &layout,
-                    &[],
-                );
+                let fragments = build_inline_fragments(&context, &layout, &[]);
                 assert!(!fragments.text.is_empty());
                 for fragment in fragments.text {
                     let line = layout.lines().nth(fragment.line_index).unwrap();
