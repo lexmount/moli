@@ -2885,7 +2885,9 @@ where
         let mut width = known_dimensions
             .width
             .unwrap_or_else(|| match available_space.width {
-                _ if vertical_writing_mode => owner_layout_style.font_size(),
+                _ if vertical_writing_mode => {
+                    content_widths.min.max(owner_layout_style.font_size())
+                }
                 AvailableSpace::MinContent => content_widths.min.max(float_min_width),
                 AvailableSpace::MaxContent => content_widths.max + float_max_width,
                 // Taffy has already resolved and clamped the content-box
@@ -2950,7 +2952,10 @@ where
         // stacks one letter per line, which is why this stays a partial
         // implementation of `writing-mode` rather than real vertical layout.
         let max_advance = if vertical_writing_mode {
-            Some(owner_layout_style.font_size())
+            // One cluster per line needs a bound no wider than the narrowest
+            // unbreakable unit, not the owner's font size: an 8px CJK span in a
+            // 16px owner would otherwise fit two characters per line.
+            Some(owner_layout_style.font_size().min(content_widths.min))
         } else {
             match available_space.width {
                 AvailableSpace::MaxContent => None,
