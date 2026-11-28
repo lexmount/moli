@@ -530,10 +530,22 @@ pub(in crate::native_bridge) fn node_toggle_popover_callback<'s>(
     rv.set_bool(opened);
 }
 
+pub(super) fn click_started_inside_invoker_popover(
+    runtime: &PageScriptHost,
+    invoker: DomHandle,
+    target: DomHandle,
+    event_target: DomHandle,
+) -> bool {
+    invoker != target
+        && super::focus::shadow_including_contains(runtime, target, event_target)
+        && super::focus::shadow_including_contains(runtime, invoker, target)
+}
+
 pub(crate) fn perform_popover_invoker_default_action(
     scope: &mut v8::PinScope<'_, '_>,
     runtime_ptr: *mut PageScriptHost,
     invoker: DomHandle,
+    event_target: DomHandle,
 ) -> bool {
     let runtime = unsafe { &*runtime_ptr };
     let (target_id, action) =
@@ -562,7 +574,10 @@ pub(crate) fn perform_popover_invoker_default_action(
     let Some(target) = popover_invoker_target_for_id(runtime, invoker, &target_id) else {
         return false;
     };
-    if !element_has_attribute(runtime, target, "popover") {
+    if !element_has_attribute(runtime, target, "popover")
+        || (element_has_attribute(runtime, invoker, "popovertarget")
+            && click_started_inside_invoker_popover(runtime, invoker, target, event_target))
+    {
         return false;
     }
     let open = match action.as_str() {

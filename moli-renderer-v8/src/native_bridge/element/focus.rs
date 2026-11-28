@@ -233,7 +233,7 @@ fn element_is_scrollable(runtime: &PageScriptHost, handle: DomHandle) -> bool {
     }
 }
 
-fn shadow_including_contains(
+pub(super) fn shadow_including_contains(
     runtime: &PageScriptHost,
     ancestor: DomHandle,
     node: DomHandle,

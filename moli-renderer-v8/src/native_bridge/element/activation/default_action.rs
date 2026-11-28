@@ -674,6 +674,7 @@ fn click_handle_internal(
             scope,
             runtime_ptr,
             handle,
+            handle,
             coordinates.client_x,
             coordinates.client_y,
             button,
@@ -734,6 +735,7 @@ fn click_handle_internal(
             scope,
             runtime_ptr,
             handle,
+            handle,
             coordinates.client_x,
             coordinates.client_y,
             button,
@@ -777,17 +779,20 @@ fn click_handle_internal(
         let pending_download =
             click_activation_default_action_handle(unsafe { &*runtime_ptr }, handle).and_then(
                 |default_action| match default_action {
-                    ClickActivationDefaultAction::Element(handle) => perform_click_default_action(
-                        scope,
-                        runtime_ptr,
-                        handle,
-                        coordinates.client_x,
-                        coordinates.client_y,
-                        button,
-                        modifiers,
-                        user_initiated,
-                        &pending_child_navigations_before_click,
-                    ),
+                    ClickActivationDefaultAction::Element(activation_target) => {
+                        perform_click_default_action(
+                            scope,
+                            runtime_ptr,
+                            activation_target,
+                            handle,
+                            coordinates.client_x,
+                            coordinates.client_y,
+                            button,
+                            modifiers,
+                            user_initiated,
+                            &pending_child_navigations_before_click,
+                        )
+                    }
                     ClickActivationDefaultAction::LabelControl(control) => {
                         let control_outcome = click_handle_internal(
                             scope,
@@ -1054,6 +1059,7 @@ pub(crate) fn perform_click_default_action_for_dispatched_event(
     scope: &mut v8::PinScope<'_, '_>,
     runtime_ptr: *mut PageScriptHost,
     handle: DomHandle,
+    event_target: DomHandle,
     event: v8::Local<'_, v8::Object>,
 ) {
     let runtime = unsafe { &*runtime_ptr };
@@ -1074,6 +1080,7 @@ pub(crate) fn perform_click_default_action_for_dispatched_event(
         scope,
         runtime_ptr,
         handle,
+        event_target,
         x,
         y,
         button,
@@ -1234,6 +1241,7 @@ fn perform_click_default_action(
     scope: &mut v8::PinScope<'_, '_>,
     runtime_ptr: *mut PageScriptHost,
     handle: DomHandle,
+    event_target: DomHandle,
     x: f64,
     y: f64,
     button: i32,
@@ -1331,10 +1339,10 @@ fn perform_click_default_action(
         return None;
     }
     dispatch_button_command_event_if_needed(scope, runtime_ptr, handle);
-    if dispatch_button_popover_toggle_events_if_needed(scope, runtime_ptr, handle) {
+    if dispatch_button_popover_toggle_events_if_needed(scope, runtime_ptr, handle, event_target) {
         return None;
     }
-    if perform_popover_invoker_default_action(scope, runtime_ptr, handle) {
+    if perform_popover_invoker_default_action(scope, runtime_ptr, handle, event_target) {
         return None;
     }
     None
@@ -1432,6 +1440,7 @@ fn dispatch_button_popover_toggle_events_if_needed(
     scope: &mut v8::PinScope<'_, '_>,
     runtime_ptr: *mut PageScriptHost,
     handle: DomHandle,
+    event_target: DomHandle,
 ) -> bool {
     let runtime = unsafe { &*runtime_ptr };
     if !runtime.dom_host().is_html_element_named(handle, "button") {
@@ -1440,7 +1449,14 @@ fn dispatch_button_popover_toggle_events_if_needed(
     let Some(target) = popover_target_element_target(runtime_ptr, handle) else {
         return false;
     };
-    dispatch_popover_toggle_events(scope, runtime_ptr, target, handle);
+    if !super::super::popover::click_started_inside_invoker_popover(
+        runtime,
+        handle,
+        target,
+        event_target,
+    ) {
+        dispatch_popover_toggle_events(scope, runtime_ptr, target, handle);
+    }
     true
 }
 
