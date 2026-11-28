@@ -3698,12 +3698,17 @@ pub(super) fn svg_geometry_is_point_in_stroke_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let Some(_point) =
+    let receiver = moli_webapi_declare::web_api_object_target(scope, args.this())
+        .expect("SVGGeometryElement receiver was validated");
+    let Some(point) =
         optional_dom_point_init_arg(scope, &args, 0, "SVGGeometryElement.isPointInStroke")
     else {
         return;
     };
-    rv.set(v8::Boolean::new(scope, false).into());
+    let contains =
+        svg_geometry_stroke_contains(scope, receiver, SvgGeometryPoint::new(point.x, point.y))
+            .unwrap_or(false);
+    rv.set(v8::Boolean::new(scope, contains).into());
 }
 
 pub(super) fn svg_geometry_get_total_length_callback<'s>(

@@ -156,3 +156,42 @@ fn svg_geometric_fill_uses_the_cascade_and_ignores_visual_paint() {
         "true"
     );
 }
+
+#[test]
+fn svg_geometric_stroke_uses_the_current_path_and_stroke_style() {
+    let mut vm = new_storage_page_task_executor_test_vm("https://svg-geometric-stroke.test/");
+    assert_eq!(
+        vm.eval(
+            r#"(() => {
+            document.body.innerHTML = '<style>g {stroke: none; stroke-width: 10%}</style>' +
+              '<svg viewBox="0 0 100 100"><g><path d="M 5 0 H 80"/></g></svg>';
+            const path = document.querySelector('path');
+            const hit = (x, y) => path.isPointInStroke({x, y});
+            if (!hit(10, 4) || hit(10, 6)) throw Error('inherited width in SVG user units');
+            path.style.d = 'path("M 5 20 H 80")';
+            if (hit(10, 0) || !hit(10, 20)) throw Error('current path style');
+
+            path.style.strokeLinecap = 'round';
+            if (!hit(2, 20)) throw Error('round line cap');
+            path.style.strokeLinecap = 'butt';
+            if (hit(2, 20)) throw Error('butt line cap');
+
+            path.style.strokeDasharray = '2 2';
+            path.setAttribute('pathLength', '15');
+            if (!hit(12, 20) || hit(20, 20)) throw Error('pathLength scales the dash pattern');
+            path.style.strokeDashoffset = '2';
+            if (hit(12, 20) || !hit(20, 20)) throw Error('pathLength scales the dash offset');
+            if (hit(NaN, 20)) throw Error('nonfinite coordinate');
+
+            path.style.display = 'none';
+            if (hit(20, 20)) throw Error('display none');
+            path.style.display = '';
+            path.remove();
+            if (hit(20, 20)) throw Error('detached path');
+            return true;
+            })()"#,
+        )
+        .unwrap(),
+        "true"
+    );
+}

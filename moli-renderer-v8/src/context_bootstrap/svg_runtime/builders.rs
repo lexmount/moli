@@ -1113,6 +1113,80 @@ pub(super) fn svg_geometry_element<'s>(
     svg_geometry_element_for_handle(unsafe { &*runtime_ptr }, handle)
 }
 
+pub(super) fn svg_geometry_stroke_contains<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    element: v8::Local<'s, v8::Object>,
+    point: SvgGeometryPoint,
+) -> Option<bool> {
+    use style::properties::longhands::{
+        stroke_linecap::computed_value::T as LineCap,
+        stroke_linejoin::computed_value::T as LineJoin,
+    };
+    use style::values::{
+        computed::Length,
+        generics::svg::{SVGLength, SVGStrokeDashArray},
+    };
+
+    let (runtime_ptr, handle) =
+        crate::native_bridge::node_runtime_and_handle_from_object_or_detached(scope, element)
+            .ok()?;
+    let runtime = unsafe { &*runtime_ptr };
+    if !runtime.dom_host().node(handle)?.is_connected() {
+        return Some(false);
+    }
+    let computed =
+        crate::native_bridge::element::ComputedStyleRead::new(runtime, handle).computed_values()?;
+    if computed.clone_display().is_none() {
+        return Some(false);
+    }
+    let zoom = computed.effective_zoom;
+    let basis =
+        Length::new(zoom.zoom(svg_length_percentage_basis(runtime, handle, "stroke-width") as f32));
+    let user_units = |length: Length| f64::from(zoom.unzoom(length.px()));
+    let width = match computed.clone_stroke_width() {
+        SVGLength::LengthPercentage(length) => user_units(length.0.resolve(basis)),
+        SVGLength::ContextValue => 1.0,
+    };
+    let cap = match computed.clone_stroke_linecap() {
+        LineCap::Butt => kurbo::Cap::Butt,
+        LineCap::Round => kurbo::Cap::Round,
+        LineCap::Square => kurbo::Cap::Square,
+    };
+    let join = match computed.clone_stroke_linejoin() {
+        LineJoin::Miter => kurbo::Join::Miter,
+        LineJoin::Round => kurbo::Join::Round,
+        LineJoin::Bevel => kurbo::Join::Bevel,
+    };
+    let mut stroke = kurbo::Stroke::new(width)
+        .with_caps(cap)
+        .with_join(join)
+        .with_miter_limit(f64::from(computed.clone_stroke_miterlimit().0));
+    if let SVGStrokeDashArray::Values(lengths) = computed.clone_stroke_dasharray() {
+        let offset = match computed.clone_stroke_dashoffset() {
+            SVGLength::LengthPercentage(length) => user_units(length.resolve(basis)),
+            SVGLength::ContextValue => 0.0,
+        };
+        stroke = stroke.with_dashes(
+            offset,
+            lengths
+                .iter()
+                .map(|length| user_units(length.0.resolve(basis))),
+        );
+    }
+    let geometry = svg_geometry_element_for_handle(runtime, handle)?;
+    let path_length = runtime
+        .dom_host()
+        .get_attribute(handle, "pathLength")
+        .as_deref()
+        .and_then(svg_geometry::parse_number);
+    Some(svg_geometry::is_point_in_stroke(
+        &geometry,
+        point,
+        stroke,
+        path_length,
+    ))
+}
+
 pub(super) fn svg_geometry_element_for_handle(
     runtime: &crate::native_bridge::PageScriptHost,
     handle: crate::document_runtime::DomHandle,
