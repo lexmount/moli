@@ -1173,6 +1173,8 @@ pub(crate) struct PageScriptHost {
     javascript_dialog_runtime: crate::runtime::RendererJavaScriptDialogRuntime,
     next_javascript_dialog_id: u64,
     pending_network_output: Vec<ScriptNetworkOutputItem>,
+    focused_window: PendingWindowMessageEndpoint,
+    focused_window_notified: bool,
     focus_change_epoch: u64,
     subresource_activity_epoch: u64,
     subresource_last_activity_at: std::time::Instant,

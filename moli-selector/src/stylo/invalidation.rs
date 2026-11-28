@@ -258,14 +258,8 @@ pub fn stylo_focus_within_state_matches_handle(
     focused: NodeId,
     handle: NodeId,
 ) -> bool {
-    let mut current = Some(focused);
-    while let Some(candidate) = current {
-        if candidate == handle {
-            return true;
-        }
-        current = style_parent_crossing_shadow_root(host, candidate);
-    }
-    false
+    host.focus_within_ancestors(Some(focused))
+        .any(|ancestor| ancestor == handle)
 }
 
 fn style_parent_crossing_shadow_root(host: &DomHost, handle: NodeId) -> Option<NodeId> {

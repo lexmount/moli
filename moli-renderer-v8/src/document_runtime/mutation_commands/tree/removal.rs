@@ -39,9 +39,7 @@ impl DocumentRuntime {
             .collect::<Vec<_>>();
         let focus_reset_handle_before_remove = self
             .focus_reset_handle_before_tree_change(roots, &lifecycle_connected_roots_before_remove);
-        let focus_within_handles_before_remove = focus_reset_handle_before_remove
-            .map(|active| self.focus_within_handles_for_active_element_before_tree_change(active))
-            .unwrap_or_default();
+        let focus_within_handles_before_remove = self.focus_within_path_before_tree_change(roots);
         let live_range_removal_index = if unsafe { &mut *host_ptr }.live_ranges_is_empty() {
             None
         } else {

@@ -626,6 +626,9 @@ impl PageScriptHost {
                 .expect("lightweight popup navigation id space exhausted"),
         );
         record.opener = None;
+        self.clear_focused_window(super::PendingWindowMessageEndpoint::LightweightPopup(
+            popup_id,
+        ));
         Some(LightweightPopupCloseTransition {
             retired_owner: open.document.owner,
             retired_local_window_id: open.document.local_window_id,

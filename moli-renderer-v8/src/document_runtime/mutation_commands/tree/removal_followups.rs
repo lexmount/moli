@@ -21,23 +21,27 @@ impl DocumentRuntime {
         removal_plan: &TreeRemovalPlan,
         profile: TreeMutationSourceProfile,
     ) {
+        let active_to_blur = match profile.source {
+            TreeMutationSideEffectSource::JsDomApi => removal_plan.focus_reset_handle_before_remove,
+            TreeMutationSideEffectSource::ParserTreeSink => None,
+        };
+        if active_to_blur.is_none() {
+            unsafe { &mut *host_ptr }.update_focus_within_after_tree_change(
+                &removal_plan.focus_within_handles_before_remove,
+            );
+        }
         self.dispatch_tree_removal_pre_reaction_followups_after_change(
             scope,
             host_ptr,
             removal_plan,
         );
-        match profile.source {
-            TreeMutationSideEffectSource::JsDomApi => {
-                if let Some(active) = removal_plan.focus_reset_handle_before_remove {
-                    crate::native_bridge::element::reset_focus_from_previous_handle_with_previous_focus_within(
-                        scope,
-                        host_ptr,
-                        active,
-                        removal_plan.focus_within_handles_before_remove.clone(),
-                    );
-                }
-            }
-            TreeMutationSideEffectSource::ParserTreeSink => {}
+        if let Some(active) = active_to_blur {
+            crate::native_bridge::element::reset_focus_from_previous_handle_with_previous_focus_within(
+                scope,
+                host_ptr,
+                active,
+                removal_plan.focus_within_handles_before_remove.clone(),
+            );
         }
         self.dispatch_tree_removal_custom_element_reactions(scope, host_ptr, removal_plan, profile);
         self.queue_image_relevant_mutation_loads(

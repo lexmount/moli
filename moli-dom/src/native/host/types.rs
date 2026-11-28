@@ -190,6 +190,7 @@ pub struct DomHost {
     pub(super) child_browsing_context_host_candidates: RefCell<Vec<DomHandle>>,
     pub(super) shadow_disabled_custom_element_definitions: RefCell<HashSet<String>>,
     pub(super) active_element: Cell<Option<DomHandle>>,
+    pub(super) focus_within_root: Cell<Option<DomHandle>>,
     pub(super) hovered_elements: RefCell<IndexSet<DomHandle>>,
     pub(super) mutation_observer_records_enabled: Cell<bool>,
     pub(super) devtools_mutation_records_enabled: Cell<bool>,

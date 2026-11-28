@@ -4,6 +4,24 @@ use crate::{
 };
 
 impl DocumentRuntime {
+    pub(super) fn focus_within_path_before_tree_change(
+        &self,
+        roots: &[DomHandle],
+    ) -> Vec<DomHandle> {
+        let root = self.dom_host.focus_within_root();
+        if root.is_some()
+            && roots.iter().any(|&node| self.dom_host.is_connected(node))
+            && self
+                .dom_host
+                .focus_within_ancestors(root)
+                .any(|ancestor| roots.contains(&ancestor))
+        {
+            self.dom_host.focus_within_ancestors(root).collect()
+        } else {
+            Vec::new()
+        }
+    }
+
     pub(super) fn focus_reset_handle_before_tree_change(
         &self,
         roots: &[DomHandle],
@@ -17,31 +35,6 @@ impl DocumentRuntime {
             .iter()
             .any(|root| *root == active || self.is_ancestor_of(*root, active))
             .then_some(active)
-    }
-
-    pub(super) fn focus_within_handles_for_active_element_before_tree_change(
-        &self,
-        active: DomHandle,
-    ) -> Vec<DomHandle> {
-        let mut handles = Vec::new();
-        let mut current = Some(active);
-        while let Some(handle) = current {
-            if self
-                .dom_host
-                .node(handle)
-                .is_some_and(|node| node.is_element())
-            {
-                handles.push(handle);
-            }
-            current = self.dom_host.parent_node(handle).and_then(|parent| {
-                if self.dom_host.is_shadow_root(parent) {
-                    self.dom_host.shadow_root_host(parent)
-                } else {
-                    Some(parent)
-                }
-            });
-        }
-        handles
     }
 
     pub(super) fn reset_focus_for_non_preserving_connected_move_before_insert(

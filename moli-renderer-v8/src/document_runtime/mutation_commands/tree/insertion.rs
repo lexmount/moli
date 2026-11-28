@@ -111,6 +111,8 @@ impl DocumentRuntime {
             insertion_plan.insertion_roots,
             was_connected,
         );
+        let focus_within_before_insert =
+            self.focus_within_path_before_tree_change(insertion_plan.insertion_roots);
         let focus_us = focus_started
             .map(|started| started.elapsed().as_micros())
             .unwrap_or_default();
@@ -142,6 +144,8 @@ impl DocumentRuntime {
         let iterator_started = cpu_profile_enabled.then(std::time::Instant::now);
         if effects.did_change() {
             self.apply_node_iterator_pre_remove_plans(host_ptr, &insertion_plan.node_iterator_plan);
+            unsafe { &mut *host_ptr }
+                .update_focus_within_after_tree_change(&focus_within_before_insert);
         }
         let iterator_us = iterator_started
             .map(|started| started.elapsed().as_micros())
@@ -368,6 +372,8 @@ impl DocumentRuntime {
                 was_connected,
             );
         }
+        let focus_within_before_insert =
+            self.focus_within_path_before_tree_change(insertion_plan.insertion_roots);
         let (effects, prepublished_removals) = match self.tree_insertion_effects_with_dom_debugger(
             host_ptr,
             parent,
@@ -396,6 +402,8 @@ impl DocumentRuntime {
         }
         if effects.did_change() {
             self.apply_node_iterator_pre_remove_plans(host_ptr, &insertion_plan.node_iterator_plan);
+            unsafe { &mut *host_ptr }
+                .update_focus_within_after_tree_change(&focus_within_before_insert);
         }
         let changed = self.apply_runtime_mutation_effects_with_prepublished_removals(
             scope,

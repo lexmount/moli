@@ -1,5 +1,6 @@
 use super::{PageScriptHost, PendingWindowMessageEndpoint};
-use crate::document_runtime::DomHandle;
+use crate::document_runtime::{DomHandle, EventTargetHandle};
+use crate::native_bridge::element::construct_focus_event;
 
 impl PageScriptHost {
     pub(crate) fn document_has_focus(&self, document: DomHandle) -> bool {
@@ -12,22 +13,120 @@ impl PageScriptHost {
             Some(PendingWindowMessageEndpoint::ChildWindow(container)) => container,
             None => return false,
         };
-        // Main retains one active element for this native document tree.
-        // Walk its embedding chain instead of reading author-visible getters.
-        let Some(mut focused) = self.active_element_handle() else {
+        let Some(focused) = self.focused_frame_owner() else {
             return false;
         };
-        loop {
-            if focused == container {
-                return true;
+        focused == container
+            || self
+                .dom_host()
+                .owner_document_handle(focused)
+                .is_some_and(|owner| {
+                    self.child_browsing_context_host_is_ancestor_of_document(container, owner)
+                })
+    }
+
+    pub(crate) fn focused_frame_owner(&self) -> Option<DomHandle> {
+        let PendingWindowMessageEndpoint::ChildWindow(handle) = self.focused_window else {
+            return None;
+        };
+        (self.dom_host().is_connected(handle)
+            && self
+                .dom_host()
+                .owner_document_handle(handle)
+                .is_some_and(|document| self.document_is_fully_active(document)))
+        .then_some(handle)
+    }
+
+    fn window_endpoint_for_focus_target(
+        &self,
+        handle: DomHandle,
+    ) -> Option<PendingWindowMessageEndpoint> {
+        let dom = self.dom_host();
+        if dom.is_html_element_named(handle, "iframe") || dom.is_html_element_named(handle, "frame")
+        {
+            Some(PendingWindowMessageEndpoint::ChildWindow(handle))
+        } else {
+            self.window_endpoint_for_document(dom.owner_document_handle(handle)?)
+        }
+    }
+
+    pub(crate) fn is_focused_window(&self, window: PendingWindowMessageEndpoint) -> bool {
+        self.focused_window == window
+    }
+
+    /// Complete the Window transition before installing the element focus.
+    /// Return the requested endpoint when Window callbacks ran.
+    pub(crate) fn focus_window_for_element(
+        scope: &mut v8::PinScope<'_, '_>,
+        runtime_ptr: *mut Self,
+        handle: DomHandle,
+    ) -> Option<PendingWindowMessageEndpoint> {
+        let runtime = unsafe { &mut *runtime_ptr };
+        let next = runtime.window_endpoint_for_focus_target(handle)?;
+        let previous = if runtime.focused_window == next {
+            None
+        } else {
+            let previous = std::mem::replace(&mut runtime.focused_window, next);
+            // A blur listener can redirect focus before the selected Window
+            // has had its own focus event.
+            std::mem::replace(&mut runtime.focused_window_notified, false).then_some(previous)
+        };
+        if let Some(previous) = previous {
+            Self::dispatch_window_focus_event(scope, runtime_ptr, previous, "blur");
+        }
+        let runtime = unsafe { &mut *runtime_ptr };
+        let dispatch_focus = runtime.is_focused_window(next)
+            && !std::mem::replace(&mut runtime.focused_window_notified, true);
+        if dispatch_focus {
+            Self::dispatch_window_focus_event(scope, runtime_ptr, next, "focus");
+        }
+        (previous.is_some() || dispatch_focus).then_some(next)
+    }
+
+    fn dispatch_window_focus_event(
+        scope: &mut v8::PinScope<'_, '_>,
+        runtime_ptr: *mut Self,
+        endpoint: PendingWindowMessageEndpoint,
+        event_type: &str,
+    ) {
+        let event = construct_focus_event(scope, event_type, None, false)
+            .expect("Window focus transition must materialize its FocusEvent");
+        let runtime = unsafe { &mut *runtime_ptr };
+        match endpoint {
+            PendingWindowMessageEndpoint::TopWindow => {
+                let _ = runtime.dispatch_public_event_best_effort(
+                    scope,
+                    runtime_ptr,
+                    EventTargetHandle::Window,
+                    event,
+                    "window focus event",
+                );
             }
-            let Some(owner) = self.dom_host().owner_document_handle(focused) else {
-                return false;
-            };
-            let Some(parent) = self.child_browsing_context_host_for_document_handle(owner) else {
-                return false;
-            };
-            focused = parent;
+            PendingWindowMessageEndpoint::ChildWindow(handle) => {
+                runtime.dispatch_child_window_event(scope, handle, event_type, event);
+            }
+            PendingWindowMessageEndpoint::LightweightPopup(popup_id) => {
+                let _ = runtime
+                    .dispatch_lightweight_popup_window_event(scope, popup_id, event_type, event);
+            }
+        }
+    }
+
+    pub(crate) fn unfocus_frame_owner(&mut self, handle: DomHandle) {
+        if self.focused_window == PendingWindowMessageEndpoint::ChildWindow(handle) {
+            self.focused_window = self
+                .dom_host()
+                .owner_document_handle(handle)
+                .and_then(|document| self.window_endpoint_for_document(document))
+                .unwrap_or(PendingWindowMessageEndpoint::TopWindow);
+            self.focused_window_notified = true;
+        }
+    }
+
+    pub(super) fn clear_focused_window(&mut self, endpoint: PendingWindowMessageEndpoint) {
+        if self.focused_window == endpoint {
+            self.focused_window = PendingWindowMessageEndpoint::TopWindow;
+            self.focused_window_notified = true;
         }
     }
 

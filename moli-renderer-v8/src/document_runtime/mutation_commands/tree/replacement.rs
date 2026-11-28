@@ -99,6 +99,8 @@ impl DocumentRuntime {
             insertion_plan.insertion_roots,
             inserted_was_connected,
         );
+        let focus_within_before_insert =
+            self.focus_within_path_before_tree_change(insertion_plan.insertion_roots);
         let removal_plan = self.tree_removal_plan(host_ptr, parent, old_child);
         let (inserted, removed, prepublished_removals) = if unsafe { &*host_ptr }
             .has_dom_debugger_dom_breakpoints()
@@ -194,6 +196,12 @@ impl DocumentRuntime {
         if !removed.did_change() {
             return false;
         }
+        let previous_focus_within = if focus_within_before_insert.is_empty() {
+            &removal_plan.focus_within_handles_before_remove
+        } else {
+            &focus_within_before_insert
+        };
+        unsafe { &mut *host_ptr }.update_focus_within_after_tree_change(previous_focus_within);
         let mut effects = inserted;
         effects.merge(removed);
         if self.dom_host.mutation_records_enabled() {

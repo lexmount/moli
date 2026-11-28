@@ -152,7 +152,12 @@ impl MoliStyleEngine {
         next: Option<DomHandle>,
         _emulated_media: &EmulatedMediaOverrides,
     ) {
-        self.invalidate_focus_change(host, previous, next);
+        self.invalidate_focus_change(
+            host,
+            previous,
+            next,
+            host.focus_within_ancestors(previous).collect(),
+        );
     }
 
     pub(crate) fn invalidate_focus_change(
@@ -160,19 +165,10 @@ impl MoliStyleEngine {
         host: &DomHost,
         previous: Option<DomHandle>,
         next: Option<DomHandle>,
-    ) {
-        self.invalidate_focus_change_with_previous_focus_within(host, previous, next, None);
-    }
-
-    pub(crate) fn invalidate_focus_change_with_previous_focus_within(
-        &mut self,
-        host: &DomHost,
-        previous: Option<DomHandle>,
-        next: Option<DomHandle>,
-        previous_focus_within: Option<Vec<DomHandle>>,
+        previous_focus_within: Vec<DomHandle>,
     ) {
         let document_scopes =
-            focus_change_document_scopes(host, previous, next, previous_focus_within.as_deref());
+            focus_change_document_scopes(host, previous, next, previous_focus_within);
         for scope in document_scopes {
             let world = self.world_for_document(scope.document);
             self.queue_state_snapshot(
@@ -564,7 +560,7 @@ fn focus_change_document_scopes(
     host: &DomHost,
     previous: Option<DomHandle>,
     next: Option<DomHandle>,
-    previous_focus_within: Option<&[DomHandle]>,
+    previous_focus_within: Vec<DomHandle>,
 ) -> Vec<FocusChangeDocumentScope> {
     let mut scopes = Vec::new();
     if let Some(previous) = previous {
@@ -581,7 +577,7 @@ fn focus_change_document_scopes(
         let scope = focus_change_scope_for_document(&mut scopes, document);
         scope.next = Some(next);
     }
-    for handle in previous_focus_within.into_iter().flatten().copied() {
+    for handle in previous_focus_within {
         let Some(document) = owner_document_for_handle(host, handle) else {
             continue;
         };

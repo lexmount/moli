@@ -1,24 +1,19 @@
 use crate::dom::native::{ContentEditableState, Element, FocusSupport, Node};
 
-use super::super::{
-    PageScriptHost, PendingWindowMessageEndpoint, document, node::node_runtime_and_handle_from_args,
-};
+use super::super::{PageScriptHost, document, node::node_runtime_and_handle_from_args};
 use super::forms::{
     dispatch_text_control_event, form_control_is_effectively_disabled, text_control_value,
 };
 use super::geometry::{read_element_metrics, scroll_node_into_view_if_needed};
-use super::rendered_state::ElementRenderedStyle;
+use super::rendered_state::{ElementBoxState, ElementRenderedState, ElementRenderedStyle};
 use super::styles::{StyleMode, StyleObservation, style_property_value};
 use super::{
     ClickEventSource, InputEventCoordinates, construct_focus_event, construct_interest_event,
     dispatch_popover_show_events, dispatch_public_event,
     resolved_reflected_element_attribute_handle,
 };
-use super::{
-    element_attribute, element_has_attribute, label_control_handle,
-    label_receives_programmatic_focus,
-};
-use crate::document_runtime::{DomHandle, EventTargetHandle};
+use super::{element_attribute, label_control_handle, label_receives_programmatic_focus};
+use crate::document_runtime::DomHandle;
 #[cfg(feature = "devtools")]
 use crate::runtime::RendererDomFocusOutcome;
 use crate::style_engine::{ComputedDisplayKind, ComputedWhiteSpaceCollapseKind};
@@ -184,11 +179,41 @@ pub(super) fn is_focusable(runtime: &PageScriptHost, handle: DomHandle) -> bool 
     {
         return false;
     }
-    match dom.focus_support(handle) {
-        FocusSupport::Blocked => false,
-        FocusSupport::Supported => true,
-        FocusSupport::LayoutDependent => element_is_scrollable(runtime, handle),
+    let support = dom.focus_support(handle);
+    if support == FocusSupport::Blocked || !focus_target_is_available(runtime, handle) {
+        return false;
     }
+    support == FocusSupport::Supported || element_is_scrollable(runtime, handle)
+}
+
+fn focus_target_is_available(runtime: &PageScriptHost, handle: DomHandle) -> bool {
+    let dom = runtime.dom_host();
+    if dom.is_inert_in_document(handle) {
+        return false;
+    }
+    let render_target = if dom.is_html_element_named(handle, "area") {
+        // An image-map shape gets its rendered focus area from the image.
+        let Some(image) = dom.image_map_image_for_area(handle) else {
+            return false;
+        };
+        if dom.is_inert_in_document(image) {
+            return false;
+        }
+        image
+    } else {
+        handle
+    };
+    let rendered = ElementRenderedState::read(runtime, render_target);
+    // Reading-flow items can participate in focus order with display: contents.
+    let has_focus_area = match rendered.box_state() {
+        ElementBoxState::Box => true,
+        ElementBoxState::DisplayContents => render_target == handle,
+        ElementBoxState::NoBox => false,
+    };
+    has_focus_area
+        && rendered
+            .target_style()
+            .is_some_and(|style| style.visibility_visible)
 }
 
 fn overflow_makes_scroll_container(value: &str) -> bool {
@@ -355,34 +380,7 @@ pub(crate) fn process_post_parse_autofocus(
     true
 }
 
-fn focused_chain_requires_async_blur(runtime: &PageScriptHost, active: DomHandle) -> bool {
-    let mut current = Some(active);
-    while let Some(handle) = current {
-        if element_has_attribute(runtime, handle, "inert")
-            || element_has_attribute(runtime, handle, "hidden")
-        {
-            return true;
-        }
-        if style_property_value(runtime, handle, StyleMode::Computed, "display")
-            .eq_ignore_ascii_case("none")
-        {
-            return true;
-        }
-        current = runtime
-            .dom_host()
-            .node(handle)
-            .and_then(Node::parent_node)
-            .or_else(|| {
-                runtime
-                    .dom_host()
-                    .containing_shadow_root(handle)
-                    .and_then(|root| runtime.dom_host().shadow_root_host(root))
-            });
-    }
-    false
-}
-
-fn blur_if_focused_chain_is_display_none_callback(
+fn blur_if_focus_target_is_unavailable(
     scope: &mut v8::PinScope<'_, '_>,
     _args: v8::FunctionCallbackArguments<'_>,
     _rv: v8::ReturnValue<'_, v8::Value>,
@@ -394,7 +392,7 @@ fn blur_if_focused_chain_is_display_none_callback(
     let Some(active) = runtime.active_element_handle() else {
         return;
     };
-    if focused_chain_requires_async_blur(runtime, active) {
+    if !focus_target_is_available(runtime, active) {
         update_focus(scope, runtime_ptr, None);
     }
 }
@@ -405,11 +403,10 @@ pub(crate) fn schedule_focus_blur_if_needed(
     active: DomHandle,
 ) {
     let runtime = unsafe { &*runtime_ptr };
-    if !focused_chain_requires_async_blur(runtime, active) {
+    if focus_target_is_available(runtime, active) {
         return;
     }
-    if let Some(callback) = v8::Function::new(scope, blur_if_focused_chain_is_display_none_callback)
-    {
+    if let Some(callback) = v8::Function::new(scope, blur_if_focus_target_is_unavailable) {
         let global = scope.get_current_context().global(scope);
         let Some(set_timeout) = global
             .get(scope, v8str(scope, "setTimeout").into())
@@ -456,7 +453,7 @@ pub(crate) fn update_focus(
     scope: &mut v8::PinScope<'_, '_>,
     runtime_ptr: *mut PageScriptHost,
     next: Option<DomHandle>,
-) {
+) -> bool {
     let runtime = unsafe { &mut *runtime_ptr };
     let previous = runtime.active_element_handle();
     update_focus_from_previous_with_previous_focus_within(
@@ -466,7 +463,7 @@ pub(crate) fn update_focus(
         next,
         None,
         FocusSelection::Initialize,
-    );
+    )
 }
 
 #[cfg(feature = "devtools")]
@@ -523,154 +520,130 @@ fn update_focus_from_previous_with_previous_focus_within(
     scope: &mut v8::PinScope<'_, '_>,
     runtime_ptr: *mut PageScriptHost,
     previous: Option<DomHandle>,
-    next: Option<DomHandle>,
+    mut next: Option<DomHandle>,
     previous_focus_within: Option<Vec<DomHandle>>,
     selection: FocusSelection,
-) {
+) -> bool {
     if previous == next {
-        return;
+        return true;
     }
-    let next_value = wrap_handle_value(scope, runtime_ptr, next);
     let runtime = unsafe { &mut *runtime_ptr };
-    runtime.set_active_element_handle(next);
+    let next_document = next.and_then(|handle| runtime.dom_host().owner_document_handle(handle));
     runtime.mark_focus_changed();
-    if let Some(previous_focus_within) = previous_focus_within {
-        runtime.note_focus_style_activity_with_previous_focus_within(
-            previous,
-            next,
-            Some(previous_focus_within),
-        );
-    } else {
-        runtime.note_focus_style_activity(previous, next);
-    }
     if let Some(previous_handle) = previous {
+        if next.is_none() {
+            runtime.unfocus_frame_owner(previous_handle);
+        }
+        let dom = runtime.dom_host();
+        let previous_focus_within = previous_focus_within.unwrap_or_else(|| {
+            dom.focus_within_ancestors(dom.focus_within_root())
+                .collect()
+        });
+        // The shared suffix of both flat-tree paths keeps matching
+        // :focus-within while the old element's blur callbacks run.
+        let common_ancestor = next.and_then(|target| {
+            let next_path = dom.focus_within_ancestors(Some(target)).collect::<Vec<_>>();
+            previous_focus_within
+                .iter()
+                .rev()
+                .zip(next_path.iter().rev())
+                .take_while(|(previous, next)| previous == next)
+                .last()
+                .map(|(&ancestor, _)| ancestor)
+        });
+        runtime.set_element_focus(previous, None, common_ancestor, Some(previous_focus_within));
+        let next_value = wrap_handle_value(scope, runtime_ptr, next);
         dispatch_pending_text_control_change_if_needed(scope, runtime_ptr, previous_handle);
         if let Some(event) = construct_focus_event(scope, "blur", next_value, false) {
             let _ = dispatch_public_event(scope, runtime_ptr, previous_handle, event);
         }
-        if let Some(event) = construct_focus_event(scope, "focusout", next_value, true) {
+        if unsafe { &*runtime_ptr }.active_element_handle().is_some() {
+            next = None;
+        }
+        let related_target = next_value.filter(|_| next.is_some());
+        if let Some(event) = construct_focus_event(scope, "focusout", related_target, true) {
             let _ = dispatch_public_event(scope, runtime_ptr, previous_handle, event);
+        }
+        if unsafe { &*runtime_ptr }.active_element_handle().is_some() {
+            next = None;
         }
         dispatch_interest_event_if_needed(scope, runtime_ptr, previous_handle, "loseinterest");
     }
-    let window_focus_transition =
-        window_focus_transition_for_handles(scope, runtime_ptr, previous, next);
-    if let Some((previous_window, _)) = window_focus_transition {
-        dispatch_window_focus_event(scope, runtime_ptr, previous_window, "blur");
+    let runtime = unsafe { &mut *runtime_ptr };
+    if runtime.active_element_handle().is_some() {
+        return false;
     }
-    let previous_value = wrap_handle_value(scope, runtime_ptr, previous);
-    if let Some(next_handle) = next {
-        if selection == FocusSelection::Initialize
-            && unsafe { &*runtime_ptr }.active_element_handle() == Some(next_handle)
-            && contenteditable_editing_host(unsafe { &*runtime_ptr }, next_handle)
-                == Some(next_handle)
-            && let Some(context) = crate::native_bridge::node_owner_document_relevant_context(
-                scope,
-                runtime_ptr,
-                next_handle,
-            )
-        {
-            let scope = &mut v8::ContextScope::new(scope, context);
-            crate::context_bootstrap::focus_editing_host_selection(scope, next_handle);
-        }
-        if let Some(event) = construct_focus_event(scope, "focus", previous_value, false) {
-            let _ = dispatch_public_event(scope, runtime_ptr, next_handle, event);
-        }
-        if let Some(event) = construct_focus_event(scope, "focusin", previous_value, true) {
-            let _ = dispatch_public_event(scope, runtime_ptr, next_handle, event);
-        }
-        if let Some(target) =
-            dispatch_interest_event_if_needed(scope, runtime_ptr, next_handle, "interest")
-        {
-            show_interest_popover_if_needed(scope, runtime_ptr, next_handle, target);
-        }
-        schedule_focus_blur_if_needed(scope, runtime_ptr, next_handle);
+    let Some(next_handle) = next.filter(|&handle| {
+        runtime.dom_host().owner_document_handle(handle) == next_document
+            && (previous.is_none() || is_focusable(runtime, handle))
+    }) else {
+        runtime.set_element_focus(None, None, None, None);
+        return false;
+    };
+    let window_with_callbacks =
+        PageScriptHost::focus_window_for_element(scope, runtime_ptr, next_handle);
+    let runtime = unsafe { &mut *runtime_ptr };
+    if runtime.active_element_handle().is_some() {
+        return false;
     }
-    if let Some((_, next_window)) = window_focus_transition {
-        dispatch_window_focus_event(scope, runtime_ptr, next_window, "focus");
+    if window_with_callbacks.is_some_and(|window| {
+        !runtime.is_focused_window(window)
+            || runtime.dom_host().owner_document_handle(next_handle) != next_document
+            || !is_focusable(runtime, next_handle)
+    }) {
+        runtime.set_element_focus(None, None, None, None);
+        return false;
     }
+    runtime.set_element_focus(None, next, next, None);
+    dispatch_element_focus_events(scope, runtime_ptr, previous, next_handle, selection)
 }
 
-fn window_focus_transition_for_handles(
+fn dispatch_element_focus_events(
     scope: &mut v8::PinScope<'_, '_>,
     runtime_ptr: *mut PageScriptHost,
     previous: Option<DomHandle>,
-    next: Option<DomHandle>,
-) -> Option<(PendingWindowMessageEndpoint, PendingWindowMessageEndpoint)> {
-    let runtime = unsafe { &*runtime_ptr };
-    let execution_window = current_execution_window_endpoint(scope);
-    let previous_window = previous
-        .and_then(|handle| focused_window_endpoint(runtime, handle))
-        .unwrap_or(execution_window);
-    // Clearing an element's focus does not blur its Window. A later focus in
-    // another Document supplies the concrete new focused-frame endpoint.
-    let next_window = next
-        .and_then(|handle| focused_window_endpoint(runtime, handle))
-        .unwrap_or(previous_window);
-    if previous_window == next_window {
-        return None;
+    next_handle: DomHandle,
+    selection: FocusSelection,
+) -> bool {
+    let still_focused = || unsafe { &*runtime_ptr }.active_element_handle() == Some(next_handle);
+    if !still_focused() {
+        return false;
     }
-    Some((previous_window, next_window))
-}
-
-fn current_execution_window_endpoint(
-    scope: &mut v8::PinScope<'_, '_>,
-) -> PendingWindowMessageEndpoint {
-    if let Some(handle) = crate::native_bridge::active_child_window_handle(scope) {
-        return PendingWindowMessageEndpoint::ChildWindow(handle);
-    }
-    if let Some(popup_id) = crate::native_bridge::active_lightweight_popup_id(scope) {
-        return PendingWindowMessageEndpoint::LightweightPopup(popup_id);
-    }
-    PendingWindowMessageEndpoint::TopWindow
-}
-
-fn focused_window_endpoint(
-    runtime: &PageScriptHost,
-    handle: DomHandle,
-) -> Option<PendingWindowMessageEndpoint> {
-    if runtime.dom_host().is_html_element_named(handle, "iframe")
-        || runtime.dom_host().is_html_element_named(handle, "frame")
+    let previous_value = wrap_handle_value(scope, runtime_ptr, previous);
+    if selection == FocusSelection::Initialize
+        && contenteditable_editing_host(unsafe { &*runtime_ptr }, next_handle) == Some(next_handle)
+        && let Some(context) = crate::native_bridge::node_owner_document_relevant_context(
+            scope,
+            runtime_ptr,
+            next_handle,
+        )
     {
-        return Some(PendingWindowMessageEndpoint::ChildWindow(handle));
+        let scope = &mut v8::ContextScope::new(scope, context);
+        crate::context_bootstrap::focus_editing_host_selection(scope, next_handle);
     }
-    let document = runtime.dom_host().owner_document_handle(handle)?;
-    if let Some(child_handle) = runtime.child_browsing_context_host_for_document_handle(document) {
-        return Some(PendingWindowMessageEndpoint::ChildWindow(child_handle));
+    if let Some(event) = construct_focus_event(scope, "focus", previous_value, false) {
+        let _ = dispatch_public_event(scope, runtime_ptr, next_handle, event);
     }
-    if let Some(popup_id) = runtime.lightweight_popup_id_for_document_handle(document) {
-        return Some(PendingWindowMessageEndpoint::LightweightPopup(popup_id));
+    if !still_focused() {
+        return false;
     }
-    (document == runtime.document_handle()).then_some(PendingWindowMessageEndpoint::TopWindow)
-}
-
-fn dispatch_window_focus_event(
-    scope: &mut v8::PinScope<'_, '_>,
-    runtime_ptr: *mut PageScriptHost,
-    endpoint: PendingWindowMessageEndpoint,
-    event_type: &str,
-) {
-    let event = construct_focus_event(scope, event_type, None, false)
-        .expect("Window focus transition must materialize its FocusEvent");
-    let runtime = unsafe { &mut *runtime_ptr };
-    match endpoint {
-        PendingWindowMessageEndpoint::TopWindow => {
-            let _ = runtime.dispatch_public_event_best_effort(
-                scope,
-                runtime_ptr,
-                EventTargetHandle::Window,
-                event,
-                "window focus event",
-            );
-        }
-        PendingWindowMessageEndpoint::ChildWindow(handle) => {
-            runtime.dispatch_child_window_event(scope, handle, event_type, event);
-        }
-        PendingWindowMessageEndpoint::LightweightPopup(popup_id) => {
-            let _ =
-                runtime.dispatch_lightweight_popup_window_event(scope, popup_id, event_type, event);
-        }
+    if let Some(event) = construct_focus_event(scope, "focusin", previous_value, true) {
+        let _ = dispatch_public_event(scope, runtime_ptr, next_handle, event);
     }
+    if !still_focused() {
+        return false;
+    }
+    if let Some(target) =
+        dispatch_interest_event_if_needed(scope, runtime_ptr, next_handle, "interest")
+        && still_focused()
+    {
+        show_interest_popover_if_needed(scope, runtime_ptr, next_handle, target);
+    }
+    if !still_focused() {
+        return false;
+    }
+    schedule_focus_blur_if_needed(scope, runtime_ptr, next_handle);
+    still_focused()
 }
 
 fn dispatch_interest_event_if_needed(
@@ -1380,8 +1353,7 @@ pub(crate) fn perform_mouse_focus_default_action(
                         runtime.dom_host().shadow_root_delegates_focus(root) == Some(true)
                             && delegated_focus_target(runtime, handle).is_some()
                     });
-            let should_focus = (is_focusable(runtime, handle) || delegates_focus)
-                && !focused_chain_requires_async_blur(runtime, handle);
+            let should_focus = is_focusable(runtime, handle) || delegates_focus;
             let parent = if should_focus {
                 None
             } else {
@@ -1428,11 +1400,11 @@ fn focus_element_with_options(
     } else {
         is_focusable(runtime, handle).then_some(handle)
     };
-    if let Some(target) = target {
-        update_focus(scope, runtime_ptr, Some(target));
-        if !prevent_scroll {
-            scroll_node_into_view_if_needed(scope, runtime_ptr, target, None)?;
-        }
+    if let Some(target) = target
+        && update_focus(scope, runtime_ptr, Some(target))
+        && !prevent_scroll
+    {
+        scroll_node_into_view_if_needed(scope, runtime_ptr, target, None)?;
     }
     Ok(())
 }

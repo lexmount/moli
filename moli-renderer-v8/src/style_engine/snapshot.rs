@@ -2,7 +2,7 @@ use dom::ElementState as StyloElementState;
 use indexmap::IndexSet;
 use moli_selector::{
     StyleMutationSnapshots, StyloDomStyleAdapter, stylo_focus_change_handles,
-    stylo_focus_state_matches_handle, stylo_focus_within_state_matches_handle,
+    stylo_focus_state_matches_handle,
 };
 
 use crate::{document_runtime::DomHandle, dom::native::DomHost};
@@ -37,6 +37,7 @@ pub(super) fn snapshot_state_change(
         } => {
             let handles = stylo_focus_change_handles(host, previous, next)
                 .chain(previous_focus_within.iter().copied())
+                .chain(host.focus_within_ancestors(host.focus_within_root()))
                 .collect::<IndexSet<_>>();
             dom_adapter.with_bound_host(host, |adapter| {
                 for handle in handles {
@@ -50,7 +51,7 @@ pub(super) fn snapshot_state_change(
                                 host,
                                 handle,
                                 previous,
-                                Some(&previous_focus_within),
+                                &previous_focus_within,
                                 current,
                             ),
                         );
@@ -77,20 +78,15 @@ fn old_focus_snapshot_state(
     host: &DomHost,
     handle: DomHandle,
     previous: Option<DomHandle>,
-    previous_focus_within: Option<&[DomHandle]>,
+    previous_focus_within: &[DomHandle],
     mut state: StyloElementState,
 ) -> StyloElementState {
     state.remove(StyloElementState::FOCUS | StyloElementState::FOCUSRING);
     state.remove(StyloElementState::FOCUS_WITHIN);
-    let Some(previous) = previous else {
-        return state;
-    };
-    if stylo_focus_state_matches_handle(host, previous, handle) {
+    if previous.is_some_and(|previous| stylo_focus_state_matches_handle(host, previous, handle)) {
         state.insert(StyloElementState::FOCUS | StyloElementState::FOCUSRING);
     }
-    if previous_focus_within.is_some_and(|handles| handles.contains(&handle))
-        || stylo_focus_within_state_matches_handle(host, previous, handle)
-    {
+    if previous_focus_within.contains(&handle) {
         state.insert(StyloElementState::FOCUS_WITHIN);
     }
     state

@@ -72,6 +72,7 @@ impl DomHost {
             child_browsing_context_host_candidates: RefCell::new(Vec::new()),
             shadow_disabled_custom_element_definitions: RefCell::new(HashSet::new()),
             active_element: Cell::new(None),
+            focus_within_root: Cell::new(None),
             hovered_elements: RefCell::new(IndexSet::new()),
             mutation_observer_records_enabled: Cell::new(false),
             devtools_mutation_records_enabled: Cell::new(false),
@@ -705,6 +706,37 @@ impl DomHost {
         }
     }
 
+    pub fn image_map_image_for_area(&self, area: DomHandle) -> Option<DomHandle> {
+        let map = std::iter::successors(self.parent_node(area), |&node| self.parent_node(node))
+            .find(|&node| self.is_html_element_named(node, "map"))?;
+        let root = self.root_node_handle(map)?;
+        let map_element = self.element(map)?;
+        let names = [map_element.id(), map_element.name_attribute()].map(|name| {
+            let name = name.filter(|name| !name.is_empty())?;
+            let first_map = self
+                .element_handles_by_id_or_name_matching_in_subtree(root, name, |candidate| {
+                    self.is_html_element_named(candidate, "map")
+                })
+                .into_iter()
+                .find(|&candidate| self.is_html_element_named(candidate, "map"));
+            (first_map == Some(map)).then_some(name)
+        });
+        if names == [None, None] {
+            return None;
+        }
+        self.dom
+            .light_subtree_handles(root, false)
+            .find(|&candidate| {
+                self.element(candidate).is_some_and(|element| {
+                    element.is_html_element("img")
+                        && element
+                            .attribute("usemap")
+                            .and_then(|value| value.split_once('#'))
+                            .is_some_and(|(_, fragment)| names.contains(&Some(fragment)))
+                })
+            })
+    }
+
     pub fn active_element_handle(&self) -> Option<DomHandle> {
         self.active_element.get().filter(|handle| {
             self.node(*handle)
@@ -713,11 +745,27 @@ impl DomHost {
     }
 
     pub fn set_active_element_handle(&self, handle: Option<DomHandle>) {
+        self.set_element_focus(handle, handle);
+    }
+
+    pub fn set_element_focus(
+        &self,
+        handle: Option<DomHandle>,
+        focus_within_root: Option<DomHandle>,
+    ) {
         let previous = self.active_element.replace(handle);
-        if previous != handle {
+        let previous_focus_within_root = self.focus_within_root.replace(focus_within_root);
+        if previous != handle || previous_focus_within_root != focus_within_root {
             self.record_mutation(
                 MutationScope::QueryState,
-                previous.into_iter().chain(handle),
+                [
+                    previous,
+                    handle,
+                    previous_focus_within_root,
+                    focus_within_root,
+                ]
+                .into_iter()
+                .flatten(),
             );
         }
     }
@@ -743,24 +791,22 @@ impl DomHost {
     }
 
     pub fn element_matches_focus_within(&self, handle: DomHandle) -> bool {
-        let Some(active) = self.active_element_handle() else {
-            return false;
-        };
-        let mut current = Some(active);
-        while let Some(candidate) = current {
-            if candidate == handle {
-                return true;
-            }
-            let Some(parent) = self.node(candidate).and_then(Node::parent_node) else {
-                return false;
-            };
-            current = if self.is_shadow_root(parent) {
-                self.shadow_root_host(parent)
-            } else {
-                Some(parent)
-            };
-        }
-        false
+        self.focus_within_ancestors(self.focus_within_root())
+            .any(|ancestor| ancestor == handle)
+    }
+
+    pub fn focus_within_root(&self) -> Option<DomHandle> {
+        self.focus_within_root
+            .get()
+            .filter(|handle| self.is_connected(*handle))
+    }
+
+    pub fn focus_within_ancestors(
+        &self,
+        root: Option<DomHandle>,
+    ) -> impl Iterator<Item = DomHandle> + '_ {
+        std::iter::successors(root, |&handle| self.flat_tree_parent(handle))
+            .filter(|&handle| self.element(handle).is_some())
     }
 
     pub fn hovered_element_handles(&self) -> Vec<DomHandle> {
@@ -1900,6 +1946,7 @@ impl DomHost {
     /// fresh main Document into the same LocalWindow's DOM arena.
     pub fn replace_main_document(&mut self, document: &Document) -> DomHandle {
         self.active_element.set(None);
+        self.focus_within_root.set(None);
         self.hovered_elements.borrow_mut().clear();
         let handle = self.dom.replace_main_document(document);
         self.record_mutation(MutationScope::QueryState, [handle]);

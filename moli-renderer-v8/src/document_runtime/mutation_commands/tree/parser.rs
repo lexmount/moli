@@ -64,6 +64,7 @@ impl DocumentRuntime {
                 TreeInsertionSelectednessPolicy::Skip,
             ),
         );
+        let focus_within_before_insert = self.focus_within_path_before_tree_change(insertion_roots);
         let effects = self.parser_append_child_effects_in_structural_scope(parent, child);
         if effects.did_change() {
             for &root in insertion_roots {
@@ -72,7 +73,13 @@ impl DocumentRuntime {
                 );
             }
         }
-        self.apply_parser_tree_mutation_followups(scope, host_ptr, insertion_plan, effects);
+        self.apply_parser_tree_mutation_followups(
+            scope,
+            host_ptr,
+            insertion_plan,
+            effects,
+            &focus_within_before_insert,
+        );
     }
 
     fn apply_parser_insert_before_to_live_dom_host(
@@ -98,6 +105,7 @@ impl DocumentRuntime {
                 TreeInsertionSelectednessPolicy::Skip,
             ),
         );
+        let focus_within_before_insert = self.focus_within_path_before_tree_change(insertion_roots);
         let effects =
             self.parser_insert_before_effects_in_structural_scope(parent, child, reference_child);
         if effects.did_change() {
@@ -107,7 +115,13 @@ impl DocumentRuntime {
                 );
             }
         }
-        self.apply_parser_tree_mutation_followups(scope, host_ptr, insertion_plan, effects);
+        self.apply_parser_tree_mutation_followups(
+            scope,
+            host_ptr,
+            insertion_plan,
+            effects,
+            &focus_within_before_insert,
+        );
     }
 
     fn apply_parser_tree_mutation_followups(
@@ -116,9 +130,12 @@ impl DocumentRuntime {
         host_ptr: *mut PageScriptHost,
         insertion_plan: TreeInsertionPlan<'_>,
         effects: DomMutationEffects,
+        focus_within_before_insert: &[DomHandle],
     ) {
         if effects.did_change() {
             self.apply_node_iterator_pre_remove_plans(host_ptr, &insertion_plan.node_iterator_plan);
+            unsafe { &mut *host_ptr }
+                .update_focus_within_after_tree_change(focus_within_before_insert);
         }
         self.assert_active_parser_document_incarnation();
         let result = {
