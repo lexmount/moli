@@ -459,46 +459,78 @@ impl ScriptVm {
         }
     }
 
-    #[cfg(any(test, feature = "devtools"))]
-    pub(super) fn collect_renderer_document_isolate_garbage(&mut self) -> Result<()> {
-        self.renderer_document_isolate
-            .with_entered_renderer_document_isolate(|isolate| {
-                isolate.memory_pressure_notification(v8::MemoryPressureLevel::Critical);
-                isolate.low_memory_notification();
-                Ok(())
-            })?;
+    fn prune_collected_native_caches(&self) {
         let mut host = self._context_host.borrow_mut();
         host.prune_collected_iframe_content_surfaces();
         host.native_bridge_mut()
             .prune_collected_isolated_world_wrapper_caches();
+    }
+
+    #[cfg(any(test, feature = "devtools"))]
+    pub(super) fn collect_renderer_document_isolate_garbage(&mut self) -> Result<()> {
+        self.renderer_document_isolate
+            .with_entered_renderer_document_isolate_maintenance(
+                |isolate, last_maintenance_used_heap_size| {
+                    isolate.memory_pressure_notification(v8::MemoryPressureLevel::Critical);
+                    isolate.low_memory_notification();
+                    *last_maintenance_used_heap_size =
+                        isolate.get_heap_statistics().used_heap_size();
+                    Ok(())
+                },
+            )?;
+        self.prune_collected_native_caches();
         Ok(())
     }
 
     pub(super) fn notify_renderer_document_isolate_memory_pressure(&mut self) -> Result<()> {
-        self.renderer_document_isolate
-            .with_entered_renderer_document_isolate(|isolate| {
-                let stats = isolate.get_heap_statistics();
-                if renderer_document_isolate_critical_pressure_required(
-                    stats.used_heap_size(),
-                    stats.heap_size_limit(),
-                ) {
-                    // One renderer process can host several Page isolates. A
-                    // target with a rapidly replaced child realm must not hit
-                    // V8's process-fatal heap limit before its owner can close
-                    // that target. Escalate the existing periodic maintenance
-                    // once this isolate consumes a third of its own limit.
-                    isolate.memory_pressure_notification(v8::MemoryPressureLevel::Critical);
-                    isolate.low_memory_notification();
-                } else {
-                    isolate.memory_pressure_notification(v8::MemoryPressureLevel::Moderate);
-                }
-                Ok(())
-            })?;
-        let mut host = self._context_host.borrow_mut();
-        host.prune_collected_iframe_content_surfaces();
-        host.native_bridge_mut()
-            .prune_collected_isolated_world_wrapper_caches();
+        self.notify_renderer_document_isolate_memory_pressure_with_action()?;
         Ok(())
+    }
+
+    pub(super) fn notify_renderer_document_isolate_memory_pressure_with_action(
+        &mut self,
+    ) -> Result<RendererDocumentIsolateMemoryPressureAction> {
+        let action = self
+            .renderer_document_isolate
+            .with_entered_renderer_document_isolate_maintenance(
+                |isolate, last_maintenance_used_heap_size| {
+                    let stats = isolate.get_heap_statistics();
+                    let used_heap_size = stats.used_heap_size();
+                    let action = renderer_document_isolate_memory_pressure_action(
+                        used_heap_size,
+                        stats.heap_size_limit(),
+                        *last_maintenance_used_heap_size,
+                    );
+                    match action {
+                        RendererDocumentIsolateMemoryPressureAction::Critical => {
+                            // One renderer process can host several Page isolates. A
+                            // target with a rapidly replaced child realm must not hit
+                            // V8's process-fatal heap limit before its owner can close
+                            // that target. Escalate the existing periodic maintenance
+                            // once this isolate consumes a third of its own limit.
+                            isolate.memory_pressure_notification(v8::MemoryPressureLevel::Critical);
+                            isolate.low_memory_notification();
+                            *last_maintenance_used_heap_size =
+                                isolate.get_heap_statistics().used_heap_size();
+                        }
+                        RendererDocumentIsolateMemoryPressureAction::Moderate => {
+                            isolate.memory_pressure_notification(v8::MemoryPressureLevel::Moderate);
+                            *last_maintenance_used_heap_size =
+                                isolate.get_heap_statistics().used_heap_size();
+                        }
+                        RendererDocumentIsolateMemoryPressureAction::None => {
+                            // Track natural heap shrinkage without ratcheting upward so
+                            // slow growth still triggers moderate maintenance once total
+                            // growth since the last maintenance exceeds 8 MiB.
+                            *last_maintenance_used_heap_size =
+                                (*last_maintenance_used_heap_size).min(used_heap_size);
+                        }
+                    }
+                    Ok(action)
+                },
+            )?;
+        self.prune_collected_native_caches();
+        Ok(action)
     }
 
     pub(super) fn snapshot_console_messages_in_context(

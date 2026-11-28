@@ -827,6 +827,24 @@ impl RendererIsolateHandle {
         self.with_renderer_document_isolate_mut(op)
     }
 
+    pub(super) fn with_entered_renderer_document_isolate_maintenance<T>(
+        &self,
+        op: impl FnOnce(&mut v8::OwnedIsolate, &mut usize) -> Result<T>,
+    ) -> Result<T> {
+        let mut holder = self.inner.borrow_mut();
+        let RendererIsolateHolder {
+            isolate,
+            last_maintenance_used_heap_size,
+            ..
+        } = &mut *holder;
+        with_entered_owned_isolate(isolate, |isolate| {
+            let result = op(isolate, last_maintenance_used_heap_size);
+            self.deferred_context_host_releases
+                .drain_on_entered_isolate(isolate);
+            result
+        })
+    }
+
     pub(super) fn with_entered_renderer_document_isolate_and_bootstrap<T>(
         &self,
         op: impl FnOnce(&mut v8::OwnedIsolate, &IsolateBootstrapCache) -> Result<T>,
@@ -877,6 +895,7 @@ pub(super) struct RendererIsolateHolder {
     _platform_registration: V8PlatformIsolateRegistration,
     foreground_router: Option<crate::v8_platform::RendererIsolateForegroundTaskRouter>,
     isolate: v8::OwnedIsolate,
+    last_maintenance_used_heap_size: usize,
     // Declared after the isolate so destroyed/live accounting changes only
     // after `OwnedIsolate::drop` has completed disposal.
     _accounting: RendererDocumentIsolateAccountingGuard,
@@ -1013,6 +1032,7 @@ impl RendererIsolateHolder {
             _platform_registration: platform_registration,
             foreground_router,
             isolate,
+            last_maintenance_used_heap_size: 0,
             _accounting: RendererDocumentIsolateAccountingGuard::new(),
         }
     }

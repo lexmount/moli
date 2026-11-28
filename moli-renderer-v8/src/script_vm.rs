@@ -92,6 +92,15 @@ impl MainWindowProxyNavigationCommit {
     }
 }
 
+const MODERATE_MEMORY_PRESSURE_HEAP_GROWTH_BYTES: usize = 8 * 1024 * 1024;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum RendererDocumentIsolateMemoryPressureAction {
+    None,
+    Moderate,
+    Critical,
+}
+
 fn renderer_document_isolate_critical_pressure_required(
     used_heap_size: usize,
     heap_size_limit: usize,
@@ -101,6 +110,22 @@ fn renderer_document_isolate_critical_pressure_required(
     }
     let critical_threshold = heap_size_limit / 3 + usize::from(!heap_size_limit.is_multiple_of(3));
     used_heap_size >= critical_threshold
+}
+
+fn renderer_document_isolate_memory_pressure_action(
+    used_heap_size: usize,
+    heap_size_limit: usize,
+    last_maintenance_used_heap_size: usize,
+) -> RendererDocumentIsolateMemoryPressureAction {
+    if renderer_document_isolate_critical_pressure_required(used_heap_size, heap_size_limit) {
+        return RendererDocumentIsolateMemoryPressureAction::Critical;
+    }
+    if used_heap_size.saturating_sub(last_maintenance_used_heap_size)
+        > MODERATE_MEMORY_PRESSURE_HEAP_GROWTH_BYTES
+    {
+        return RendererDocumentIsolateMemoryPressureAction::Moderate;
+    }
+    RendererDocumentIsolateMemoryPressureAction::None
 }
 
 #[cfg(test)]

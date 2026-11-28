@@ -597,6 +597,111 @@ fn renderer_document_isolate_memory_pressure_escalates_at_one_third_of_heap_limi
         100, 100
     ));
 }
+
+#[test]
+fn renderer_document_isolate_moderate_pressure_requires_more_than_8_mib_growth() {
+    const EIGHT_MIB: usize = 8 * 1024 * 1024;
+    const LIMIT: usize = 512 * 1024 * 1024;
+
+    assert_eq!(
+        renderer_document_isolate_memory_pressure_action(0, LIMIT, 0),
+        RendererDocumentIsolateMemoryPressureAction::None
+    );
+    assert_eq!(
+        renderer_document_isolate_memory_pressure_action(EIGHT_MIB, LIMIT, 0),
+        RendererDocumentIsolateMemoryPressureAction::None
+    );
+    assert_eq!(
+        renderer_document_isolate_memory_pressure_action(EIGHT_MIB + 1, LIMIT, 0),
+        RendererDocumentIsolateMemoryPressureAction::Moderate
+    );
+    assert_eq!(
+        renderer_document_isolate_memory_pressure_action(
+            20 * 1024 * 1024 + EIGHT_MIB,
+            LIMIT,
+            20 * 1024 * 1024
+        ),
+        RendererDocumentIsolateMemoryPressureAction::None
+    );
+    assert_eq!(
+        renderer_document_isolate_memory_pressure_action(
+            20 * 1024 * 1024 + EIGHT_MIB + 1,
+            LIMIT,
+            20 * 1024 * 1024
+        ),
+        RendererDocumentIsolateMemoryPressureAction::Moderate
+    );
+    // Heap shrinkage below the prior baseline must not underflow or trigger GC.
+    assert_eq!(
+        renderer_document_isolate_memory_pressure_action(4 * 1024 * 1024, LIMIT, 20 * 1024 * 1024),
+        RendererDocumentIsolateMemoryPressureAction::None
+    );
+    // Critical escalation remains active even when growth since last maintenance is <= 8 MiB.
+    assert_eq!(
+        renderer_document_isolate_memory_pressure_action(34, 100, 34),
+        RendererDocumentIsolateMemoryPressureAction::Critical
+    );
+}
+
+#[test]
+fn renderer_document_isolate_maintenance_skips_idle_moderate_pressure_and_triggers_after_8_mib_growth()
+ {
+    let mut vm = new_parsed_test_vm(
+        "https://idle-memory-pressure.test/",
+        "<!doctype html><body></body>",
+    );
+
+    assert_eq!(
+        vm.notify_renderer_document_isolate_memory_pressure_with_action()
+            .expect("idle maintenance check should succeed"),
+        RendererDocumentIsolateMemoryPressureAction::None,
+        "fresh idle page below 8 MiB heap growth must not trigger moderate memory pressure"
+    );
+
+    vm.eval(
+        r#"
+(() => {
+  window.__retained = [];
+  for (let i = 0; i < 160000; i++) {
+    window.__retained.push({ id: i, payload: "item-" + i + "-" + "x".repeat(32) });
+  }
+  return String(window.__retained.length);
+})()
+"#,
+    )
+    .expect("large retained allocation should evaluate");
+
+    assert_eq!(
+        vm.notify_renderer_document_isolate_memory_pressure_with_action()
+            .expect("post-growth maintenance check should succeed"),
+        RendererDocumentIsolateMemoryPressureAction::Moderate,
+        "heap growth exceeding 8 MiB must trigger moderate memory pressure once"
+    );
+
+    assert_eq!(
+        vm.notify_renderer_document_isolate_memory_pressure_with_action()
+            .expect("subsequent idle maintenance check should succeed"),
+        RendererDocumentIsolateMemoryPressureAction::None,
+        "subsequent idle maintenance ticks must not keep firing moderate memory pressure"
+    );
+
+    vm.eval(
+        r#"
+(() => {
+  window.__small = new Array(1024).fill("small");
+  return String(window.__small.length);
+})()
+"#,
+    )
+    .expect("small allocation should evaluate");
+
+    assert_eq!(
+        vm.notify_renderer_document_isolate_memory_pressure_with_action()
+            .expect("small allocation maintenance check should succeed"),
+        RendererDocumentIsolateMemoryPressureAction::None,
+        "sub-threshold heap growth must not trigger moderate memory pressure"
+    );
+}
 #[tokio::test]
 async fn child_javascript_url_nested_frame_uses_inherited_frame_src_policy() {
     let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
