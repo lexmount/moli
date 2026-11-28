@@ -684,6 +684,37 @@ fn reconnected_inline_style_sheet_is_processed_with_the_current_base() {
 }
 
 #[test]
+fn removing_inline_shadow_stylesheet_invalidates_its_former_scope() {
+    let mut vm = new_parsed_test_vm(
+        "https://shadow-style-removal.test/",
+        "<!doctype html><html><head></head><body></body></html>",
+    );
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const createRoot = () => {
+    const host = document.body.appendChild(document.createElement('article'));
+    const root = host.attachShadow({mode: 'open'});
+    root.innerHTML = '<style>:host, .target { z-index: 1; }</style><div class="target"></div>';
+    return {host, style: root.querySelector('style'), target: root.querySelector('.target')};
+  };
+  const first = createRoot();
+  const second = createRoot();
+  const read = ({host, target}) => [host, target].map(element => getComputedStyle(element).zIndex).join(',');
+  const before = read(first);
+  first.style.remove();
+  return [before, read(first), read(second)].join('|');
+})()
+"#,
+        )
+        .expect("the former ShadowRoot should discard a removed sheet's styles");
+
+    assert_eq!(result, "1,1|auto,auto|1,1");
+}
+
+#[test]
 fn inline_cssom_rule_edit_keeps_the_sheet_parser_context() {
     let mut vm = new_storage_test_vm("https://inline-sheet-cssom.test/page/index.html");
 

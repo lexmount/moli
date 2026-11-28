@@ -13,7 +13,9 @@ use crate::{
 use self::adopted::AdoptedStyleSheetInstallation;
 use self::store::StyloStylesheetSource;
 use super::{
-    MoliStyleEngine, StyleSourceId, source_dirty::StyleSourceDirtyReason, source_id::StyleScopeId,
+    MoliStyleEngine, StyleSourceId,
+    source_dirty::StyleSourceDirtyReason,
+    source_id::{StyleScopeId, StyleSourceKind},
     source_owner::stylesheet_source_base_url,
 };
 
@@ -894,7 +896,12 @@ impl MoliStyleEngine {
         documents
     }
 
-    fn remove_owner_style_sheet_source(&mut self, owner: DomHandle) {
+    fn remove_owner_style_sheet_source(
+        &mut self,
+        host: &DomHost,
+        change: &DomStylesheetOwnerChange,
+    ) {
+        let owner = change.owner();
         let Some(document) = self
             .owner_stylesheet_source_documents
             .borrow_mut()
@@ -908,7 +915,26 @@ impl MoliStyleEngine {
             .borrow_mut()
             .remove_owner(owner)
         {
-            self.mark_document_stylesheet_set_dirty(document);
+            let tree_scopes = change.tree_scopes();
+            if let Some(root) = tree_scopes
+                .old()
+                .or(tree_scopes.current_scope())
+                .filter(|root| host.is_shadow_root(*root))
+            {
+                let scope_id = StyleScopeId::ShadowRoot(root);
+                self.mark_source_scope_dirty(
+                    document,
+                    scope_id,
+                    StyleSourceDirtyReason::OwnerStyleSheet,
+                    [StyleSourceId {
+                        scope_id,
+                        kind: StyleSourceKind::OwnerStyleSheet { owner },
+                    }],
+                    scope_id.style_roots(host),
+                );
+            } else {
+                self.mark_document_stylesheet_set_dirty(document);
+            }
         }
     }
 
