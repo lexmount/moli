@@ -42,7 +42,25 @@ hard-coding a `/devtools/...` path.
 - Add `--layout` for real geometry, coordinate input, screenshots, PDFs, and
   screencasts.
 - Add individual resource flags or `--resource` when visual/media assets must
-  load.
+  load. A screenshot or layout comparison needs at least one of them: with no
+  resource flag at all an `<img>` reports `naturalWidth === 0` and its box stays
+  empty, so a diff against a real browser reports "many images missing" while
+  every request the page made returned 200.
+- Read these three states apart before concluding anything about a page:
+
+  ```bash
+  page.evaluate(() => [...document.images].map(i => [i.className, i.naturalWidth]))
+  ```
+
+  - `naturalWidth > 0` — the resource arrived.
+  - `0` with no resource flag — the family was never requested; add `--resource`
+    or the narrow flag (`--image`, `--font`) for the family you need.
+  - `0` with the flag present — the resource is still pending or already failed.
+    Check the resource state through CDP rather than blaming the flag; the
+    intrinsic size only appears once a load reaches `Ready`.
+
+  Only the second case is a flag problem. The third is a page or network
+  problem that will not improve by adding flags.
 - Add `--profile-dir` for persistent storage and cookies.
 - Add `--cookie` to import cookies.
 - Configure proxy and connection controls on `moli serve`.
