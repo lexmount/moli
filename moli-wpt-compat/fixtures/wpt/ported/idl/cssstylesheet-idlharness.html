@@ -130,9 +130,6 @@ interface CSSNamespaceRule : CSSRule {
   readonly attribute CSSOMString namespaceURI;
   readonly attribute CSSOMString prefix;
 };
-interface CSSCounterStyleRule : CSSRule {
-  readonly attribute CSSOMString name;
-};
 interface CSSStyleRule : CSSGroupingRule {
   attribute CSSOMString selectorText;
   readonly attribute CSSStyleProperties style;
@@ -175,7 +172,6 @@ dictionary CSSStyleSheetInit {
     CSSPageRule: ["idlCssPageRule"],
     CSSMarginRule: ["idlCssMarginRule"],
     CSSNamespaceRule: ["idlCssNamespaceRule"],
-    CSSCounterStyleRule: ["idlCssCounterStyleRule"],
     CSSStyleSheet: ["new CSSStyleSheet()", "idlStyleElement.sheet"]
   });
 });
@@ -191,6 +187,40 @@ interface CSSStyleSheet {
     CSSStyleSheet: ["new CSSStyleSheet()", "idlStyleElement.sheet"]
   });
 });
+
+idl_test([`
+interface CSSCounterStyleRule : CSSRule {
+  attribute CSSOMString name;
+  attribute CSSOMString system;
+  attribute CSSOMString symbols;
+  attribute CSSOMString additiveSymbols;
+  attribute CSSOMString negative;
+  attribute CSSOMString prefix;
+  attribute CSSOMString suffix;
+  attribute CSSOMString range;
+  attribute CSSOMString pad;
+  attribute CSSOMString speakAs;
+  attribute CSSOMString fallback;
+};
+typedef DOMString CSSOMString;
+`], [], function (idlArray) {
+  idlArray.enable_interface_descriptor_assertions();
+  idlArray.enable_attribute_descriptor_assertions();
+  idlArray.enable_object_brand_assertions();
+  idlArray.add_objects({ CSSCounterStyleRule: ["idlCssCounterStyleRule"] });
+});
+
+test(function () {
+  const prototype = CSSCounterStyleRule.prototype;
+  const invalidReceivers = [Object.create(prototype), idlCssStyleRule];
+  for (const name of Object.keys(prototype)) {
+    const {get, set} = Object.getOwnPropertyDescriptor(prototype, name);
+    for (const receiver of invalidReceivers) {
+      assert_throws_js(TypeError, () => get.call(receiver), name + " getter receiver check");
+      assert_throws_js(TypeError, () => set.call(receiver, "value"), name + " setter receiver check");
+    }
+  }
+}, "CSSCounterStyleRule accessors require a counter-style rule receiver");
 
 promise_test(async function () {
   const sheet = new CSSStyleSheet();

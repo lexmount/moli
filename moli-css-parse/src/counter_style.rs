@@ -33,6 +33,8 @@ impl CssCounterStyleProperty {
         let mut input = Parser::new(value);
         match self {
             Self::Name => {
+                // Match Chromium's setter by parsing the counter-style prelude.
+                // The CSSOM invalid-name WPT expects inputs such as "123" to be ignored.
                 let Ok(name) = input.parse_entirely(parse_counter_style_name_definition) else {
                     return false;
                 };

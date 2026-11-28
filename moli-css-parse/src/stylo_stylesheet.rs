@@ -4,10 +4,10 @@ use std::{borrow::Cow, sync::Once};
 
 use cssparser::{Parser, ToCss, Token, TokenSerializationType};
 pub use style::moli_rule_tree::{
-    CssConditionRuleView, CssCounterStyleRuleView, CssFontFaceRuleView,
-    CssFontFeatureValueEntryView, CssFontFeatureValuesRuleView, CssImportRuleView,
-    CssKeyframesRuleView, CssLayerRuleView, CssMarginRuleView, CssNamespaceRuleView,
-    CssPageDescriptorEntryView, CssPageRuleView, CssPropertyRuleView, CssRuleInsertError,
+    CssConditionRuleView, CssFontFaceRuleView, CssFontFeatureValueEntryView,
+    CssFontFeatureValuesRuleView, CssImportRuleView, CssKeyframesRuleView, CssLayerRuleView,
+    CssMarginRuleView, CssNamespaceRuleView, CssPageDescriptorEntryView, CssPageRuleView,
+    CssPropertyRuleView, CssRuleInsertError,
 };
 use style::{
     context::QuirksMode,
@@ -49,10 +49,6 @@ pub fn parse_constructed_stylesheet_rule_snapshots_with_stylo(
     css_text: &str,
 ) -> Vec<CssRuleSnapshot> {
     style::moli_rule_tree::parse_constructed_stylesheet_rule_views(css_text)
-}
-
-pub fn parse_counter_style_rule_view_with_stylo(css_text: &str) -> Option<CssCounterStyleRuleView> {
-    style::moli_rule_tree::parse_counter_style_rule_view(css_text)
 }
 
 pub fn parse_font_face_rule_view_with_stylo(css_text: &str) -> Option<CssFontFaceRuleView> {
@@ -299,13 +295,6 @@ pub fn keyframe_rule_snapshot_from_native_with_stylo(
     style::moli_rule_tree::keyframe_rule_view_from_native(rule, guard)
 }
 
-pub fn native_stylesheet_counter_style_rule_read_with_stylo(
-    stylesheet: &CssNativeStylesheet,
-    rule_path: &[usize],
-) -> Option<CssCounterStyleRuleView> {
-    style::moli_rule_tree::stylesheet_rule_tree_counter_style_rule_view(stylesheet, rule_path)
-}
-
 pub fn native_stylesheet_font_face_rule_read_with_stylo(
     stylesheet: &CssNativeStylesheet,
     rule_path: &[usize],
@@ -528,9 +517,8 @@ mod tests {
         CssRuleInsertError, delete_detached_keyframe_rule_with_stylo,
         delete_detached_nested_rule_with_stylo, font_face_descriptor_property_names_with_stylo,
         insert_detached_keyframe_rule_with_stylo, insert_detached_nested_rule_with_stylo,
-        keyframe_selector_texts_match_with_stylo,
-        native_stylesheet_counter_style_rule_read_with_stylo,
-        native_stylesheet_css_text_with_stylo, native_stylesheet_font_face_rule_read_with_stylo,
+        keyframe_selector_texts_match_with_stylo, native_stylesheet_css_text_with_stylo,
+        native_stylesheet_font_face_rule_read_with_stylo,
         native_stylesheet_font_feature_values_rule_read_with_stylo,
         native_stylesheet_import_rule_read_with_stylo,
         native_stylesheet_margin_rule_read_with_stylo,
@@ -539,19 +527,22 @@ mod tests {
         normalize_keyframe_selector_text_with_stylo, normalize_page_selector_text_with_stylo,
         page_descriptor_property_names_with_stylo, parse_condition_rule_view_with_stylo,
         parse_constructed_stylesheet_rule_snapshots_with_stylo,
-        parse_counter_style_rule_view_with_stylo, parse_font_face_descriptor_block_with_stylo,
-        parse_font_face_descriptor_entry_with_stylo, parse_font_face_rule_view_with_stylo,
-        parse_font_feature_values_rule_view_with_stylo, parse_import_rule_view_with_stylo,
-        parse_keyframes_rule_view_with_stylo, parse_layer_rule_view_with_stylo,
-        parse_namespace_rule_view_with_stylo, parse_nested_rule_block_snapshots_with_stylo,
-        parse_page_descriptor_block_with_stylo, parse_page_descriptor_entries_with_stylo,
-        parse_page_margin_descriptor_block_with_stylo, parse_page_margin_rule_view_with_stylo,
-        parse_page_rule_view_with_stylo, parse_property_rule_view_with_stylo,
-        parse_stylesheet_rule_snapshot_for_insert_with_stylo,
+        parse_font_face_descriptor_block_with_stylo, parse_font_face_descriptor_entry_with_stylo,
+        parse_font_face_rule_view_with_stylo, parse_font_feature_values_rule_view_with_stylo,
+        parse_import_rule_view_with_stylo, parse_keyframes_rule_view_with_stylo,
+        parse_layer_rule_view_with_stylo, parse_namespace_rule_view_with_stylo,
+        parse_nested_rule_block_snapshots_with_stylo, parse_page_descriptor_block_with_stylo,
+        parse_page_descriptor_entries_with_stylo, parse_page_margin_descriptor_block_with_stylo,
+        parse_page_margin_rule_view_with_stylo, parse_page_rule_view_with_stylo,
+        parse_property_rule_view_with_stylo, parse_stylesheet_rule_snapshot_for_insert_with_stylo,
         parse_stylesheet_rule_snapshots_with_stylo, parse_stylesheet_rule_texts_with_stylo,
         remove_css_comments_without_retokenizing,
     };
-    use style::stylesheets::CssRuleType;
+    use crate::CssCounterStyleProperty;
+    use style::{
+        counter_style::DescriptorId,
+        stylesheets::{CssRule, CssRuleType},
+    };
 
     fn parse_native_stylesheet(css_text: &str) -> super::CssNativeStylesheet {
         style::moli_rule_tree::parse_stylesheet_rule_tree(css_text)
@@ -751,15 +742,22 @@ mod tests {
             r#"@counter-style thumbs { system: cyclic; suffix: " "; symbols: "*"; }"#
         );
 
-        let view = parse_counter_style_rule_view_with_stylo(counter_style_rule)
-            .expect("valid @counter-style should produce a CSSOM view");
-        assert_eq!(view.name, "thumbs");
-        assert_eq!(view.css_text, rules[0].css_text);
+        assert_eq!(
+            CssCounterStyleProperty::Name
+                .read_detached(counter_style_rule)
+                .as_deref(),
+            Some("thumbs")
+        );
+        assert_eq!(
+            CssCounterStyleProperty::Descriptor(DescriptorId::Symbols)
+                .read_detached(&rules[0].css_text)
+                .as_deref(),
+            Some(r#""*""#)
+        );
         assert!(
-            parse_counter_style_rule_view_with_stylo(
-                r#"@counter-style thumbs { system: cyclic; suffix: " "; }"#
-            )
-            .is_none(),
+            CssCounterStyleProperty::Name
+                .read_detached(r#"@counter-style thumbs { system: cyclic; suffix: " "; }"#)
+                .is_none(),
             "Stylo rejects counter styles whose system requires symbols"
         );
     }
@@ -1038,9 +1036,21 @@ mod tests {
             native_stylesheet_namespace_rule_read_with_stylo(&stylesheet, &[1]),
             parse_namespace_rule_view_with_stylo(&rules[1].css_text)
         );
+        let counter_style_name = {
+            let guard = stylesheet.shared_lock.read();
+            let native_rules = stylesheet
+                .contents
+                .read_with(&guard)
+                .rules
+                .read_with(&guard);
+            let CssRule::CounterStyle(rule) = &native_rules.0[2] else {
+                panic!("expected @counter-style at index 2");
+            };
+            CssCounterStyleProperty::Name.read(rule.read_with(&guard))
+        };
         assert_eq!(
-            native_stylesheet_counter_style_rule_read_with_stylo(&stylesheet, &[2]),
-            parse_counter_style_rule_view_with_stylo(&rules[2].css_text)
+            CssCounterStyleProperty::Name.read_detached(&rules[2].css_text),
+            Some(counter_style_name)
         );
         assert_eq!(
             native_stylesheet_font_face_rule_read_with_stylo(&stylesheet, &[3]),

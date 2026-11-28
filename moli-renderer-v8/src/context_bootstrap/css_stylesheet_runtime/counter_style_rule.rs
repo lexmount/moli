@@ -1,64 +1,63 @@
 use super::*;
-use crate::{util::v8str, web_api_interfaces};
+use crate::{
+    util::{callback_data_index_value, callback_data_item},
+    web_api_interfaces,
+};
 use moli_css_parse::CssCounterStyleProperty::{self, Descriptor, Name};
 use style::counter_style::DescriptorId;
 
 #[derive(WebApiFunctionTemplate)]
 #[webapi(interface = web_api_interfaces::CSSCounterStyleRule, enumerable)]
 pub(crate) struct CssCounterStyleRulePrototypeDeclaration {
-    #[webapi(accessor_property, getter = get_property, setter = set_property, data = v8str(scope, "name"))]
+    #[webapi(accessor_property, getter = get_property, setter = set_property, data = callback_data_index_value(scope, 0))]
     name: (),
-    #[webapi(accessor_property, getter = get_property, setter = set_property, data = v8str(scope, "system"))]
+    #[webapi(accessor_property, getter = get_property, setter = set_property, data = callback_data_index_value(scope, 1))]
     system: (),
-    #[webapi(accessor_property, getter = get_property, setter = set_property, data = v8str(scope, "symbols"))]
+    #[webapi(accessor_property, getter = get_property, setter = set_property, data = callback_data_index_value(scope, 2))]
     symbols: (),
-    #[webapi(accessor_property = "additiveSymbols", getter = get_property, setter = set_property, data = v8str(scope, "additiveSymbols"))]
+    #[webapi(accessor_property = "additiveSymbols", getter = get_property, setter = set_property, data = callback_data_index_value(scope, 3))]
     additive_symbols: (),
-    #[webapi(accessor_property, getter = get_property, setter = set_property, data = v8str(scope, "negative"))]
+    #[webapi(accessor_property, getter = get_property, setter = set_property, data = callback_data_index_value(scope, 4))]
     negative: (),
-    #[webapi(accessor_property, getter = get_property, setter = set_property, data = v8str(scope, "prefix"))]
+    #[webapi(accessor_property, getter = get_property, setter = set_property, data = callback_data_index_value(scope, 5))]
     prefix: (),
-    #[webapi(accessor_property, getter = get_property, setter = set_property, data = v8str(scope, "suffix"))]
+    #[webapi(accessor_property, getter = get_property, setter = set_property, data = callback_data_index_value(scope, 6))]
     suffix: (),
-    #[webapi(accessor_property, getter = get_property, setter = set_property, data = v8str(scope, "range"))]
+    #[webapi(accessor_property, getter = get_property, setter = set_property, data = callback_data_index_value(scope, 7))]
     range: (),
-    #[webapi(accessor_property, getter = get_property, setter = set_property, data = v8str(scope, "pad"))]
+    #[webapi(accessor_property, getter = get_property, setter = set_property, data = callback_data_index_value(scope, 8))]
     pad: (),
-    #[webapi(accessor_property = "speakAs", getter = get_property, setter = set_property, data = v8str(scope, "speakAs"))]
+    #[webapi(accessor_property = "speakAs", getter = get_property, setter = set_property, data = callback_data_index_value(scope, 9))]
     speak_as: (),
-    #[webapi(accessor_property, getter = get_property, setter = set_property, data = v8str(scope, "fallback"))]
+    #[webapi(accessor_property, getter = get_property, setter = set_property, data = callback_data_index_value(scope, 10))]
     fallback: (),
 }
 
-fn property_from_callback_data<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    data: v8::Local<'s, v8::Value>,
-) -> Option<(&'static str, CssCounterStyleProperty)> {
-    let name = v8::Local::<v8::String>::try_from(data).ok()?;
-    let name = name.to_rust_string_lossy(scope);
-    [
-        ("name", Name),
-        ("system", Descriptor(DescriptorId::System)),
-        ("symbols", Descriptor(DescriptorId::Symbols)),
-        ("additiveSymbols", Descriptor(DescriptorId::AdditiveSymbols)),
-        ("negative", Descriptor(DescriptorId::Negative)),
-        ("prefix", Descriptor(DescriptorId::Prefix)),
-        ("suffix", Descriptor(DescriptorId::Suffix)),
-        ("range", Descriptor(DescriptorId::Range)),
-        ("pad", Descriptor(DescriptorId::Pad)),
-        ("speakAs", Descriptor(DescriptorId::SpeakAs)),
-        ("fallback", Descriptor(DescriptorId::Fallback)),
-    ]
-    .into_iter()
-    .find(|(property_name, _)| *property_name == name)
-}
+const COUNTER_STYLE_PROPERTIES: &[(&str, CssCounterStyleProperty)] = &[
+    ("name", Name),
+    ("system", Descriptor(DescriptorId::System)),
+    ("symbols", Descriptor(DescriptorId::Symbols)),
+    ("additiveSymbols", Descriptor(DescriptorId::AdditiveSymbols)),
+    ("negative", Descriptor(DescriptorId::Negative)),
+    ("prefix", Descriptor(DescriptorId::Prefix)),
+    ("suffix", Descriptor(DescriptorId::Suffix)),
+    ("range", Descriptor(DescriptorId::Range)),
+    ("pad", Descriptor(DescriptorId::Pad)),
+    ("speakAs", Descriptor(DescriptorId::SpeakAs)),
+    ("fallback", Descriptor(DescriptorId::Fallback)),
+];
 
 fn get_property<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'s, v8::Value>,
 ) {
-    let Some((_, property)) = property_from_callback_data(scope, args.data()) else {
+    let Some((_, property)) = callback_data_item(
+        scope,
+        &args,
+        COUNTER_STYLE_PROPERTIES,
+        "CSSCounterStyleRule",
+    ) else {
         return;
     };
     let rule = args.this();
@@ -75,7 +74,12 @@ fn set_property<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     _rv: v8::ReturnValue<'s, v8::Value>,
 ) {
-    let Some((name, property)) = property_from_callback_data(scope, args.data()) else {
+    let Some((name, property)) = callback_data_item(
+        scope,
+        &args,
+        COUNTER_STYLE_PROPERTIES,
+        "CSSCounterStyleRule",
+    ) else {
         return;
     };
     let Some(value) =
