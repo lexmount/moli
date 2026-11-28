@@ -46,6 +46,7 @@ const OPEN: f64 = 1.0;
 const CLOSING: f64 = 2.0;
 const CLOSED: f64 = 3.0;
 
+mod abort;
 mod accessors;
 mod bindings;
 mod constructor;
@@ -57,6 +58,7 @@ mod payload;
 mod realm;
 mod stream;
 
+pub(crate) use abort::WebSocketStreamAbortRegistration;
 pub(super) use bindings::{install_websocket_bindings, install_websocket_stream_bindings};
 pub(super) use constructor::{
     websocket_constructor_callback, websocket_error_constructor_callback,

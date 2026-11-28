@@ -35,6 +35,9 @@ const RAW_GLOBAL_FUNCTION_ALLOWLIST: &[(&str, usize)] = &[
     // WebMCP retains native registration/invocation abort algorithms here.
     // Page-supplied execute functions use WindowWebIdlCallbackFunction instead.
     ("context_bootstrap/web_mcp/state.rs", 1),
+    // A native abort algorithm is rooted for the connection handshake.
+    ("context_bootstrap/websocket/abort.rs", 1),
+    ("abort_signal_route.rs", 1),
     ("custom_elements/construction.rs", 1),
     ("custom_elements/definition.rs", 10),
     ("custom_elements/definition_callbacks.rs", 1),
@@ -43,11 +46,8 @@ const RAW_GLOBAL_FUNCTION_ALLOWLIST: &[(&str, usize)] = &[
     // registry. These remaining roots own browser-created abort algorithms.
     // Native abort algorithms reside in the store or its extracted dispatch
     // batch. Dispatch moves the roots; it does not add a Web IDL callback store.
-    ("native_bridge/abort.rs", 2),
-    ("native_bridge/abort/event.rs", 1),
     ("native_bridge/history_queue.rs", 3),
     ("script_vm/frame_script_jobs.rs", 3),
-    ("worker/abort.rs", 2),
     ("worker/timer_callback.rs", 1),
 ];
 
@@ -120,11 +120,6 @@ const DIRECT_V8_CALL_ALLOWLIST: &[AllowedDirectCallFile] = &[
     allowed(
         "context_bootstrap/navigation_result.rs",
         3,
-        DirectCallOwner::BrowserAlgorithm,
-    ),
-    allowed(
-        "context_bootstrap/websocket/constructor.rs",
-        1,
         DirectCallOwner::BrowserAlgorithm,
     ),
     allowed(

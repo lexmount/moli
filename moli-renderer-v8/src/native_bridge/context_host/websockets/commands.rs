@@ -4,6 +4,25 @@ use super::super::PageScriptHost;
 mod devtools;
 
 impl PageScriptHost {
+    pub(crate) fn set_websocket_stream_abort_registration(
+        &mut self,
+        socket_id: u64,
+        registration: crate::context_bootstrap::WebSocketStreamAbortRegistration,
+    ) -> bool {
+        let Some(state) = self.websockets.get_mut(&socket_id) else {
+            return false;
+        };
+        state.stream_abort = Some(registration);
+        true
+    }
+
+    pub(crate) fn take_websocket_stream_abort_registration(
+        &mut self,
+        socket_id: u64,
+    ) -> Option<crate::context_bootstrap::WebSocketStreamAbortRegistration> {
+        self.websockets.get_mut(&socket_id)?.stream_abort.take()
+    }
+
     #[cfg(test)]
     pub(crate) fn websocket_connection_for_test(
         &self,

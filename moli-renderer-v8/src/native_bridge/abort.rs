@@ -2,6 +2,7 @@ use std::collections::{HashMap, HashSet};
 
 use super::super::document_runtime::EventTargetHandle;
 use super::super::util::{get_private_value, set_private_value};
+use crate::abort_signal_route::AbortAlgorithm;
 use crate::context_bootstrap::new_dom_exception_value;
 
 mod controller;
@@ -58,7 +59,7 @@ struct AbortSignalState {
     signal: Option<crate::util::RealmObjectHandle>,
     aborted: bool,
     detached: bool,
-    abort_algorithms: Vec<v8::Global<v8::Function>>,
+    abort_algorithms: Vec<AbortAlgorithm>,
     linked_target_listeners: Vec<AbortLinkedTargetListener>,
     // None for a source; Some (including empty) for a dependent signal's ordered roots.
     source_signals: Option<Vec<u32>>,
@@ -73,7 +74,7 @@ struct AbortLinkedTargetListener {
 }
 
 struct AbortSignalDispatch {
-    algorithms: Vec<v8::Global<v8::Function>>,
+    algorithms: Vec<AbortAlgorithm>,
     linked_target_listeners: Vec<AbortLinkedTargetListener>,
     dispatch_event: bool,
 }
@@ -313,7 +314,7 @@ impl AbortStore {
         }
         state
             .abort_algorithms
-            .push(v8::Global::new(scope, algorithm));
+            .push(AbortAlgorithm::new(scope, algorithm));
         true
     }
 
@@ -330,8 +331,9 @@ impl AbortStore {
             return false;
         };
         state.abort_algorithms.retain(|candidate| {
-            let candidate = v8::Local::new(scope, candidate);
-            !candidate.strict_equals(algorithm.into())
+            candidate
+                .prepare(scope)
+                .is_some_and(|candidate| !candidate.strict_equals(algorithm.into()))
         });
         true
     }
