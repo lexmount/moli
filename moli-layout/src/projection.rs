@@ -541,6 +541,7 @@ impl<N: Copy + Debug + Eq + Hash> RetainedLayoutWorld<N> {
                 let extent = &tree.boxes[id.index()].scroll_extent;
                 extent.is_scroll_container.then_some(extent.applied_offset)
             },
+            |_, _| {},
         )?;
         let document_images = |url: &str| css_images(tree.source_root(), url);
         let projection = PaintProjection::from_publication(
@@ -1058,23 +1059,26 @@ where
                 sticky::prepare_constraints(index, world, scroll_extents)?,
             ))
         };
-        let retained = retain
+        let mut retained = retain
             .then(|| ScrollProjection::new(world, &self.boxes, scroll_extents, placements))
             .transpose()?;
-        let resolved = resolve_coordinate_spaces(
-            world.output_id(world.root),
-            self.viewport_scroll,
-            world.boxes.len(),
-            paint.then(|| PaintPixelGrid::new(self.viewport.device_pixel_ratio)),
-            |index| match &retained {
-                Some(retained) => Ok(retained.placement(index)),
-                None => placements(index),
-            },
-            |id| {
-                let extent = &scroll_extents[id.index()];
-                extent.is_scroll_container.then_some(extent.applied_offset)
-            },
-        )?;
+        let paint_grid = paint.then(|| PaintPixelGrid::new(self.viewport.device_pixel_ratio));
+        let resolved = if let Some(retained) = &mut retained {
+            retained.resolve_initial(world, self.viewport_scroll, scroll_extents, paint_grid)?
+        } else {
+            resolve_coordinate_spaces(
+                world.output_id(world.root),
+                self.viewport_scroll,
+                world.boxes.len(),
+                paint_grid,
+                placements,
+                |id| {
+                    let extent = &scroll_extents[id.index()];
+                    extent.is_scroll_container.then_some(extent.applied_offset)
+                },
+                |_, _| {},
+            )?
+        };
         for (geometry, offset) in self.boxes.iter_mut().zip(resolved.position_adjustments) {
             geometry.layout_origin_in_document.x += offset.x;
             geometry.layout_origin_in_document.y += offset.y;
