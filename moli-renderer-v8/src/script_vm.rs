@@ -2166,6 +2166,12 @@ impl ScriptVmPageRealmBootstrap {
                 context_host.document_base_url_for_handle(document_handle),
                 initial_origin,
             )
+            .with_sandboxed_origin(
+                context_host
+                    .document_policy_container()
+                    .sandbox
+                    .forces_opaque_origin,
+            )
         };
         let initial_document_loader =
             initial_document_loader_bootstrap.commit(initial_document_context);

@@ -208,6 +208,16 @@ impl ClassicSessionManager {
         true
     }
 
+    pub(super) fn owns_uploaded_files(&self, session_id: &str, paths: &[String]) -> bool {
+        self.uploaded_files.get(session_id).is_some_and(|uploaded| {
+            paths.iter().all(|path| {
+                uploaded
+                    .iter()
+                    .any(|file| file == std::path::Path::new(path))
+            })
+        })
+    }
+
     pub(super) fn register_download_directory(&mut self, session_id: &str, path: PathBuf) -> bool {
         if !self.registry.has_session(session_id) {
             return false;

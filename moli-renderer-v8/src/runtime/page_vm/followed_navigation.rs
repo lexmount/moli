@@ -7,7 +7,10 @@ use tracing::debug;
 use url::Url;
 
 use crate::local_executor::{JsLocalExecutor, is_on_named_owner_execution_lane_for};
-use crate::network::ResourceRequestClient;
+use crate::network::{
+    ResourceRequestClient,
+    navigation::{DocumentFetchContextSeed, NavigationResourceLoader},
+};
 use crate::runtime::page::PageVmNavigationResponse;
 use crate::runtime::phase_one::{
     ConcurrentParseTimeRuntime, ParseTimePageVmCreationOutcome,
@@ -29,6 +32,7 @@ pub(super) enum LoadedFollowedLocationNavigation {
     StreamingDocument {
         requested_url: Url,
         response: Box<StreamingRawResponse>,
+        file_seed: Option<Box<DocumentFetchContextSeed>>,
         document_referrer: String,
     },
     ExternalDocument {
@@ -148,9 +152,17 @@ pub(super) async fn load_followed_location_navigation(
     )
     .map_err(|error| anyhow!("failed to build location navigation request: {error}"))?;
     let referrer_request = initiator.map(|source| (source, request.clone()));
-    let mut response = loader
-        .fetch_raw_stream_with_cancel(request, FetchCancelHandle::new())
-        .await?;
+    let file_navigation = (url.scheme() == "file").then(|| {
+        NavigationResourceLoader::new(loader.clone(), url.clone(), loader.resource_task_runner())
+    });
+    let mut response = match &file_navigation {
+        Some(navigation) => navigation.fetch_raw_stream(request).await?,
+        None => {
+            loader
+                .fetch_raw_stream_with_cancel(request, FetchCancelHandle::new())
+                .await?
+        }
+    };
     if matches!(response.status, 204 | 205) {
         while response.next_chunk().await.is_some() {}
         response.finish().await?;
@@ -204,9 +216,13 @@ pub(super) async fn load_followed_location_navigation(
                 .unwrap_or_default()
         })
         .unwrap_or_default();
+    let file_seed = file_navigation
+        .map(|navigation| navigation.commit(response.final_url.clone()).map(Box::new))
+        .transpose()?;
     Ok(LoadedFollowedLocationNavigation::StreamingDocument {
         requested_url: url,
         response: Box::new(response),
+        file_seed,
         document_referrer,
     })
 }
@@ -282,15 +298,18 @@ pub(super) async fn bootstrap_committed_followed_location_navigation(
         LoadedFollowedLocationNavigation::StreamingDocument {
             requested_url,
             response,
+            file_seed,
             ..
         } => {
-            // The new top-level Document derives its cookie site from the
-            // final response URL and keeps the Page's network policy.
-            let loader_for_bootstrap =
-                ResourceRequestClient::from_browser_resource_runtime_with_page_network_policy(
-                    loader.browser_resource_runtime(),
-                    loader.page_network_policy(),
-                );
+            let loader_for_bootstrap = match file_seed.as_deref() {
+                Some(seed) => ResourceRequestClient::for_committed_navigation(seed),
+                None => {
+                    ResourceRequestClient::from_browser_resource_runtime_with_page_network_policy(
+                        loader.browser_resource_runtime(),
+                        loader.page_network_policy(),
+                    )
+                }
+            };
             let navigation_redirected = response.redirected;
             let navigation_redirect_chain = response
                 .redirect_chain
@@ -573,7 +592,8 @@ fn build_followed_location_navigation_request(
             .with_top_level_navigation_cookie_context()
             .with_browser_navigation_kind(browser_navigation_kind);
         if let Some(initiator) = initiator {
-            request
+            initiator
+                .authorize_file_navigation(request)
                 .with_initiator_url(initiator.url())
                 .with_request_origin(initiator.origin())
                 .with_subresource_request_metadata(initiator.request_metadata())

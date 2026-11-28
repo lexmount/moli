@@ -2108,7 +2108,7 @@ pub(in crate::native_bridge) fn navigate_form_target_browsing_context(
         ) {
             return true;
         }
-        if !queue_top_level_location_navigation(runtime_ptr, resolved_url, history) {
+        if !queue_top_level_location_navigation(runtime_ptr, resolved_url, history, None) {
             return false;
         }
         crate::context_bootstrap::web_mcp::bind_root_navigation(

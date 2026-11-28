@@ -1063,13 +1063,8 @@ impl NavigationEngine {
         // navigation seed remains the exact authority for the committed
         // Document as long as its runtime is still registered under this
         // owner and matches the target's captured policy.
-        self.resource_runtime = Some(committed_runtime.clone());
-        Ok(
-            ResourceRequestClient::from_browser_resource_runtime_with_page_network_policy(
-                committed_runtime,
-                seed.page_network_policy(),
-            ),
-        )
+        self.resource_runtime = Some(committed_runtime);
+        Ok(ResourceRequestClient::for_committed_navigation(&seed))
     }
 
     pub fn resource_request_client(&self) -> Option<ResourceRequestClient> {
@@ -1271,6 +1266,7 @@ impl NavigationEngine {
         infer_referrer_from_initiator: bool,
         request_metadata: Option<moli_fetch::SubresourceRequestMetadata>,
         request_origin: Option<moli_url::WebOrigin>,
+        local_file_access: moli_fetch::LocalFileNavigationAccess,
         method: &str,
         raw_url: &str,
         body: Option<bytes::Bytes>,
@@ -1306,6 +1302,9 @@ impl NavigationEngine {
             }
         })
         .context("failed to build request")?;
+        if request.url.scheme() == "file" {
+            request = request.with_local_file_navigation_access(local_file_access);
+        }
         request.set_auth(auth.map(Into::into));
         self.fetch_config.bind_additional_cookie_scope(&request);
         let navigation_loader =
@@ -1365,6 +1364,7 @@ impl NavigationEngine {
             infer_referrer_from_initiator,
             request_metadata,
             request_origin,
+            moli_fetch::LocalFileNavigationAccess::Denied,
             method,
             raw_url,
             body.map(bytes::Bytes::from),
@@ -1385,6 +1385,7 @@ impl NavigationEngine {
         infer_referrer_from_initiator: bool,
         request_metadata: Option<moli_fetch::SubresourceRequestMetadata>,
         request_origin: Option<moli_url::WebOrigin>,
+        local_file_access: moli_fetch::LocalFileNavigationAccess,
         method: &str,
         raw_url: &str,
         body: Option<bytes::Bytes>,
@@ -1401,6 +1402,7 @@ impl NavigationEngine {
             infer_referrer_from_initiator,
             request_metadata,
             request_origin,
+            local_file_access,
             method,
             raw_url,
             body,

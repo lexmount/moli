@@ -1,6 +1,7 @@
 use super::backing_store::{
     attach_canvas_like_context_object, canvas_like_dimensions, canvas_like_has_context,
-    reset_canvas_like_backing_store, with_canvas_like_pixels_mut,
+    canvas_like_origin_clean, reset_canvas_like_backing_store, set_canvas_like_origin_clean,
+    with_canvas_like_pixels_mut,
 };
 use super::image_bitmap::build_image_bitmap_object;
 use super::objects::build_offscreen_2d_context_object;
@@ -173,7 +174,7 @@ pub(crate) fn offscreen_canvas_get_context_callback<'s>(
 
 pub(crate) fn offscreen_canvas_convert_to_blob_callback<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    _args: v8::FunctionCallbackArguments<'s>,
+    args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
     let Some(resolver) = v8::PromiseResolver::new(scope) else {
@@ -181,6 +182,16 @@ pub(crate) fn offscreen_canvas_convert_to_blob_callback<'s>(
         return;
     };
     let promise = resolver.get_promise(scope);
+    if !canvas_like_origin_clean(scope, args.this()) {
+        let error = crate::context_bootstrap::new_dom_exception_value(
+            scope,
+            "Canvas is not origin-clean.",
+            "SecurityError",
+        );
+        let _ = resolver.reject(scope, error);
+        rv.set(promise.into());
+        return;
+    }
     let value = build_blob_object(scope, Vec::new(), String::new())
         .map(Into::into)
         .unwrap_or_else(|| v8::undefined(scope).into());
@@ -220,6 +231,7 @@ pub(crate) fn offscreen_canvas_transfer_to_image_bitmap_callback<'s>(
     if let Some(bitmap) = bitmap
         && with_canvas_like_pixels_mut(scope, canvas, |bytes, _width, _height| bytes.fill(0))
     {
+        set_canvas_like_origin_clean(scope, canvas, true);
         rv.set(bitmap.into());
         return;
     }

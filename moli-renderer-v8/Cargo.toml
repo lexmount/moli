@@ -130,7 +130,7 @@ strum = { version = "0.28.0", features = ["derive"] }
 # Tokio >=1.53 releases a dropped mpsc receiver's waker even while context-wide
 # senders remain (tokio-rs/tokio#8095). Older versions retain stopped renderer
 # I/O drivers and leak an eventpoll/eventfd pair per closed target on Linux.
-tokio = { version = "1.53.1", features = ["io-util", "macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
+tokio = { version = "1.53.1", features = ["fs", "io-util", "macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
 tracing = "0.1.41"
 url = "2.5.7"
 idna = "1.0"

@@ -173,7 +173,12 @@ pub(crate) fn native_font_face_projection_for_stylesheet(
 
     let mut projection = NativeStylesheetFontFaceProjection::default();
     let contents = stylesheet.contents(&guard);
-    collect_font_face_rule_projections(contents.rules(&guard), &guard, &mut projection.all_rules);
+    collect_font_face_rule_projections(
+        contents.rules(&guard),
+        &contents.url_data.0,
+        &guard,
+        &mut projection.all_rules,
+    );
 
     let document_stylesheet = DocumentStyleSheet::new(stylesheet.clone());
     projection.effective_rule_addresses = native_effective_font_face_rule_addresses_with_guard(
@@ -217,9 +222,11 @@ pub(crate) fn native_font_face_rules_for_stylesheet(
     stylesheet: &ServoArc<Stylesheet>,
 ) -> Vec<NativeStylesheetFontFaceRuleProjection> {
     let guard = stylesheet.shared_lock.read();
+    let contents = stylesheet.contents(&guard);
     let mut rules = Vec::new();
     collect_font_face_rule_projections(
-        stylesheet.contents(&guard).rules(&guard),
+        contents.rules(&guard),
+        &contents.url_data.0,
         &guard,
         &mut rules,
     );
@@ -228,6 +235,7 @@ pub(crate) fn native_font_face_rules_for_stylesheet(
 
 fn collect_font_face_rule_projections(
     rules: &[CssRule],
+    base_url: &url::Url,
     guard: &style::shared_lock::SharedRwLockReadGuard<'_>,
     projections: &mut Vec<NativeStylesheetFontFaceRuleProjection>,
 ) {
@@ -252,16 +260,19 @@ fn collect_font_face_rule_projections(
                         family: family.name.to_string(),
                         source: serialized_source,
                     },
-                    sources: native_font_sources(source),
+                    sources: native_font_sources(source, base_url),
                 });
             }
             continue;
         }
-        collect_font_face_rule_projections(rule.children(guard), guard, projections);
+        collect_font_face_rule_projections(rule.children(guard), base_url, guard, projections);
     }
 }
 
-fn native_font_sources(source_list: &SourceList) -> Vec<moli_css_parse::CssFontSource> {
+fn native_font_sources(
+    source_list: &SourceList,
+    base_url: &url::Url,
+) -> Vec<moli_css_parse::CssFontSource> {
     source_list
         .0
         .iter()
@@ -276,7 +287,7 @@ fn native_font_sources(source_list: &SourceList) -> Vec<moli_css_parse::CssFontS
                 return None;
             }
             let url = source.url.url()?;
-            matches!(url.scheme(), "http" | "https" | "data" | "blob")
+            crate::css_resource_urls::font_source_url_is_fetchable(url, base_url)
                 .then(|| moli_css_parse::CssFontSource::Url(url.to_string()))
         })
         .collect()

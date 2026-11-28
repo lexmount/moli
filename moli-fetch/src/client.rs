@@ -229,6 +229,14 @@ impl FetchClientHandle {
         self.config.tls_verify_host()
     }
 
+    pub fn http_max_response_size(&self) -> Option<usize> {
+        self.config.http_max_response_size()
+    }
+
+    pub fn local_file_policy(&self) -> moli_url_policy::LocalFilePolicy {
+        self.config.local_file_policy()
+    }
+
     pub fn tls_config(&self) -> &moli_curl::CurlTlsConfig {
         self.config.tls_config()
     }

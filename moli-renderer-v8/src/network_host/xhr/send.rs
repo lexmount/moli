@@ -94,8 +94,6 @@ pub(super) fn xhr_send_callback<'s>(
             return;
         }
     };
-    let url_policy = moli_url_policy::route_xml_http_request_url(&prepared.resolved_url);
-
     mark_xhr_timeout_start(scope, xhr);
     let open_generation =
         xhr_state_number_property(scope, xhr, XHR_OPEN_GENERATION_SLOT).unwrap_or(0.0);
@@ -127,7 +125,12 @@ pub(super) fn xhr_send_callback<'s>(
         return;
     }
 
-    if let Err(error) = url_policy {
+    if !prepared
+        .resource_loader
+        .request_client()
+        .permits_file_script_read(&prepared.resolved_url)
+        && let Err(error) = moli_url_policy::route_xml_http_request_url(&prepared.resolved_url)
+    {
         record_xhr_failure(scope, host, xhr, prepared, async_request, error.to_string());
         return;
     }

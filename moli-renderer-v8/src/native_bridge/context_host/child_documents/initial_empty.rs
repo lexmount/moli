@@ -97,6 +97,7 @@ impl PageScriptHost {
             );
         let document_base_url = self.document_base_url_for_handle(document_handle);
         let document_origin = init.inherited_origin.clone();
+        let sandboxed_origin = init.policy_container.sandbox.forces_opaque_origin;
         let referrer_policy = init.policy_container.referrer_policy.clone();
         let subresource_policy_context =
             crate::types::SubresourcePolicyContext::from_document_policy(&init.policy_container);
@@ -127,7 +128,8 @@ impl PageScriptHost {
                 self.document_url_for_handle(document_handle),
                 self.document_base_url_for_handle(document_handle),
                 document_origin,
-            ),
+            )
+            .with_sandboxed_origin(sandboxed_origin),
             crate::network::context::DocumentResourceAuthoritySource::Inherited(
                 init.resource_authority,
             ),

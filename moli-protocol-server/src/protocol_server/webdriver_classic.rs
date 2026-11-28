@@ -4283,7 +4283,9 @@ pub(super) async fn webdriver_classic_send_keys_to_element(
             Err(error) => return classic_error_into_response(error),
         };
     if is_file_input {
-        match webdriver_classic_send_file_input_keys(&binding, &context, &element_id, &text).await {
+        match webdriver_classic_send_file_input_keys(&state, &binding, &context, &element_id, &text)
+            .await
+        {
             Ok(()) => {
                 return classic_success_into_response(Value::Null);
             }
@@ -4594,6 +4596,7 @@ async fn webdriver_classic_element_is_file_input(
 }
 
 async fn webdriver_classic_send_file_input_keys(
+    state: &AppState,
     binding: &ClassicSessionBinding,
     context: &ClassicDevToolsCommandContext,
     element_id: &str,
@@ -4614,6 +4617,21 @@ async fn webdriver_classic_send_file_input_keys(
         return Err(ClassicError::new(
             ClassicErrorCode::InvalidArgument,
             "the element can not hold multiple files",
+        ));
+    }
+    if let Err(error) = state
+        .navigation_runtime_config
+        .fetch_config()
+        .local_file_policy()
+        .check_host_file_access()
+        && !state
+            .classic_session_registry
+            .lock()
+            .owns_uploaded_files(&binding.session_id, &paths)
+    {
+        return Err(ClassicError::new(
+            ClassicErrorCode::InvalidArgument,
+            error.to_string(),
         ));
     }
     let files = selected_files_from_paths(paths)

@@ -12,6 +12,35 @@ impl PageScriptHost {
         handle: DomHandle,
         resolved_url: &str,
     ) -> bool {
+        self.navigate_child_browsing_context_to_url_with_initiator(
+            scope,
+            handle,
+            resolved_url,
+            false,
+        )
+    }
+
+    pub(crate) fn navigate_child_browsing_context_from_browser(
+        &mut self,
+        scope: &mut v8::PinScope<'_, '_>,
+        handle: DomHandle,
+        resolved_url: &str,
+    ) -> bool {
+        self.navigate_child_browsing_context_to_url_with_initiator(
+            scope,
+            handle,
+            resolved_url,
+            true,
+        )
+    }
+
+    fn navigate_child_browsing_context_to_url_with_initiator(
+        &mut self,
+        scope: &mut v8::PinScope<'_, '_>,
+        handle: DomHandle,
+        resolved_url: &str,
+        browser_initiated: bool,
+    ) -> bool {
         let download_policy = self.capture_child_navigation_download_policy(scope, handle);
         if !self.child_browsing_contexts.contains_key(&handle) {
             return false;
@@ -19,6 +48,33 @@ impl PageScriptHost {
         let Some(url) = Url::parse(resolved_url).ok() else {
             return false;
         };
+        if url.scheme() == "file" {
+            let dispatch_scope = self.entered_owner_dispatch_scope(scope);
+            let Some(source) = self.document_resource_loader_for_dispatch_scope(dispatch_scope)
+            else {
+                return false;
+            };
+            let client = source.request_client();
+            let allows_local_files = !client.local_file_policy().blocks_file_urls()
+                && (browser_initiated || client.has_document_file_access());
+            if !allows_local_files {
+                return false;
+            }
+            let context = source.fetch_context();
+            let request = ChildBrowsingContextNavigationRequest {
+                initiator: crate::runtime::RendererNavigationInitiator::new(
+                    context.document_url().clone(),
+                    context.request_origin(),
+                    None,
+                    allows_local_files,
+                ),
+                url,
+                method: "GET".to_owned(),
+                body: None,
+                request_headers: Vec::new(),
+            };
+            return self.navigate_child_browsing_context_with_request(scope, handle, request);
+        }
         self.reject_replaced_service_worker_child_client_navigation(
             handle,
             "The navigation was canceled.".to_owned(),
@@ -98,6 +154,25 @@ impl PageScriptHost {
             return false;
         };
         let queued = self.queue_child_browsing_context_navigation_to_url(handle, &url);
+        self.remember_child_navigation_download_policy(handle, download_policy, queued)
+    }
+
+    pub(crate) fn queue_child_file_navigation_without_seed_update(
+        &mut self,
+        scope: &mut v8::PinScope<'_, '_>,
+        handle: DomHandle,
+        url: Url,
+        initiator: crate::runtime::RendererNavigationInitiator,
+    ) -> bool {
+        let download_policy = self.capture_child_navigation_download_policy(scope, handle);
+        let request = ChildBrowsingContextNavigationRequest {
+            url,
+            method: "GET".to_owned(),
+            body: None,
+            request_headers: Vec::new(),
+            initiator,
+        };
+        let queued = self.queue_child_browsing_context_navigation_request(handle, request);
         self.remember_child_navigation_download_policy(handle, download_policy, queued)
     }
 

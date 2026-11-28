@@ -405,7 +405,8 @@ impl PageScriptHost {
                 self.document_url_for_handle(document_handle),
                 self.document_base_url_for_handle(document_handle),
                 resource_context_origin,
-            ),
+            )
+            .with_sandboxed_origin(document_policy_container.sandbox.forces_opaque_origin),
             resource_authority,
         );
         // A preserved initial LocalWindow may already have a history surface

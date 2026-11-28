@@ -881,8 +881,13 @@ async fn webdriver_classic_element_reference_owner_rejects_forged_and_stales_aft
     assert_eq!(fresh_text["value"], json!("second"));
 }
 #[tokio::test]
-async fn webdriver_classic_file_navigation_returns_stable_unknown_error_without_replacement() {
-    let app = build_router(test_state());
+async fn webdriver_classic_blocked_file_navigation_returns_stable_unknown_error_without_replacement()
+ {
+    let app = build_router(protocol_server_test_state(
+        "127.0.0.1:9222".parse().expect("test address"),
+        host_file_access_blocked_config(),
+        OptionalResourceFetchMask::NONE,
+    ));
     let session = classic_request_json(app.clone(), Method::POST, "/session").await;
     let session_id = session["value"]["sessionId"]
         .as_str()

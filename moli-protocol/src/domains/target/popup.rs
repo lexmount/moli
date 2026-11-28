@@ -172,6 +172,16 @@ pub(crate) fn prepare_popup_target(
         session_storage_store,
         initial_empty_document_storage_key,
     } = activation.into_parts();
+    // An auxiliary target created by renderer code is a document navigation,
+    // even when its initial document is later materialized by the Browser.
+    if url::Url::parse(&url).is_ok_and(|url| url.scheme() == "file")
+        && (conn.local_file_policy().blocks_file_urls()
+            || !navigation_initiator
+                .as_ref()
+                .is_some_and(|source| source.allows_local_file_navigation()))
+    {
+        return None;
+    }
     let exposes_opener = matches!(
         source,
         moli_core::page::RendererPopupActivationSource::Window {

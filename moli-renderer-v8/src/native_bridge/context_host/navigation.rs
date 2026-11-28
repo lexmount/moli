@@ -1,4 +1,4 @@
-use super::PageScriptHost;
+use super::{OwnerDispatchScope, PageScriptHost};
 use crate::page_task_queue::RendererTopLevelNavigationHandoff;
 use crate::runtime::{
     RendererBrowserContextRuntime, RendererDocumentLifecycleIdentity,
@@ -104,6 +104,26 @@ pub(crate) enum PendingTopLevelNavigation {
 }
 
 impl PageScriptHost {
+    pub(crate) fn local_file_navigation_source(
+        &self,
+        dispatch_scope: OwnerDispatchScope,
+    ) -> Option<LocationNavigationSource> {
+        let loader = self.document_resource_loader_for_dispatch_scope(dispatch_scope)?;
+        if !loader.request_client().has_document_file_access() {
+            return None;
+        }
+        let context = loader.fetch_context();
+        Some(LocationNavigationSource {
+            initiator: crate::runtime::RendererNavigationInitiator::new(
+                context.document_url().clone(),
+                context.request_origin(),
+                None,
+                true,
+            ),
+            initial_document_environment: None,
+        })
+    }
+
     pub(crate) fn record_session_history_update(
         &mut self,
         update: moli_page_types::SessionHistoryUpdate,

@@ -1166,6 +1166,7 @@ impl BackgroundNavigationLoadJob {
                     self.load_inputs.infer_navigation_referrer,
                     self.load_inputs.navigation_request_metadata.clone(),
                     self.load_inputs.navigation_request_origin.clone(),
+                    self.load_inputs.local_file_access,
                     &self.method,
                     &self.raw_url,
                     self.body,
@@ -1851,6 +1852,10 @@ impl CdpConnection {
         .with_main_document_commit_seed(
             RendererMainDocumentCommitSeed::from_navigation(navigation)
                 .with_browsing_context_group(group),
+        );
+        inputs.local_file_access = navigation.request_load_policy.local_file_access(
+            self.local_file_policy(),
+            navigation.navigation_initiator.as_ref(),
         );
         inputs.auxiliary_document_response = navigation.auxiliary_document_response.clone();
         if let Some(initiator) = navigation.navigation_initiator.as_ref() {
@@ -3724,6 +3729,9 @@ fn build_navigation_network_request(
     .with_top_level_navigation_cookie_context()
     .with_page_network_policy()
     .with_browser_navigation_kind(load_inputs.browser_navigation_kind);
+    if request.url.scheme() == "file" {
+        request = request.with_local_file_navigation_access(load_inputs.local_file_access);
+    }
     if !load_inputs.infer_navigation_referrer {
         request = request.without_inferred_referrer();
     }

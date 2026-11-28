@@ -582,8 +582,12 @@ async fn fetch_about_blank_case_variants_materialize_empty_documents() -> Result
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn browser_fetch_rejects_file_navigation_without_reading_local_file() -> Result<()> {
-    let browser = Browser::new(AppConfig::default())?;
+async fn browser_fetch_rejects_file_navigation_with_a_blocking_policy() -> Result<()> {
+    let mut config = AppConfig::default();
+    config
+        .fetch_mut()
+        .set_local_file_policy(moli_fetch::LocalFilePolicy::BlockFileUrls);
+    let browser = Browser::new(config)?;
 
     let error = browser
         .fetch_with_wait_until(
@@ -1961,6 +1965,7 @@ async fn navigation_engine_service_worker_multipart_redirect_preserves_protocol_
                     true,
                     None,
                     None,
+                    moli_fetch::LocalFileNavigationAccess::Denied,
                     "POST",
                     &format!("{base_url}{upload_path}"),
                     Some(body.clone()),

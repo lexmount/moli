@@ -202,6 +202,16 @@ impl PageScriptHost {
         }
 
         let url = self.resolve_child_frame_owner_attribute_url(handle, raw_url);
+        if url.scheme() == "file"
+            && !self
+                .owner_dispatch_scope_for_node(handle)
+                .and_then(|scope| self.document_resource_loader_for_dispatch_scope(scope))
+                .is_some_and(|owner| owner.request_client().has_document_file_access())
+        {
+            return kind
+                .always_hosts_document()
+                .then_some(ChildBrowsingContextBootstrap::AboutBlank);
+        }
         if !kind.always_hosts_document()
             && (url.scheme() == "javascript"
                 || self.embedded_content_is_inside_media_element(handle)

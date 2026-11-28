@@ -203,7 +203,7 @@ pub(crate) fn window_open_callback<'s>(
         let host = unsafe { &*host_ptr };
         entered_window_api_base_url(scope, host)
     };
-    let url = if parsed.raw_url.is_empty() {
+    let mut url = if parsed.raw_url.is_empty() {
         Url::parse("about:blank").expect("about:blank should parse")
     } else {
         match Url::options()
@@ -221,6 +221,23 @@ pub(crate) fn window_open_callback<'s>(
             }
         }
     };
+    if url.scheme() == "file" {
+        let host = unsafe { &*host_ptr };
+        let source = host
+            .document_resource_loader_for_dispatch_scope(host.entered_owner_dispatch_scope(scope));
+        let client = source.as_ref().map(|loader| loader.request_client());
+        if !client.is_some_and(|client| client.has_document_file_access()) {
+            let open_empty = special_target != Some(SpecialBrowsingContextTarget::Current)
+                && client.is_some_and(|client| {
+                    client.web_security_disabled() && !client.local_file_policy().blocks_file_urls()
+                });
+            if !open_empty {
+                rv.set_null();
+                return;
+            }
+            url = Url::parse("about:blank").expect("about:blank should parse");
+        }
+    }
     if special_target == Some(SpecialBrowsingContextTarget::Current) {
         if parsed.raw_url.is_empty() {
             rv.set(entered_window.into());
@@ -258,6 +275,8 @@ pub(crate) fn window_open_callback<'s>(
         } else {
             creator_policy_container.referrer_policy.clone()
         },
+        host.document_resource_loader_for_dispatch_scope(host.entered_owner_dispatch_scope(scope))
+            .is_some_and(|loader| loader.request_client().has_document_file_access()),
     );
     creator_policy_container.document_referrer = if suppress_opener {
         navigation_initiator.document_referrer(&url)

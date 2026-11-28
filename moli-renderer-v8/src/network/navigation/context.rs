@@ -15,6 +15,7 @@ use crate::network::{BrowserResourceRuntime, PageNetworkPolicy, RendererResource
 pub struct DocumentFetchContextSeed {
     requested_url: Url,
     final_url: Url,
+    loaded_local_file: bool,
     resource_runtime: BrowserResourceRuntime,
     page_network_policy: PageNetworkPolicy,
     browser_site_context: Option<Arc<BrowserCookieFacadeContext>>,
@@ -29,10 +30,12 @@ impl DocumentFetchContextSeed {
         page_network_policy: PageNetworkPolicy,
         browser_site_context: Option<Arc<BrowserCookieFacadeContext>>,
         resource_task_runner: RendererResourceTaskRunner,
+        loaded_local_file: bool,
     ) -> Self {
         Self {
             requested_url,
             final_url,
+            loaded_local_file,
             resource_runtime,
             page_network_policy,
             browser_site_context,
@@ -46,6 +49,10 @@ impl DocumentFetchContextSeed {
 
     pub fn final_url(&self) -> &Url {
         &self.final_url
+    }
+
+    pub(crate) fn loaded_local_file(&self) -> bool {
+        self.loaded_local_file
     }
 
     pub fn browser_resource_runtime(&self) -> BrowserResourceRuntime {

@@ -181,10 +181,16 @@ pub struct StreamingRawResponse {
     pub cache_state: crate::ResponseCacheState,
     pub negotiated_http_version: Option<NegotiatedHttpVersion>,
     network_request_extra_info: Option<NetworkRequestExtraInfo>,
-    body_chunks: mpsc::UnboundedReceiver<Vec<u8>>,
+    body_chunks: RawBodyChunks,
     cancel_handle: FetchCancelHandle,
     completion: Option<oneshot::Receiver<Result<()>>>,
     lifetime_lease: Option<StreamingResponseLifetimeLease>,
+}
+
+#[derive(Debug)]
+enum RawBodyChunks {
+    Unbounded(mpsc::UnboundedReceiver<Vec<u8>>),
+    Bounded(mpsc::Receiver<Vec<u8>>),
 }
 
 impl StreamingRawResponse {
@@ -200,29 +206,58 @@ impl StreamingRawResponse {
         cancel_handle: FetchCancelHandle,
         completion: oneshot::Receiver<Result<()>>,
     ) -> Self {
-        Self {
-            final_url,
-            status,
-            status_text: None,
-            headers,
-            request_cookie_report,
-            cookie_set_reports,
-            redirected,
-            redirect_chain,
-            from_cache: false,
-            cache_state: Default::default(),
-            negotiated_http_version: None,
-            network_request_extra_info: None,
+        Self::new_with_head(
+            ResponseHead {
+                final_url,
+                status,
+                status_text: None,
+                headers,
+                request_cookie_report,
+                cookie_set_reports,
+                redirected,
+                redirect_chain,
+                from_cache: false,
+                cache_state: Default::default(),
+                negotiated_http_version: None,
+            },
             body_chunks,
             cancel_handle,
-            completion: Some(completion),
-            lifetime_lease: None,
-        }
+            completion,
+        )
     }
 
     pub fn new_with_head(
         head: ResponseHead,
         body_chunks: mpsc::UnboundedReceiver<Vec<u8>>,
+        cancel_handle: FetchCancelHandle,
+        completion: oneshot::Receiver<Result<()>>,
+    ) -> Self {
+        Self::from_body_channels(
+            head,
+            RawBodyChunks::Unbounded(body_chunks),
+            cancel_handle,
+            completion,
+        )
+    }
+
+    /// Create a response from a producer that can wait for body capacity.
+    pub fn new_with_bounded_body(
+        head: ResponseHead,
+        body_chunks: mpsc::Receiver<Vec<u8>>,
+        cancel_handle: FetchCancelHandle,
+        completion: oneshot::Receiver<Result<()>>,
+    ) -> Self {
+        Self::from_body_channels(
+            head,
+            RawBodyChunks::Bounded(body_chunks),
+            cancel_handle,
+            completion,
+        )
+    }
+
+    fn from_body_channels(
+        head: ResponseHead,
+        body_chunks: RawBodyChunks,
         cancel_handle: FetchCancelHandle,
         completion: oneshot::Receiver<Result<()>>,
     ) -> Self {
@@ -260,7 +295,10 @@ impl StreamingRawResponse {
     }
 
     pub async fn next_chunk(&mut self) -> Option<Vec<u8>> {
-        self.body_chunks.recv().await
+        match &mut self.body_chunks {
+            RawBodyChunks::Unbounded(chunks) => chunks.recv().await,
+            RawBodyChunks::Bounded(chunks) => chunks.recv().await,
+        }
     }
 
     pub fn with_network_request_extra_info(
@@ -284,7 +322,10 @@ impl StreamingRawResponse {
 
     pub fn try_next_chunk(&mut self) -> Option<Vec<u8>> {
         // See StreamingHtmlResponse::try_next_chunk.
-        self.body_chunks.try_recv().ok()
+        match &mut self.body_chunks {
+            RawBodyChunks::Unbounded(chunks) => chunks.try_recv().ok(),
+            RawBodyChunks::Bounded(chunks) => chunks.try_recv().ok(),
+        }
     }
 
     /// Returns whether the producer has closed the body channel and every
@@ -295,11 +336,14 @@ impl StreamingRawResponse {
     /// a streaming consumer distinguish an open, temporarily empty body from
     /// an already exhausted one without waiting.
     pub fn body_chunk_stream_is_exhausted(&self) -> bool {
-        self.body_chunks.is_closed() && self.body_chunks.is_empty()
+        match &self.body_chunks {
+            RawBodyChunks::Unbounded(chunks) => chunks.is_closed() && chunks.is_empty(),
+            RawBodyChunks::Bounded(chunks) => chunks.is_closed() && chunks.is_empty(),
+        }
     }
 
     pub async fn finish(&mut self) -> Result<()> {
-        while self.body_chunks.recv().await.is_some() {}
+        while self.next_chunk().await.is_some() {}
         let completion = self
             .completion
             .as_mut()

@@ -125,6 +125,12 @@ enum DefaultTargetRuntimeInitialization {
 }
 
 impl CdpScheduler {
+    pub(crate) fn local_file_policy(&self) -> moli_fetch::LocalFilePolicy {
+        self.state
+            .with_state(|state| state.local_file_policy())
+            .expect("live protocol actor state")
+    }
+
     pub(crate) fn webdriver_node_reference(
         &mut self,
         context: &moli_protocol::automation::AutomationContext,

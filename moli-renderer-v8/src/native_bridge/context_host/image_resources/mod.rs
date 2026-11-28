@@ -78,8 +78,13 @@ impl ImageResponseDescriptor {
         response: &crate::protocol_types::NavigationResponse,
         readable: bool,
     ) -> Self {
-        // Canvas readback is currently supported for first-party raster
-        // images. The whole response must remain in the request's origin,
+        if request_url.scheme() == "file" {
+            self.readable_from_request_origin = readable
+                && response.final_url == *request_url
+                && response.redirect_chain.is_empty();
+            return self;
+        }
+        // Canvas readback for HTTP raster images requires first-party delivery. The whole response must remain in the request's origin,
         // including delivery through redirects or a service worker.
         let origin = request_url.origin();
         self.readable_from_request_origin = readable
@@ -363,13 +368,12 @@ impl super::PageScriptHost {
         self.image_resources.is_ready(element)
     }
 
-    pub(crate) fn same_origin_canvas_image(
+    pub(crate) fn canvas_image_for_draw(
         &self,
         element: DomHandle,
         origin: &moli_url::WebOrigin,
-    ) -> Option<(std::sync::Arc<moli_image::RgbaImage>, f64)> {
-        self.image_resources
-            .same_origin_canvas_image(element, origin)
+    ) -> Option<(std::sync::Arc<moli_image::RgbaImage>, f64, bool)> {
+        self.image_resources.canvas_image_for_draw(element, origin)
     }
 
     pub(crate) fn has_ready_image_request(&self, request_key: &ImageRequestKey) -> bool {

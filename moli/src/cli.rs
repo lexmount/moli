@@ -685,6 +685,16 @@ pub struct CommonArgs {
     )]
     pub block_private_networks: bool,
 
+    /// Block file URL loading, including browser-initiated navigation.
+    /// Also enabled by MOLI_BLOCK_FILE_URLS=1.
+    #[arg(long)]
+    pub block_file_urls: bool,
+
+    /// Block file URLs and automation-selected host paths.
+    /// Also enabled by MOLI_BLOCK_HOST_FILE_ACCESS=1.
+    #[arg(long)]
+    pub block_host_file_access: bool,
+
     /// Block CIDRs for directly connected request targets. Proxy-resolved
     /// targets must be filtered by the configured proxy.
     #[arg(long)]

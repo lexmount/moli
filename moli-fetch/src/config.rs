@@ -7,6 +7,7 @@ use std::{
 use cidr::AnyIpCidr;
 use moli_browser_profile::{BrowserIdentityProfile, DEFAULT_ACCEPT_LANGUAGE};
 use moli_curl::{CurlTlsConfig, NetworkAddressPolicy};
+use moli_url_policy::LocalFilePolicy;
 
 use crate::{Request, WebBotAuthSigner};
 
@@ -60,6 +61,7 @@ pub struct FetchConfig {
     http_max_response_size: Option<usize>,
     block_private_networks: bool,
     block_cidrs: Vec<AnyIpCidr>,
+    local_file_policy: LocalFilePolicy,
     tls: CurlTlsConfig,
     web_bot_auth: Option<WebBotAuthSigner>,
 }
@@ -274,6 +276,14 @@ impl FetchConfig {
         self.tls.verify
     }
 
+    pub fn set_local_file_policy(&mut self, policy: LocalFilePolicy) {
+        self.local_file_policy = policy;
+    }
+
+    pub fn local_file_policy(&self) -> LocalFilePolicy {
+        self.local_file_policy
+    }
+
     pub fn set_tls_verify_host(&mut self, tls_verify_host: bool) {
         self.tls.verify = tls_verify_host;
     }
@@ -458,6 +468,7 @@ impl Default for FetchConfig {
             http_max_response_size: None,
             block_private_networks: false,
             block_cidrs: Vec::new(),
+            local_file_policy: LocalFilePolicy::default(),
             tls: CurlTlsConfig::default(),
             web_bot_auth: None,
         }

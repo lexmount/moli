@@ -1,5 +1,7 @@
 use super::*;
 
+const SELENIUM_COW_ZIP: &str = "UEsDBBQAAAAAAMROi0K/wAzGBAAAAAQAAAADAAAAbW9vQ09XClBLAQIUAxQAAAAAAMROi0K/\nwAzGBAAAAAQAAAADAAAAAAAAAAAAAACggQAAAABtb29QSwUGAAAAAAEAAQAxAAAAJQAAAAAA\n";
+
 #[tokio::test]
 async fn webdriver_classic_upload_file_matches_selenium_remote_zip_endpoint() {
     // Matches Chromium chromedriver's UploadFile unit fixture and Selenium
@@ -15,7 +17,7 @@ async fn webdriver_classic_upload_file_matches_selenium_remote_zip_endpoint() {
         Method::POST,
         &format!("/session/{session_id}/se/file"),
         json!({
-            "file": "UEsDBBQAAAAAAMROi0K/wAzGBAAAAAQAAAADAAAAbW9vQ09XClBLAQIUAxQAAAAAAMROi0K/\nwAzGBAAAAAQAAAADAAAAAAAAAAAAAACggQAAAABtb29QSwUGAAAAAAEAAQAxAAAAJQAAAAAA\n"
+            "file": SELENIUM_COW_ZIP
         }),
     )
     .await;
@@ -40,7 +42,11 @@ async fn webdriver_classic_upload_file_matches_selenium_remote_zip_endpoint() {
 async fn webdriver_classic_download_files_match_selenium_remote_extension() {
     let (fixture_addr, fixture_server) =
         spawn_delayed_download_fixture_server("Hello, World!", Duration::from_millis(20)).await;
-    let app = build_router(test_state());
+    let app = build_router(protocol_server_test_state(
+        "127.0.0.1:9222".parse().expect("test address"),
+        host_file_access_blocked_config(),
+        OptionalResourceFetchMask::NONE,
+    ));
     let session = classic_request_json_with_body(
         app.clone(),
         Method::POST,
@@ -865,5 +871,61 @@ async fn webdriver_classic_locator_user_prompt_behavior_matches_chromium_wpt() {
             &format!("/session/{session_id}"),
         )
         .await;
+    }
+}
+
+#[tokio::test]
+async fn webdriver_classic_host_file_policy_admits_only_session_uploaded_files() {
+    let app = build_router(protocol_server_test_state(
+        "127.0.0.1:9222".parse().unwrap(),
+        host_file_access_blocked_config(),
+        OptionalResourceFetchMask::NONE,
+    ));
+    let owner = classic_request_json(app.clone(), Method::POST, "/session").await;
+    let other = classic_request_json(app.clone(), Method::POST, "/session").await;
+    let owner_id = owner["value"]["sessionId"].as_str().unwrap();
+    let other_id = other["value"]["sessionId"].as_str().unwrap();
+    let upload = classic_request_json_with_body(
+        app.clone(),
+        Method::POST,
+        &format!("/session/{owner_id}/se/file"),
+        json!({"file": SELENIUM_COW_ZIP}),
+    )
+    .await;
+    let uploaded = upload["value"].as_str().unwrap();
+    for (id, allowed) in [(owner_id, true), (other_id, false)] {
+        let page = classic_data_url("<input id='file' type='file'>");
+        let result = classic_request_json_with_body(
+            app.clone(),
+            Method::POST,
+            &format!("/session/{id}/url"),
+            json!({"url": page}),
+        )
+        .await;
+        assert_eq!(result["value"], Value::Null);
+        let element = classic_find_css_element_id(app.clone(), id, "#file").await;
+        let (status, _, result) = classic_request_status_headers_and_json_with_body(
+            app.clone(),
+            Method::POST,
+            &format!("/session/{id}/element/{element}/value"),
+            json!({"text": uploaded}),
+        )
+        .await;
+        if allowed {
+            assert_eq!(status, StatusCode::OK);
+            assert_eq!(result["value"], Value::Null);
+        } else {
+            assert_eq!(status, StatusCode::BAD_REQUEST);
+            assert_eq!(result["value"]["error"], "invalid argument");
+            assert_eq!(
+                result["value"]["message"],
+                "Host file access is disabled by browser policy"
+            );
+        }
+    }
+    for id in [owner_id, other_id] {
+        let deleted =
+            classic_request_json(app.clone(), Method::DELETE, &format!("/session/{id}")).await;
+        assert_eq!(deleted["value"], Value::Null);
     }
 }

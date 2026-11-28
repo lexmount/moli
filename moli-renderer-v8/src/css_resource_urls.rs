@@ -387,7 +387,17 @@ fn resolve_font_source_url(raw_url: &str, base_url: &Url) -> Option<Url> {
         .join(raw_url)
         .or_else(|_| Url::parse(raw_url))
         .ok()?;
-    matches!(url.scheme(), "http" | "https" | "data" | "blob").then_some(url)
+    font_source_url_is_fetchable(&url, base_url).then_some(url)
+}
+
+/// A file source is a candidate only in a stylesheet that is itself a file;
+/// the request client still decides whether the document may read it.
+pub(crate) fn font_source_url_is_fetchable(url: &Url, base_url: &Url) -> bool {
+    match url.scheme() {
+        "http" | "https" | "data" | "blob" => true,
+        "file" => base_url.scheme() == "file",
+        _ => false,
+    }
 }
 
 #[cfg(test)]

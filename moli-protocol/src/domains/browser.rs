@@ -10,7 +10,7 @@ use std::str::FromStr;
 
 use crate::automation::{
     AutomationCommand, AutomationResult, DevToolsError, DevToolsErrorKind,
-    DevToolsSetDownloadBehaviorCommand, DevToolsSetPermissionCommand,
+    DevToolsSetDownloadBehaviorCommand, DevToolsSetPermissionCommand, FrontendProtocol,
 };
 use crate::conn::{BrowserWindowBounds, CapturedBody, CdpConnection, Cmd, DownloadCommandError};
 use crate::domains::actions::BrowserAction;
@@ -423,6 +423,11 @@ pub(crate) fn set_download_behavior_command_output_plan(
     if !is_valid_download_behavior(params.behavior.as_str()) {
         return CommandOutputPlan::error(-32602, "InvalidParams");
     }
+    if params.download_path.is_some()
+        && let Err(error) = conn.local_file_policy().check_host_file_access()
+    {
+        return CommandOutputPlan::error(-32000, error.to_string());
+    }
 
     match params.browser_context_id {
         Some(browser_context_id) => conn.download_behavior.set_browser_context_policy(
@@ -498,6 +503,18 @@ fn execute_devtools_set_download_behavior(
             DevToolsErrorKind::InvalidArgument,
             "download behavior is invalid",
         ));
+    }
+
+    // Classic WebDriver only constructs this command for a server-created
+    // session directory. BiDi supplies its destination in the wire command.
+    if behavior.download_path.is_some()
+        && command.context.protocol != FrontendProtocol::WebDriverClassic
+    {
+        conn.local_file_policy()
+            .check_host_file_access()
+            .map_err(|error| {
+                DevToolsError::new(DevToolsErrorKind::InvalidArgument, error.to_string())
+            })?;
     }
 
     match target_contexts {

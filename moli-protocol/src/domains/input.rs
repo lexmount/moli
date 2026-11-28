@@ -1286,6 +1286,11 @@ fn start_devtools_dispatch_drag_event_command(
     owner: &CommandOwnerScope,
     command: DevToolsDispatchDragEventCommand,
 ) -> Result<Option<PendingInputCommandDispatch>, PendingInputCommandStartError> {
+    if !command.data.files.is_empty() {
+        conn.local_file_policy()
+            .check_host_file_access()
+            .map_err(PendingInputCommandStartError::renderer_error)?;
+    }
     let event_name = drag_event_name(command.event_type);
     let data = renderer_drag_data(command.data)?;
     start_page_input_command(

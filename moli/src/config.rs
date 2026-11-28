@@ -1,5 +1,6 @@
 use anyhow::{Context, Result, bail};
 use cidr::AnyIpCidr;
+use clap::builder::{BoolishValueParser, TypedValueParser};
 use moli_browser_profile::BrowserProfilePaths;
 use moli_core::{
     LayoutPolicy, OptionalResourceFetchMask,
@@ -7,7 +8,8 @@ use moli_core::{
     runtime::BrowserConfig,
 };
 use moli_fetch::{
-    FetchConfig, WebBotAuthProfile, WebBotAuthSigner, validate_http_host_resolve_entries,
+    FetchConfig, LocalFilePolicy, WebBotAuthProfile, WebBotAuthSigner,
+    validate_http_host_resolve_entries,
 };
 use moli_system_locale::system_languages;
 use std::path::PathBuf;
@@ -104,7 +106,31 @@ impl AppConfig {
     }
 }
 
+fn block_file_env(name: &str) -> Result<bool> {
+    let Some(value) = std::env::var_os(name) else {
+        return Ok(false);
+    };
+    BoolishValueParser::new()
+        .parse_ref(&clap::Command::new("moli"), None, &value)
+        .with_context(|| format!("Invalid value for {name}"))
+}
+
 fn apply_common_args(config: &mut AppConfig, common: &CommonArgs) -> Result<()> {
+    let env_blocks_file_urls = block_file_env("MOLI_BLOCK_FILE_URLS")?;
+    let env_blocks_host_files = block_file_env("MOLI_BLOCK_HOST_FILE_ACCESS")?;
+    let block_file_urls = common.block_file_urls || env_blocks_file_urls;
+    let block_host_file_access = common.block_host_file_access || env_blocks_host_files;
+    let local_file_policy = if block_host_file_access {
+        LocalFilePolicy::BlockHostFileAccess
+    } else if block_file_urls {
+        LocalFilePolicy::BlockFileUrls
+    } else {
+        LocalFilePolicy::BrowserCompatible
+    };
+    config
+        .browser
+        .fetch_mut()
+        .set_local_file_policy(local_file_policy);
     config
         .browser
         .set_web_security_disabled(common.disable_web_security);

@@ -371,7 +371,6 @@ fn realtime_refreshes_retained_overflow_after_transform_projection() {
     .unwrap();
 }
 
-#[cfg(feature = "devtools")]
 #[test]
 fn realtime_hit_testing_follows_pointer_events_and_visibility_changes() {
     let mut vm = new_parsed_test_vm(

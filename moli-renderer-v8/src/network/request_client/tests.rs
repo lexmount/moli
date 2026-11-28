@@ -23,6 +23,7 @@ use moli_fetch::{
     RequestMode, RequestResourceType, ResponseHead, ScriptFetchRequestMetadata,
     StreamingRawResponse, cookie_header_for_request,
 };
+use moli_url_policy::{LocalFileNavigationAccess, LocalFilePolicy};
 
 use super::{
     FetchConfig, Request, ResourceRequestClient, raw_subresource_memory_cache_key,
@@ -1347,6 +1348,146 @@ async fn local_blob_method_errors_reach_streaming_and_callback_consumers() -> Re
             "data: must not inherit the blob method restriction"
         );
         assert_eq!(data.body_text(), "payload");
+    }
+    Ok(())
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn file_navigation_checks_browser_policy_before_opening_existing_or_missing_paths()
+-> Result<()> {
+    let dir = tempfile::tempdir()?;
+    let path = dir.path().join("document.html");
+    std::fs::write(&path, "<p>local fixture</p>")?;
+    let present = Url::from_file_path(&path).expect("temporary file is absolute");
+    let missing = present.join("missing.html")?;
+    let navigation = |url: &Url, access| -> Result<Request> {
+        Ok(browser_navigation_request(url.as_str())?
+            .with_request_mode(RequestMode::Navigate)
+            .with_local_file_navigation_access(access))
+    };
+    let browser = ResourceRequestClient::new(&FetchConfig::default())?;
+    let loaded = browser
+        .fetch_text_stream(navigation(
+            &present,
+            LocalFileNavigationAccess::BrowserGranted,
+        )?)
+        .await?;
+    assert_eq!(loaded.body_text(), "<p>local fixture</p>");
+
+    for policy in [
+        LocalFilePolicy::BlockFileUrls,
+        LocalFilePolicy::BlockHostFileAccess,
+    ] {
+        let mut config = FetchConfig::default();
+        config.set_local_file_policy(policy);
+        config.set_web_security_disabled(true);
+        let client = ResourceRequestClient::new(&config)?;
+        for url in [&present, &missing] {
+            let error = client
+                .fetch_text_stream(navigation(url, LocalFileNavigationAccess::BrowserGranted)?)
+                .await
+                .expect_err("the startup policy must precede file opening");
+            assert_eq!(
+                error.to_string(),
+                "file URL is not accessible from this request"
+            );
+        }
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn file_script_consumers_bypass_pending_shared_loads() -> Result<()> {
+    use crate::frame_owner_model::{
+        DocumentId, FrameDocumentTaskOwner, FrameSchedulerLaneId, LocalWindowId,
+    };
+    use crate::native_bridge::WindowDocumentOwner;
+    use crate::network::{
+        context::{DocumentFetchContext, DocumentResourceAuthoritySource, DocumentResourceLoader},
+        loads::{ResourceLoadDisposition, ResourceLoadKind},
+        navigation::NavigationResourceLoader,
+    };
+
+    let directory = tempfile::tempdir()?;
+    let page = directory.path().join("page.html");
+    let script = "globalThis.fixtureLoaded = true;";
+    std::fs::write(&page, "<p>fixture</p>")?;
+    std::fs::write(directory.path().join("fixture.js"), script)?;
+    let url = Url::from_file_path(page).expect("fixture path is absolute");
+    let browser = ResourceRequestClient::new(&FetchConfig::default())?;
+    let runner = browser.resource_task_runner();
+    let navigation = NavigationResourceLoader::new(browser.handle(), url.clone(), runner.clone());
+    let navigation_request = browser_navigation_request(url.as_str())?
+        .with_local_file_navigation_access(LocalFileNavigationAccess::BrowserGranted);
+    navigation.fetch(navigation_request).await?;
+    let context = |id| {
+        DocumentFetchContext::new(
+            WindowDocumentOwner::Frame(FrameDocumentTaskOwner::new(
+                FrameSchedulerLaneId(1),
+                LocalWindowId(1),
+                DocumentId(id),
+            )),
+            url.clone(),
+            url.clone(),
+            "null",
+        )
+    };
+    let authorized = DocumentResourceLoader::for_committed_document(
+        context(1),
+        DocumentResourceAuthoritySource::Navigation(navigation.commit(url.clone())?),
+    );
+    let retired = authorized.fork_for_document(context(2));
+    assert!(retired.begin_detach());
+    retired.finish_detach();
+    let ungranted = DocumentResourceLoader::new(browser.handle(), runner, context(3));
+
+    let request = browser_navigation_request(url.join("fixture.js")?.as_str())?
+        .with_request_mode(RequestMode::NoCors)
+        .with_browser_request_metadata(BrowserRequestMetadata::Script)
+        .with_script_fetch_metadata(ScriptFetchRequestMetadata::default());
+    let client = authorized.request_client();
+    let loaded = client
+        .fetch_cacheable_script_text_stream(request.clone())
+        .await?;
+    assert_eq!(loaded.body_text(), script);
+    assert_eq!(client.memory_cache_diagnostics().entry_count, 0);
+
+    // Hold an authorized response in a synthetic pending load with the same
+    // cache key as both consumers. This controls completion without a timer.
+    let applied = client.apply_network_policy(request.clone())?;
+    let (key, lookup) = client.lookup_cached_script_text(&applied, "test");
+    let super::ScriptTextCacheLookup::Owner(pending) = lookup else {
+        panic!("expected to create a pending cache entry");
+    };
+    for document in [&retired, &ungranted] {
+        let client = document.request_client();
+        let applied = client.apply_network_policy(request.clone())?;
+        assert_eq!(
+            super::script_text_cache_key(&applied)
+                .for_page_cache_partition(client.page_network_policy.memory_cache_partition_id()),
+            key,
+        );
+    }
+    let callback_load = ungranted
+        .register_load(
+            ResourceLoadKind::Script,
+            ResourceLoadDisposition::Ordinary,
+            None,
+        )
+        .expect("ungranted document is active");
+    let (from_retired, from_ungranted_callback, ()) = tokio::join!(
+        biased;
+        retired.request_client().fetch_cacheable_script_text_stream(request.clone()),
+        ungranted
+            .request_client()
+            .fetch_cacheable_script_text_stream_with_load(request, callback_load),
+        async { client.complete_cached_script_text_load(&key, pending.load(), &applied, Ok(loaded)) },
+    );
+    for result in [from_retired, from_ungranted_callback] {
+        assert_eq!(
+            result.unwrap_err().to_string(),
+            "file URL is not accessible from this request"
+        );
     }
     Ok(())
 }

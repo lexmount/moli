@@ -15,7 +15,7 @@ use chromiumoxide_cdp::cdp::browser_protocol::page::{
 };
 use moli_core::page::{ChildFrameDocumentOpenedSnapshot, CompletedPageCommand, PendingPageCommand};
 use moli_fetch::NET_ERR_ABORTED_ERROR_TEXT;
-use moli_url_policy::{LocalFileNavigationAccess, route_navigation_url};
+use moli_url_policy::route_navigation_url;
 use serde_json::{Value, json};
 use url::Url;
 
@@ -2626,7 +2626,9 @@ fn start_navigate_to_url_command_with_background_policy_and_request(
             "Invalid navigation URL",
         ));
     };
-    if let Err(error) = route_navigation_url(&requested_url, LocalFileNavigationAccess::Denied) {
+    let file_access = request_load_policy
+        .local_file_access(conn.local_file_policy(), navigation_initiator.as_ref());
+    if let Err(error) = route_navigation_url(&requested_url, file_access) {
         return NavigateCommandStart::CompletePlan(CommandOutputPlan::error(
             -32000,
             error.to_string(),

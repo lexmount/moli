@@ -247,6 +247,11 @@ impl BufferedDocumentPreloadState {
             .clone()
             .expect("script preloads require the navigation resource task runner");
         for request in requests {
+            // The pre-bootstrap scanner has no Document capability yet.
+            // Let the parser request file scripts after that Document commits.
+            if request.url.scheme() == "file" && !loader.has_document_file_access() {
+                continue;
+            }
             let key = request.cache_key();
             if self.entries.contains_key(&key) {
                 continue;

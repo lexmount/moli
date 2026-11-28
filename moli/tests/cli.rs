@@ -156,6 +156,8 @@ fn parses_explicit_fetch_command_with_compatibility_flags() {
                 document_start_script: Vec::new(),
                 document_start_script_file: Vec::new(),
                 block_private_networks: false,
+                block_file_urls: false,
+                block_host_file_access: false,
                 block_cidrs: None,
                 log_level: Some(LogLevel::Info),
                 log_filter_scopes: Some("http,event".to_owned()),

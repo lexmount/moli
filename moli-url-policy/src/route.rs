@@ -14,6 +14,31 @@ pub enum BrowserUrlRoute {
     WebSocket,
 }
 
+/// Startup restrictions on file URL loading and automation-selected host paths.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum LocalFilePolicy {
+    #[default]
+    BrowserCompatible,
+    BlockFileUrls,
+    BlockHostFileAccess,
+}
+
+impl LocalFilePolicy {
+    pub fn blocks_file_urls(self) -> bool {
+        self != Self::BrowserCompatible
+    }
+
+    pub fn check_host_file_access(self) -> std::io::Result<()> {
+        if self == Self::BlockHostFileAccess {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                "Host file access is disabled by browser policy",
+            ));
+        }
+        Ok(())
+    }
+}
+
 /// File navigation is a browser-granted capability, not a consequence of URL
 /// parsing. Hosted browser entry points should use [`Self::Denied`].
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]

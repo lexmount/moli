@@ -15,6 +15,10 @@ use moli_core::page::{
 };
 
 impl ProtocolWorkflowState<'_> {
+    pub fn local_file_policy(&self) -> moli_fetch::LocalFilePolicy {
+        self.connection.local_file_policy()
+    }
+
     pub(crate) fn publish_input_step_output(
         self,
         mut context: CommandDispatchContext,

@@ -491,6 +491,8 @@ pub(crate) async fn load_service_worker_aware_external_script_source_outcome(
     }
 }
 
+/// A granted file URL is left to the request client, which decides whether
+/// this document may read it.
 fn local_or_unsupported_external_script_source_load_outcome(
     script: &PreparedScript,
     request_origin: &moli_url::WebOrigin,
@@ -520,7 +522,7 @@ fn local_or_unsupported_external_script_source_load_outcome(
                 script.url
             )),
         }),
-        "http" | "https" => None,
+        "http" | "https" | "file" => None,
         scheme => Some(failed_external_script_source_load_outcome(format!(
             "failed to fetch script `{}`: URL scheme `{scheme}` is not allowed",
             script.url
@@ -1020,7 +1022,7 @@ mod tests {
             immediate_external_script_source_load_outcome(
                 &unsupported,
                 &moli_url::WebOrigin::from_url(&unsupported.initiator_url),
-                None
+                None,
             )
             .expect("unsupported scheme should be synchronously terminal")
             .source_result
@@ -1032,10 +1034,14 @@ mod tests {
             immediate_external_script_source_load_outcome(
                 &network,
                 &moli_url::WebOrigin::from_url(&network.initiator_url),
-                None
+                None,
             )
             .is_none()
         );
+
+        let file = prepared_external_script("file:///reports/app.js", ScriptKind::Classic);
+        let file_origin = moli_url::WebOrigin::from_url(&file.initiator_url);
+        assert!(immediate_external_script_source_load_outcome(&file, &file_origin, None).is_none());
     }
 
     #[tokio::test]

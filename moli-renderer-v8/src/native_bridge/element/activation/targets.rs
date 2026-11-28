@@ -7,7 +7,9 @@ use crate::{
         sandbox_blocks_ancestor_or_top_navigation_from_source,
     },
     document_runtime::{DocumentPolicyContainer, DomHandle},
-    native_bridge::context_host::ChildBrowsingContextNavigationRequest,
+    native_bridge::context_host::{
+        ChildBrowsingContextNavigationRequest, LocationNavigationSource,
+    },
     util::v8str,
 };
 use moli_page_types::NavigationHistoryMutation;
@@ -89,12 +91,18 @@ pub(super) fn queue_top_level_location_navigation(
     runtime_ptr: *mut PageScriptHost,
     resolved_url: &str,
     history: NavigationHistoryMutation,
+    source: Option<LocationNavigationSource>,
 ) -> bool {
     let Ok(url) = url::Url::parse(resolved_url) else {
         return false;
     };
     let runtime = unsafe { &mut *runtime_ptr };
-    runtime.record_pending_location_navigation(url, None);
+    runtime.record_pending_location_navigation_with_kind(
+        url,
+        None,
+        moli_fetch::BrowserNavigationRequestKind::Navigate,
+        source,
+    );
     runtime.set_pending_location_navigation_history(history);
     true
 }
@@ -211,6 +219,9 @@ fn hyperlink_navigation_initiator(
             .unwrap_or_else(|| document_url.clone()),
         initiator_origin,
         referrer_policy,
+        runtime
+            .document_resource_loader_for_dispatch_scope(dispatch_scope)
+            .is_some_and(|loader| loader.request_client().has_document_file_access()),
     )
 }
 
@@ -805,6 +816,11 @@ pub(in crate::native_bridge) fn navigate_hyperlink_target_browsing_context<'s>(
             );
             return true;
         }
+        let file_source = if url.scheme() == "file" {
+            runtime.local_file_navigation_source(dispatch_scope)
+        } else {
+            None
+        };
         let can_intercept = moli_url::same_origin(runtime.document_url(), &url);
         // Every top-target hyperlink dispatches once after resolving its owner.
         // Cancellation or interception must prevent the navigation from queuing.
@@ -820,7 +836,12 @@ pub(in crate::native_bridge) fn navigate_hyperlink_target_browsing_context<'s>(
         ) {
             return true;
         }
-        return queue_top_level_location_navigation(runtime_ptr, resolved_url, history);
+        return queue_top_level_location_navigation(
+            runtime_ptr,
+            resolved_url,
+            history,
+            file_source,
+        );
     }
     navigate_target_window_location(scope, target_window, resolved_url)
 }

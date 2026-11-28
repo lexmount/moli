@@ -1030,9 +1030,11 @@ impl PageScriptHost {
         } else if moli_url::is_about_blank(&initial_url) {
             false
         } else {
+            let request = self
+                .popup_file_navigation_request(scope, Request::get_with_url(initial_url.clone()));
             self.start_lightweight_popup_document_load(
                 navigation_task,
-                Request::get_with_url(initial_url.clone()),
+                request,
                 about_blank_url(),
                 initial_document_state,
                 response,
@@ -1141,9 +1143,11 @@ impl PageScriptHost {
             self.install_lightweight_popup_empty_document(scope, popup_id, window, target_url);
             true
         } else {
+            let request =
+                self.popup_file_navigation_request(scope, Request::get_with_url(target_url));
             self.start_lightweight_popup_document_load(
                 navigation_task,
-                Request::get_with_url(target_url),
+                request,
                 previous_url,
                 navigation_state,
                 response,
@@ -1788,6 +1792,7 @@ impl PageScriptHost {
             kind,
             current_url.as_ref(),
         );
+        let request = self.popup_file_navigation_request(scope, request);
         if self
             .start_lightweight_popup_document_load(
                 navigation_task,
@@ -1874,9 +1879,10 @@ impl PageScriptHost {
             self.queue_lightweight_popup_load_event(navigation_task);
             return true;
         }
+        let request = self.popup_file_navigation_request(scope, Request::get_with_url(target_url));
         if let Some(load_id) = self.start_lightweight_popup_document_load(
             navigation_task,
-            Request::get_with_url(target_url),
+            request,
             previous_url,
             navigation_state,
             None,
@@ -2378,6 +2384,26 @@ impl PageScriptHost {
         set_object_slot(scope, window, "document", document.into());
         let _ =
             self.set_lightweight_popup_document_wrapper(popup_id, v8::Global::new(scope, document));
+    }
+
+    fn popup_file_navigation_request(
+        &self,
+        scope: &mut v8::PinScope<'_, '_>,
+        request: Request,
+    ) -> Request {
+        if request.url.scheme() == "file"
+            && self
+                .document_resource_loader_for_dispatch_scope(
+                    self.entered_owner_dispatch_scope(scope),
+                )
+                .is_some_and(|loader| loader.request_client().has_document_file_access())
+        {
+            request.with_local_file_navigation_access(
+                moli_fetch::LocalFileNavigationAccess::BrowserGranted,
+            )
+        } else {
+            request
+        }
     }
 
     fn start_lightweight_popup_document_load(

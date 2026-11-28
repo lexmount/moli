@@ -238,7 +238,12 @@ fn window_fetch_callback_in_relevant_realm<'s>(
         return;
     }
 
-    if let Err(error) = moli_url_policy::route_fetch_url(&prepared.resolved_url) {
+    if !prepared
+        .resource_loader
+        .request_client()
+        .permits_file_script_read(&prepared.resolved_url)
+        && let Err(error) = moli_url_policy::route_fetch_url(&prepared.resolved_url)
+    {
         let message = reject_url_policy_fetch(host, prepared, error.to_string());
         rv.set(make_rejected_promise(scope, &message).into());
         return;

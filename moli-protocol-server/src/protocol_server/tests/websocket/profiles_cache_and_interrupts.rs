@@ -1,8 +1,142 @@
 use super::*;
 
 #[tokio::test]
-async fn websocket_cdp_file_navigation_returns_stable_error_without_events_or_replacement() {
-    let (cdp_addr, cdp_server) = spawn_test_protocol_server().await;
+async fn websocket_cdp_host_file_policy_blocks_client_paths() {
+    let host_file = TempPath::new("host-file-policy-input");
+    fs::write(&host_file.path, b"local fixture").unwrap();
+    let download_dir = TempDir::new("host-file-policy-output");
+    let (addr, server) =
+        spawn_test_protocol_server_with_fetch_config(host_file_access_blocked_config()).await;
+    let (mut socket, _) = connect_async(discover_browser_websocket_url(addr).await.unwrap())
+        .await
+        .unwrap();
+    let context = cdp_create_browser_context(&mut socket, 1).await;
+    let target = cdp_create_attached_target(&mut socket, 2, &context).await;
+
+    let cases = [
+        (
+            "Browser.setDownloadBehavior",
+            None,
+            json!({
+                "behavior": "allow", "downloadPath": download_dir.path
+            }),
+        ),
+        (
+            "Page.setDownloadBehavior",
+            Some(target.session_id.as_str()),
+            json!({
+                "behavior": "allow", "downloadPath": download_dir.path
+            }),
+        ),
+        (
+            "DOM.setFileInputFiles",
+            Some(target.session_id.as_str()),
+            json!({
+                "backendNodeId": 1, "files": [&host_file.path]
+            }),
+        ),
+        (
+            "Input.dispatchDragEvent",
+            Some(target.session_id.as_str()),
+            json!({
+                "type": "drop", "x": 0, "y": 0,
+                "data": {"items": [], "files": [&host_file.path], "dragOperationsMask": 1}
+            }),
+        ),
+    ];
+    for (index, (method, session, params)) in cases.into_iter().enumerate() {
+        let id = 10 + index as u64;
+        let messages = send_cdp_command(&mut socket, id, method, session, params).await;
+        let reply = messages.iter().find(|reply| reply["id"] == id).unwrap();
+        assert!(
+            reply["error"]["message"].as_str().is_some_and(
+                |message| message.contains("Host file access is disabled by browser policy")
+            ),
+            "{method}: {reply:?}"
+        );
+    }
+    assert!(!download_dir.path.exists());
+    server.abort();
+}
+
+#[tokio::test]
+async fn websocket_cdp_browser_navigation_opens_local_html_with_subresources() {
+    let fixture = TempDir::new("cdp-local-file-navigation");
+    fs::create_dir(&fixture.path).unwrap();
+    let path = fixture.path.join("page.html");
+    fs::write(
+        &path,
+        "<!doctype html><body>fixture<script src='main.js'></script>",
+    )
+    .unwrap();
+    fs::write(
+        fixture.path.join("main.js"),
+        "document.body.dataset.ready = 'loaded';",
+    )
+    .unwrap();
+    let url = url::Url::from_file_path(path).unwrap();
+    let (addr, server) = spawn_test_protocol_server().await;
+    let (mut socket, _) = connect_async(discover_browser_websocket_url(addr).await.unwrap())
+        .await
+        .unwrap();
+    let context = cdp_create_browser_context(&mut socket, 1).await;
+    let target = cdp_create_attached_target(&mut socket, 2, &context).await;
+    let session = Some(target.session_id.as_str());
+    send_cdp_command(&mut socket, 4, "Page.enable", session, json!({})).await;
+    send_cdp_command(
+        &mut socket,
+        5,
+        "Page.setLifecycleEventsEnabled",
+        session,
+        json!({ "enabled": true }),
+    )
+    .await;
+    let messages = send_cdp_command(
+        &mut socket,
+        6,
+        "Page.navigate",
+        session,
+        json!({
+            "url": url,
+        }),
+    )
+    .await;
+    let reply = messages.iter().find(|reply| reply["id"] == 6).unwrap();
+    assert!(reply["error"].is_null(), "{reply:?}");
+    assert!(reply["result"]["errorText"].is_null(), "{reply:?}");
+    let loader_id = reply["result"]["loaderId"]
+        .as_str()
+        .expect("local navigation loaderId");
+    let is_loaded = |event: &serde_json::Value| {
+        event["sessionId"].as_str() == session
+            && event["method"] == "Page.lifecycleEvent"
+            && event["params"]["loaderId"].as_str() == Some(loader_id)
+            && event["params"]["name"] == "load"
+    };
+    if !messages.iter().any(is_loaded) {
+        recv_until_match(&mut socket, is_loaded).await;
+    }
+    let messages = send_cdp_command(
+        &mut socket,
+        7,
+        "Runtime.evaluate",
+        session,
+        json!({
+            "expression": "document.body.dataset.ready",
+            "returnByValue": true,
+        }),
+    )
+    .await;
+    let reply = messages.iter().find(|reply| reply["id"] == 7).unwrap();
+    assert_eq!(reply["result"]["result"]["value"], "loaded", "{reply:?}");
+    server.abort();
+}
+
+#[tokio::test]
+async fn websocket_cdp_blocked_file_navigation_returns_stable_error_without_events_or_replacement()
+{
+    let (cdp_addr, cdp_server) =
+        spawn_test_protocol_server_with_fetch_config(host_file_access_blocked_config()).await;
     let (mut socket, _) = connect_async(
         discover_browser_websocket_url(cdp_addr)
             .await

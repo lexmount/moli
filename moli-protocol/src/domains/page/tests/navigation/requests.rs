@@ -1,8 +1,10 @@
 use super::*;
 
 #[tokio::test(flavor = "multi_thread")]
-async fn page_navigate_file_url_fails_before_navigation_events_or_document_replacement() {
-    let mut ctx = TestContext::new();
+async fn page_navigate_blocked_file_url_fails_before_navigation_events_or_document_replacement() {
+    let mut config = moli_fetch::FetchConfig::default();
+    config.set_local_file_policy(moli_fetch::LocalFilePolicy::BlockFileUrls);
+    let mut ctx = TestContext::from_conn(crate::CdpConnection::new_with_fetch_config(config));
     load_bc_with_session(&mut ctx, "BID-1", "TID-1", "SID-1", "about:blank");
     ensure_initial_document_for_session(&mut ctx, Some("SID-1")).await;
     ctx.sent.clear();

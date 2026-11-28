@@ -1452,6 +1452,12 @@ fn page_set_download_behavior_command_output_plan(
         return CommandOutputPlan::error(-32000, "Could not fetch browser context");
     }
 
+    if params.download_path.is_some()
+        && let Err(error) = conn.local_file_policy().check_host_file_access()
+    {
+        return CommandOutputPlan::error(-32000, error.to_string());
+    }
+
     conn.download_behavior.set_browser_context_policy(
         browser_context_id,
         params.behavior,

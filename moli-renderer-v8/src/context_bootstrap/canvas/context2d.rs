@@ -2,8 +2,8 @@ use cssparser::color::clamp_unit_f32;
 use moli_webapi::canvas_context_values::ImageSmoothingQuality;
 
 use super::backing_store::{
-    canvas_like_pixels, canvas_like_pixels_copy, canvas_owner_from_context,
-    with_canvas_like_pixels_mut,
+    canvas_like_origin_clean, canvas_like_pixels, canvas_like_pixels_copy,
+    canvas_owner_from_context, set_canvas_like_origin_clean, with_canvas_like_pixels_mut,
 };
 use super::color::{CanvasColorStyle, canvas_srgb_components, serialize_canvas_color};
 use super::helpers::canvas_unrestricted_double_arg;
@@ -1751,24 +1751,36 @@ pub(crate) fn canvas_context_draw_image_callback<'s>(
     let Ok(source) = v8::Local::<v8::Object>::try_from(args.get(0)) else {
         return;
     };
-    let image = same_origin_html_image(scope, args.this(), source);
+    let image = html_image_for_draw(scope, args.this(), source);
     let owned_pixels;
     let canvas_pixels;
-    let (source_pixels, source_width, source_height, density) =
-        if let Some((image, density)) = &image {
+    let (source_pixels, source_width, source_height, density, origin_clean) =
+        if let Some((image, density, origin_clean)) = &image {
             canvas_pixels = None;
-            (image.rgba.as_slice(), image.width, image.height, *density)
+            (
+                image.rgba.as_slice(),
+                image.width,
+                image.height,
+                *density,
+                *origin_clean,
+            )
         } else if let Some((pixels, width, height)) = html_image_pixels_copy(scope, source) {
             canvas_pixels = None;
             owned_pixels = pixels;
-            (owned_pixels.as_slice(), width, height, 1.0)
+            (owned_pixels.as_slice(), width, height, 1.0, true)
         } else {
             let Some(storage) = canvas_like_pixels(scope, source) else {
                 return;
             };
             let (width, height) = (storage.width, storage.height);
             canvas_pixels = Some(storage);
-            (&[][..], width, height, 1.0)
+            (
+                &[][..],
+                width,
+                height,
+                1.0,
+                canvas_like_origin_clean(scope, source),
+            )
         };
     if !density.is_finite() {
         return;
@@ -1798,7 +1810,7 @@ pub(crate) fn canvas_context_draw_image_callback<'s>(
     } else {
         ScaleFilter::Nearest
     };
-    let _ = with_canvas_like_pixels_mut(scope, canvas, |pixels, width, height| {
+    let drawn = with_canvas_like_pixels_mut(scope, canvas, |pixels, width, height| {
         // No V8 code runs while the source and destination slices are live.
         let canvas_source = canvas_pixels
             .as_ref()
@@ -1815,13 +1827,16 @@ pub(crate) fn canvas_context_draw_image_callback<'s>(
             filter,
         );
     });
+    if drawn && !origin_clean {
+        set_canvas_like_origin_clean(scope, canvas, false);
+    }
 }
 
-fn same_origin_html_image<'s>(
+fn html_image_for_draw<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     context: v8::Local<'s, v8::Object>,
     source: v8::Local<'s, v8::Object>,
-) -> Option<(std::sync::Arc<moli_image::RgbaImage>, f64)> {
+) -> Option<(std::sync::Arc<moli_image::RgbaImage>, f64, bool)> {
     if !web_api_interfaces::HTMLImageElement::is_instance(scope, source) {
         return None;
     }
@@ -1838,7 +1853,7 @@ fn same_origin_html_image<'s>(
     {
         return None;
     }
-    unsafe { &*host }.same_origin_canvas_image(handle, &origin)
+    unsafe { &*host }.canvas_image_for_draw(handle, &origin)
 }
 
 fn canvas_window_origin(context: v8::Local<'_, v8::Context>) -> Option<moli_url::WebOrigin> {
@@ -2128,6 +2143,10 @@ pub(crate) fn canvas_context_get_image_data_callback<'s>(
         return;
     }
     let bytes = if let Some(canvas) = canvas_owner_from_context(scope, args.this()) {
+        if !canvas_like_origin_clean(scope, canvas) {
+            webidl::throw_dom_exception(scope, "SecurityError", "Canvas is not origin-clean.");
+            return;
+        }
         canvas_like_pixels_copy(scope, canvas)
             .map(|(pixels, canvas_width, canvas_height)| {
                 extract_image_data(&pixels, canvas_width, canvas_height, rect)

@@ -163,6 +163,13 @@ impl CdpConnection {
             .or(self.base_http_no_proxy.as_deref())
     }
 
+    /// The Browser's startup policy applies to every target and protocol session.
+    pub fn local_file_policy(&self) -> moli_fetch::LocalFilePolicy {
+        self.standalone_navigation_engine
+            .fetch_config()
+            .local_file_policy()
+    }
+
     pub(crate) fn fetch_config(&self) -> &moli_fetch::FetchConfig {
         self.browser_context
             .as_ref()

@@ -307,20 +307,18 @@ impl ImageResourceStore {
         })
     }
 
-    pub(super) fn same_origin_canvas_image(
+    pub(super) fn canvas_image_for_draw(
         &self,
         element: DomHandle,
         origin: &moli_url::WebOrigin,
-    ) -> Option<(Arc<moli_image::RgbaImage>, f64)> {
+    ) -> Option<(Arc<moli_image::RgbaImage>, f64, bool)> {
         let slot = self.slots.get(&element)?;
         let ImageResourceState::Ready(resource) = &slot.state else {
             return None;
         };
-        if !resource.descriptor.readable_from_request_origin {
-            return None;
-        }
         let url = url::Url::parse(slot.identity.request_key.url()).ok()?;
-        if !origin.same_origin_url(&url) {
+        let readable = resource.descriptor.readable_from_request_origin;
+        if url.scheme() != "file" && (!readable || !origin.same_origin_url(&url)) {
             return None;
         }
         let density = if resource.density > 0.0 {
@@ -328,7 +326,7 @@ impl ImageResourceStore {
         } else {
             1.0
         };
-        Some((resource.pixels.clone()?, density))
+        Some((resource.pixels.clone()?, density, readable))
     }
 
     pub(super) fn is_ready(&self, element: DomHandle) -> bool {

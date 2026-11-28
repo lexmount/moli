@@ -847,7 +847,9 @@ impl ScriptVm {
                                     response: &observable_response,
                                     encoded,
                                     readable: metadata.response_type.is_readable()
-                                        && pending.request_origin.same_origin_url(&pending.info.url),
+                                        && (pending.request_origin.same_origin_url(&pending.info.url)
+                                            || (pending.info.url.scheme() == "file"
+                                                && pending.load.request_client().web_security_disabled())),
                                 },
                             )
                         }

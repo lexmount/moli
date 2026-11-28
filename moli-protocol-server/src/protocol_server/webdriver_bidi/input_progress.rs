@@ -94,6 +94,15 @@ pub(super) async fn start_bidi_input_command(
                 ));
             }
         };
+        if !paths.is_empty()
+            && let Err(error) = scheduler.local_file_policy().check_host_file_access()
+        {
+            return failed(error_response(
+                Some(dispatch.id),
+                BidiErrorCode::InvalidArgument,
+                &error.to_string(),
+            ));
+        }
         let files = match selected_files_from_paths(paths).await {
             Ok(files) => files,
             Err(error) => return failed(bidi_response_from_devtools_error(dispatch.id, error)),
