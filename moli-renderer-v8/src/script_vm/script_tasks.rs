@@ -578,6 +578,31 @@ impl ScriptVm {
         false
     }
 
+    pub(crate) fn perform_parser_script_preparation_checkpoint(&mut self) -> Result<()> {
+        self.with_current_main_world_scope(|scope, _| {
+            Self::perform_parser_script_preparation_checkpoint_in_scope(scope)
+        })
+        .map(|_| ())
+    }
+
+    pub(crate) fn perform_parser_script_preparation_checkpoint_in_scope(
+        scope: &mut v8::PinScope<'_, '_>,
+    ) -> Result<()> {
+        if Self::can_perform_script_cleanup_checkpoint(scope) {
+            Self::perform_microtask_checkpoints(scope, None)?;
+        }
+        Ok(())
+    }
+
+    pub(crate) fn can_perform_script_cleanup_checkpoint(scope: &mut v8::PinScope<'_, '_>) -> bool {
+        !scope
+            .get_current_context()
+            .get_microtask_queue()
+            .is_some_and(v8::MicrotaskQueue::is_running_microtasks)
+            && v8::StackTrace::current_stack_trace(scope, 1)
+                .is_some_and(|stack| stack.get_frame_count() == 0)
+    }
+
     /// Run one explicit page-task microtask checkpoint before a queued script task.
     ///
     /// This does not make the runtime a full browser task queue yet. The point is

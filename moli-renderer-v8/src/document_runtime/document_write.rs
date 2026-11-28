@@ -2469,7 +2469,40 @@ impl DocumentRuntime {
                 &discovered_stylesheet_inputs,
             );
 
+            let result = if let ParserPumpStep::Yield(ParserYield::ScriptPreparation(request)) =
+                result
+            {
+                let owner = unsafe { &*host_ptr }.current_main_document_task_owner();
+                if request.needs_microtask_checkpoint()
+                    && let Err(error) =
+                        crate::script_vm::ScriptVm::perform_parser_script_preparation_checkpoint_in_scope(scope)
+                {
+                    tracing::warn!(%error, "document.write parser preparation checkpoint failed");
+                }
+                if unsafe { &*host_ptr }.current_main_document_task_owner() != owner {
+                    return true;
+                }
+                let handoff = insertion_controller.with_parser_stream(|stream| {
+                    self.with_dom_host_parse_step(|runtime| {
+                        let mut mutation_owner = DocumentWriteParserMutationOwner {
+                            runtime,
+                            scope,
+                            host_ptr,
+                            target: DocumentWriteParserMutationTarget::LiveDocument,
+                        };
+                        stream
+                            .prepare_script_with_runtime_dom_consumer(*request, &mut mutation_owner)
+                    })
+                });
+                ParserPumpStep::Yield(ParserYield::Script(Box::new(handoff)))
+            } else {
+                result
+            };
+
             match result {
+                ParserPumpStep::Yield(ParserYield::ScriptPreparation(_)) => {
+                    unreachable!("document.write parser preparation was resolved before dispatch")
+                }
                 ParserPumpStep::InputDrained
                 | ParserPumpStep::Yield(ParserYield::OwnerInterrupted) => {
                     return true;
