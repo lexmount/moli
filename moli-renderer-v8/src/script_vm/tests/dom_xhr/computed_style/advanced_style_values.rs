@@ -862,6 +862,45 @@ fn html_presentational_hints_read_only_null_namespace_attributes() {
 }
 
 #[test]
+fn legacy_font_face_inherits_and_updates_through_the_cascade() {
+    let mut vm = new_parsed_test_vm(
+        "https://font-face-presentation.test/",
+        r#"<!doctype html><style>font.override { font-family: Arial, serif }</style>
+           <div style="font-family: serif"><font face="monospace"><span>Text</span></font></div>"#,
+    );
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const font = document.querySelector("font");
+  const style = getComputedStyle(font.firstElementChild);
+  const families = [style.fontFamily];
+  font.setAttribute("face", "sans-serif");
+  families.push(style.fontFamily);
+  font.className = "override";
+  families.push(style.fontFamily);
+  font.setAttribute("face", "cursive");
+  families.push(style.fontFamily);
+  font.className = "";
+  families.push(style.fontFamily);
+  font.setAttribute("face", "42px");
+  families.push(style.fontFamily);
+  font.setAttribute("face", "monospace");
+  font.removeAttribute("face");
+  families.push(style.fontFamily);
+  return families.join("|");
+})()
+"#,
+        )
+        .expect("font face should update inherited font families when changed");
+
+    assert_eq!(
+        result,
+        "monospace|sans-serif|Arial, serif|Arial, serif|cursive|serif|serif"
+    );
+}
+
+#[test]
 fn language_mutations_use_only_xml_and_supported_null_namespaces() {
     let mut vm = new_parsed_test_vm(
         "https://language-style-mutation.test/",
