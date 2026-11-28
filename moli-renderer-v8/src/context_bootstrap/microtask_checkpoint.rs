@@ -67,15 +67,16 @@ fn enqueue_checkpoint_task(scope: &mut v8::PinScope<'_, '_>, task: AgentMicrotas
         .push(task);
 }
 
-pub(crate) fn run_end_of_microtask_checkpoint_tasks(scope: &mut v8::PinScope<'_, '_>) {
+pub(crate) fn run_end_of_microtask_checkpoint_tasks(scope: &mut v8::PinScope<'_, '_>) -> usize {
     // Tasks enqueued while this batch runs belong to the next checkpoint.
     let Some(tasks) = scope
         .get_slot_mut::<AgentMicrotaskCheckpointTasks>()
         .map(|state| std::mem::take(&mut state.tasks))
     else {
-        return;
+        return 0;
     };
 
+    let ran = tasks.len();
     for task in tasks {
         match task {
             AgentMicrotaskCheckpointTask::IndexedDbVersionChange(completion) => drop(completion),
@@ -86,6 +87,7 @@ pub(crate) fn run_end_of_microtask_checkpoint_tasks(scope: &mut v8::PinScope<'_,
             } => run_indexed_db_transaction_deactivation(scope, context, transaction),
         }
     }
+    ran
 }
 
 fn run_indexed_db_transaction_deactivation(

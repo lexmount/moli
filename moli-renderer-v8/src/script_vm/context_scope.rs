@@ -140,6 +140,35 @@ impl ScriptVm {
             .map(Some)
     }
 
+    /// Enter an already-materialized main Window realm for an explicit
+    /// microtask checkpoint, advancing isolate activity only when microtasks
+    /// actually execute JS or produce checkpoint side effects.
+    pub(super) fn with_current_main_world_microtask_checkpoint_scope<T>(
+        &mut self,
+        op: impl FnOnce(&mut v8::PinScope<'_, '_>, *mut PageScriptHost) -> Result<T>,
+    ) -> Result<Option<T>> {
+        let Some(runtime) = self.current_main_world() else {
+            return Ok(None);
+        };
+        let context_ptr = runtime.context_ptr();
+        let context_host = self._context_host.clone();
+        let result = self
+            .renderer_document_isolate
+            .with_renderer_document_isolate_microtask_checkpoint_mut(|isolate| {
+                let scope = pin!(v8::HandleScope::new(isolate));
+                let scope = &mut scope.init();
+                // SAFETY: `context_ptr` comes from the live main-world realm
+                // owned by this ScriptVm while the matching document isolate is
+                // entered and ScriptVm remains exclusively borrowed.
+                let context = unsafe { v8::Local::new(scope, &*context_ptr) };
+                let scope = &mut v8::ContextScope::new(scope, context);
+                let runtime_ptr: *mut PageScriptHost = (*context_host).as_ptr();
+                op(scope, runtime_ptr)
+            });
+        let publication = self.publish_prebootstrapped_isolated_window_contexts();
+        result.and_then(|value| publication.map(|()| Some(value)))
+    }
+
     /// Enter an already-materialized main Window realm for runtime checkpoint
     /// housekeeping without counting the entry itself as script activity.
     pub(super) fn with_current_main_world_scope_internal<T>(

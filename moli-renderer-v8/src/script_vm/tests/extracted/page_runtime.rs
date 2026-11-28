@@ -1600,6 +1600,477 @@ async fn renderer_document_isolate_maintenance_detects_first_tick_direct_weak_wr
         );
     }
 }
+
+#[tokio::test]
+async fn renderer_document_isolate_maintenance_reclaims_blob_released_by_finalization_registry_foreground_task()
+ {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+    let mut vm = new_storage_page_task_executor_test_vm_with_loader(
+        "https://finalization-registry-release.test/",
+        &loader,
+    );
+    let owner_id = vm.resource_owner_id;
+
+    assert_eq!(
+        vm.notify_renderer_document_isolate_memory_pressure_with_action()
+            .expect("initial idle maintenance check should succeed"),
+        RendererDocumentIsolateMemoryPressureAction::None
+    );
+
+    assert_eq!(crate::blob::live_blob_count_for_owner_for_test(owner_id), 0);
+    vm.eval(
+        r#"
+(() => {
+  const seed = "f".repeat(1024 * 1024);
+  window.__retainedBlobs = [];
+  for (let i = 0; i < 10; i++) {
+    window.__retainedBlobs.push(new Blob([seed]));
+  }
+  window.__fr = new FinalizationRegistry(() => {
+    window.__retainedBlobs = null;
+  });
+  (() => {
+    let target = { tag: "release-trigger" };
+    window.__fr.register(target, "drop-blobs");
+    target = null;
+  })();
+  return String(window.__retainedBlobs.length);
+})()
+"#,
+    )
+    .expect("retained Blobs and FinalizationRegistry setup should evaluate");
+
+    let live_blobs_after_alloc = crate::blob::live_blob_count_for_owner_for_test(owner_id);
+    assert_eq!(live_blobs_after_alloc, 10);
+
+    // First maintenance pass observes >8 MiB newly allocated native bytes and
+    // triggers async Moderate GC while the Blobs are still strongly retained.
+    assert_eq!(
+        vm.notify_renderer_document_isolate_memory_pressure_with_action()
+            .expect("initial post-alloc maintenance should succeed"),
+        RendererDocumentIsolateMemoryPressureAction::Moderate
+    );
+
+    // Draining V8 foreground tasks finishes the Moderate GC (collecting the
+    // transient target) and then runs V8's FinalizationRegistry cleanup
+    // foreground task, releasing `window.__retainedBlobs = null` via author JS
+    // without allocating anything new.
+    assert!(
+        drain_v8_foreground_gc_tasks_to_quiescence(&mut vm, &loader).await,
+        "moderate pass must run V8 GC and FinalizationRegistry cleanup foreground tasks"
+    );
+
+    let live_blobs_after_cleanup = crate::blob::live_blob_count_for_owner_for_test(owner_id);
+    assert_eq!(
+        live_blobs_after_cleanup, live_blobs_after_alloc,
+        "Blobs must still be alive right after FinalizationRegistry released them, awaiting the next GC"
+    );
+
+    let mut triggered_moderate = false;
+    for _ in 0..4 {
+        if vm
+            .notify_renderer_document_isolate_memory_pressure_with_action()
+            .expect("post-FinalizationRegistry maintenance should succeed")
+            == RendererDocumentIsolateMemoryPressureAction::Moderate
+        {
+            triggered_moderate = true;
+            break;
+        }
+    }
+    assert!(
+        triggered_moderate,
+        "FinalizationRegistry cleanup JS releasing retained Blobs must arm the bounded fallback"
+    );
+
+    drain_v8_foreground_gc_tasks_until(&mut vm, &loader, || {
+        crate::blob::live_blob_count_for_owner_for_test(owner_id) < live_blobs_after_alloc
+    })
+    .await;
+
+    let live_blobs_after_reclaim = crate::blob::live_blob_count_for_owner_for_test(owner_id);
+    assert!(
+        live_blobs_after_reclaim < live_blobs_after_alloc,
+        "bounded fallback after FinalizationRegistry cleanup must reclaim released Blobs (before={live_blobs_after_alloc}, after={live_blobs_after_reclaim})"
+    );
+    assert_eq!(
+        vm.eval("String(window.__retainedBlobs)")
+            .expect("probe after reclaim should evaluate"),
+        "null"
+    );
+
+    // Non-vacuous idle negative control: retain a live Blob so
+    // `has_live_native_wrappers_above_baseline()` stays true, sync baselines,
+    // and verify repeated empty microtask checkpoints never bump
+    // `activity_generation` or re-enter 60s Moderate GC churn.
+    vm.eval(
+        r#"
+(() => {
+  window.__idleRetainedBlob = new Blob(["r".repeat(64 * 1024)]);
+  return "retained";
+})()
+"#,
+    )
+    .expect("idle retained Blob setup should evaluate");
+    let _ = drain_v8_foreground_gc_tasks_to_quiescence(&mut vm, &loader).await;
+    vm.collect_renderer_document_isolate_garbage()
+        .expect("post-test baseline sync should succeed");
+    assert_eq!(
+        crate::blob::live_blob_count_for_owner_for_test(owner_id),
+        1,
+        "retained Blob must remain live so the empty-checkpoint negative control is non-vacuous"
+    );
+    for idle_tick in 0..6 {
+        vm.perform_owner_lane_task_microtask_checkpoints()
+            .expect("empty microtask checkpoint should succeed");
+        assert_eq!(
+            vm.notify_renderer_document_isolate_memory_pressure_with_action()
+                .expect("post-reclaim idle maintenance should succeed"),
+            RendererDocumentIsolateMemoryPressureAction::None,
+            "idle page holding a retained Blob with empty checkpoints must remain quiet on tick {idle_tick}"
+        );
+    }
+    assert_eq!(
+        crate::blob::live_blob_count_for_owner_for_test(owner_id),
+        1,
+        "retained Blob must remain live across all idle ticks"
+    );
+}
+
+#[tokio::test]
+async fn renderer_document_isolate_maintenance_reclaims_blob_released_by_wasm_promise_reaction_checkpoint()
+ {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+    let mut vm = new_storage_page_task_executor_test_vm_with_loader(
+        "https://wasm-promise-reaction-release.test/",
+        &loader,
+    );
+    let owner_id = vm.resource_owner_id;
+
+    assert_eq!(
+        vm.notify_renderer_document_isolate_memory_pressure_with_action()
+            .expect("initial idle maintenance check should succeed"),
+        RendererDocumentIsolateMemoryPressureAction::None
+    );
+
+    assert_eq!(crate::blob::live_blob_count_for_owner_for_test(owner_id), 0);
+    vm.eval(
+        r#"
+(() => {
+  const seed = "w".repeat(1024 * 1024);
+  window.__retainedBlobs = [];
+  for (let i = 0; i < 10; i++) {
+    window.__retainedBlobs.push(new Blob([seed]));
+  }
+  WebAssembly.compile(new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0])).then(() => {
+    window.__retainedBlobs = null;
+  });
+  return String(window.__retainedBlobs.length);
+})()
+"#,
+    )
+    .expect("retained Blobs and async WebAssembly.compile setup should evaluate");
+
+    let live_blobs_after_alloc = crate::blob::live_blob_count_for_owner_for_test(owner_id);
+    assert_eq!(live_blobs_after_alloc, 10);
+
+    // Wait for V8's background Wasm compilation to enqueue its foreground
+    // continuation without executing it yet.
+    assert!(
+        tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            vm.wait_for_v8_foreground_task_arrival(),
+        )
+        .await
+        .unwrap_or(false),
+        "async WebAssembly.compile must post a V8 foreground continuation"
+    );
+
+    // Complete a collection while Blobs are still retained, resetting all
+    // since-maintenance counters and the activity generation baseline.
+    vm.collect_renderer_document_isolate_garbage()
+        .expect("preceding GC while Blobs are retained should succeed");
+    assert_eq!(
+        crate::blob::live_blob_count_for_owner_for_test(owner_id),
+        live_blobs_after_alloc,
+        "retained Blobs must survive the preceding collection"
+    );
+
+    // Drain the queued V8 foreground continuation and its task-end microtask
+    // checkpoint: the Wasm Promise resolves and its `.then(...)` reaction clears
+    // `window.__retainedBlobs = null` without any further host eval.
+    assert!(
+        drain_v8_foreground_gc_tasks_to_quiescence(&mut vm, &loader).await,
+        "Wasm foreground continuation must execute"
+    );
+    assert_eq!(
+        crate::blob::live_blob_count_for_owner_for_test(owner_id),
+        live_blobs_after_alloc,
+        "Blobs must remain pending reclamation until a follow-up GC runs"
+    );
+
+    let mut triggered_moderate = false;
+    for _ in 0..4 {
+        if vm
+            .notify_renderer_document_isolate_memory_pressure_with_action()
+            .expect("post-Wasm-reaction maintenance should succeed")
+            == RendererDocumentIsolateMemoryPressureAction::Moderate
+        {
+            triggered_moderate = true;
+            break;
+        }
+    }
+    assert!(
+        triggered_moderate,
+        "Promise reaction following async Wasm foreground continuation must arm the bounded fallback"
+    );
+
+    drain_v8_foreground_gc_tasks_until(&mut vm, &loader, || {
+        crate::blob::live_blob_count_for_owner_for_test(owner_id) < live_blobs_after_alloc
+    })
+    .await;
+
+    let live_blobs_after_reclaim = crate::blob::live_blob_count_for_owner_for_test(owner_id);
+    assert!(
+        live_blobs_after_reclaim < live_blobs_after_alloc,
+        "bounded fallback after async Wasm Promise reaction must reclaim released Blobs (before={live_blobs_after_alloc}, after={live_blobs_after_reclaim})"
+    );
+    assert_eq!(
+        vm.eval("String(window.__retainedBlobs)")
+            .expect("probe after Wasm reclaim should evaluate"),
+        "null"
+    );
+}
+
+#[tokio::test]
+async fn renderer_document_isolate_maintenance_reclaims_blob_released_by_atomics_wait_async_checkpoint()
+ {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+    let mut vm = new_storage_page_task_executor_test_vm_with_loader(
+        "https://atomics-wait-async-release.test/",
+        &loader,
+    );
+    let owner_id = vm.resource_owner_id;
+
+    assert_eq!(
+        vm.notify_renderer_document_isolate_memory_pressure_with_action()
+            .expect("initial idle maintenance check should succeed"),
+        RendererDocumentIsolateMemoryPressureAction::None
+    );
+
+    vm.eval(
+        r#"
+(() => {
+  const seed = "a".repeat(1024 * 1024);
+  window.__retainedBlobs = [];
+  for (let i = 0; i < 10; i++) {
+    window.__retainedBlobs.push(new Blob([seed]));
+  }
+  const view = new Int32Array(new SharedArrayBuffer(4));
+  Atomics.waitAsync(view, 0, 0, 5).value.then(() => {
+    window.__retainedBlobs = null;
+  });
+  return String(window.__retainedBlobs.length);
+})()
+"#,
+    )
+    .expect("retained Blobs and Atomics.waitAsync setup should evaluate");
+
+    let live_blobs_after_alloc = crate::blob::live_blob_count_for_owner_for_test(owner_id);
+    assert_eq!(live_blobs_after_alloc, 10);
+
+    // Wait for V8's delayed AsyncWaiterTimeoutTask to arrive without running it yet.
+    assert!(
+        tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            vm.wait_for_v8_foreground_task_arrival(),
+        )
+        .await
+        .unwrap_or(false),
+        "Atomics.waitAsync timeout must post a V8 foreground continuation"
+    );
+
+    // Complete a collection while Blobs are still retained, resetting all
+    // since-maintenance counters and the activity generation baseline.
+    vm.collect_renderer_document_isolate_garbage()
+        .expect("preceding GC while Blobs are retained should succeed");
+    assert_eq!(
+        crate::blob::live_blob_count_for_owner_for_test(owner_id),
+        live_blobs_after_alloc
+    );
+
+    // Drain the queued Atomics.waitAsync timeout continuation and its task-end
+    // microtask checkpoint; the `.then(...)` reaction clears `__retainedBlobs`.
+    assert!(
+        drain_v8_foreground_gc_tasks_to_quiescence(&mut vm, &loader).await,
+        "Atomics.waitAsync timeout foreground continuation must execute"
+    );
+    assert_eq!(
+        crate::blob::live_blob_count_for_owner_for_test(owner_id),
+        live_blobs_after_alloc
+    );
+
+    let mut triggered_moderate = false;
+    for _ in 0..4 {
+        if vm
+            .notify_renderer_document_isolate_memory_pressure_with_action()
+            .expect("post-Atomics.waitAsync maintenance should succeed")
+            == RendererDocumentIsolateMemoryPressureAction::Moderate
+        {
+            triggered_moderate = true;
+            break;
+        }
+    }
+    assert!(
+        triggered_moderate,
+        "Promise reaction following Atomics.waitAsync continuation must arm the bounded fallback"
+    );
+
+    drain_v8_foreground_gc_tasks_until(&mut vm, &loader, || {
+        crate::blob::live_blob_count_for_owner_for_test(owner_id) < live_blobs_after_alloc
+    })
+    .await;
+
+    let live_blobs_after_reclaim = crate::blob::live_blob_count_for_owner_for_test(owner_id);
+    assert!(
+        live_blobs_after_reclaim < live_blobs_after_alloc,
+        "bounded fallback after Atomics.waitAsync reaction must reclaim released Blobs (before={live_blobs_after_alloc}, after={live_blobs_after_reclaim})"
+    );
+    assert_eq!(
+        vm.eval("String(window.__retainedBlobs)")
+            .expect("probe after Atomics.waitAsync reclaim should evaluate"),
+        "null"
+    );
+
+    // Non-vacuous idle negative control: even with the lazy promise activity
+    // hook installed on this isolate AND a live retained Blob keeping
+    // `has_live_native_wrappers_above_baseline()` true, repeated empty
+    // microtask checkpoints must not bump `activity_generation` or re-enter
+    // 60s Moderate GC churn.
+    vm.eval(
+        r#"
+(() => {
+  window.__idleRetainedBlob = new Blob(["r".repeat(64 * 1024)]);
+  return "retained";
+})()
+"#,
+    )
+    .expect("idle retained Blob setup should evaluate");
+    let _ = drain_v8_foreground_gc_tasks_to_quiescence(&mut vm, &loader).await;
+    vm.collect_renderer_document_isolate_garbage()
+        .expect("post-test baseline sync should succeed");
+    assert_eq!(
+        crate::blob::live_blob_count_for_owner_for_test(owner_id),
+        1,
+        "retained Blob must remain live so the lazy-promise-hook negative control is non-vacuous"
+    );
+    for idle_tick in 0..6 {
+        vm.perform_owner_lane_task_microtask_checkpoints()
+            .expect("empty microtask checkpoint should succeed");
+        assert_eq!(
+            vm.notify_renderer_document_isolate_memory_pressure_with_action()
+                .expect("post-reclaim idle maintenance should succeed"),
+            RendererDocumentIsolateMemoryPressureAction::None,
+            "idle page holding a retained Blob with lazy promise hook installed must remain quiet on tick {idle_tick}"
+        );
+    }
+    assert_eq!(
+        crate::blob::live_blob_count_for_owner_for_test(owner_id),
+        1,
+        "retained Blob must remain live across all idle ticks"
+    );
+}
+
+#[tokio::test]
+async fn renderer_document_isolate_maintenance_keeps_recalibration_armed_across_skipped_ticks_until_async_gc_finishes()
+ {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+    let mut vm = new_storage_page_task_executor_test_vm_with_loader(
+        "https://async-recalibration-across-skipped-ticks.test/",
+        &loader,
+    );
+
+    assert_eq!(
+        vm.notify_renderer_document_isolate_memory_pressure_with_action()
+            .expect("initial idle maintenance check should succeed"),
+        RendererDocumentIsolateMemoryPressureAction::None
+    );
+
+    // Allocate >12 MiB of transient JS heap garbage.
+    vm.eval(
+        r#"
+(() => {
+  let tmp = [];
+  for (let i = 0; i < 240000; i++) {
+    tmp.push({ id: i, payload: "delayed-recal-" + i + "-" + "x".repeat(32) });
+  }
+  return String(tmp.length);
+})()
+"#,
+    )
+    .expect("transient heap allocation should evaluate");
+
+    let pre_gc_peak = vm
+        .renderer_document_isolate_heap_usage()
+        .expect("pre-gc heap usage")
+        .used_size;
+
+    assert_eq!(
+        vm.notify_renderer_document_isolate_memory_pressure_with_action()
+            .expect("first moderate pass should trigger"),
+        RendererDocumentIsolateMemoryPressureAction::Moderate
+    );
+
+    // Simulate one or more maintenance ticks being skipped BEFORE V8's async
+    // Moderate GC foreground tasks have finished.
+    for skipped_tick in 0..2 {
+        assert_eq!(
+            vm.notify_renderer_document_isolate_memory_pressure_with_action()
+                .expect("pre-completion skipped tick should succeed"),
+            RendererDocumentIsolateMemoryPressureAction::None,
+            "tick {skipped_tick} before async GC completes should be skipped"
+        );
+    }
+
+    // Now let the pending async Moderate GC finish and drop heap usage into the
+    // post-GC valley.
+    assert!(
+        drain_v8_foreground_gc_tasks_to_quiescence(&mut vm, &loader).await,
+        "async moderate pass must still run V8 GC foreground tasks after skipped ticks"
+    );
+
+    let post_gc_valley = vm
+        .renderer_document_isolate_heap_usage()
+        .expect("post-gc heap usage")
+        .used_size;
+    assert!(
+        post_gc_valley + 8 * 1024 * 1024 < pre_gc_peak,
+        "expected async moderate GC to reclaim transient heap (valley={post_gc_valley}, peak={pre_gc_peak})"
+    );
+
+    // Allocate ~9 MiB of external memory: total tracked memory stays below or
+    // near the pre-GC peak, yet exceeds the post-GC valley by >8 MiB.
+    vm.eval(
+        r#"
+(() => {
+  window.__postSkippedValleyBuffers = [];
+  for (let i = 0; i < 9; i++) {
+    const view = new Uint8Array(1024 * 1024);
+    view[0] = i;
+    window.__postSkippedValleyBuffers.push(view);
+  }
+  return String(window.__postSkippedValleyBuffers.length);
+})()
+"#,
+    )
+    .expect("post-valley external allocation should evaluate");
+
+    assert_eq!(
+        vm.notify_renderer_document_isolate_memory_pressure_with_action()
+            .expect("post-delayed-recalibration maintenance check should succeed"),
+        RendererDocumentIsolateMemoryPressureAction::Moderate,
+        "recalibration must remain armed across skipped ticks until async Moderate GC finishes"
+    );
+}
 #[tokio::test]
 async fn child_javascript_url_nested_frame_uses_inherited_frame_src_policy() {
     let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");

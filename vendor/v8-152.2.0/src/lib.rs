@@ -112,6 +112,7 @@ pub use handle::TracedReference;
 pub use handle::Weak;
 pub use isolate::GarbageCollectionType;
 pub use isolate::AccessType;
+pub use isolate::CallCompletedCallback;
 pub use isolate::FailedAccessCheckCallback;
 pub use isolate::HeapCodeStatistics;
 pub use isolate::HeapSpaceStatistics;

@@ -681,7 +681,10 @@ pub struct PrepareStackTraceCallbackRet(*const Value);
 
 pub type UseCounterFeature = v8__Isolate__UseCounterFeature;
 pub type UseCounterCallback =
-  unsafe extern "C" fn(&mut Isolate, UseCounterFeature);
+  unsafe extern "C" fn(UnsafeRawIsolatePtr, UseCounterFeature);
+
+pub type CallCompletedCallback =
+  unsafe extern "C" fn(isolate: UnsafeRawIsolatePtr);
 
 unsafe extern "C" {
   fn v8__Isolate__New(params: *const raw::CreateParams) -> *mut RealIsolate;
@@ -836,6 +839,14 @@ unsafe extern "C" {
     isolate: *mut RealIsolate,
     callback: FailedAccessCheckCallback,
   );
+  fn v8__Isolate__AddCallCompletedCallback(
+    isolate: *mut RealIsolate,
+    callback: CallCompletedCallback,
+  );
+  fn v8__Isolate__RemoveCallCompletedCallback(
+    isolate: *mut RealIsolate,
+    callback: CallCompletedCallback,
+  );
   fn v8__Isolate__RequestInterrupt(
     isolate: *const RealIsolate,
     callback: InterruptCallback,
@@ -934,6 +945,25 @@ impl Isolate {
         self.as_real_ptr(),
         callback,
       )
+    }
+  }
+
+  /// Adds a callback invoked when the outermost script/API call completes.
+  #[inline(always)]
+  pub fn add_call_completed_callback(&mut self, callback: CallCompletedCallback) {
+    unsafe {
+      v8__Isolate__AddCallCompletedCallback(self.as_real_ptr(), callback)
+    }
+  }
+
+  /// Removes a callback previously installed with `add_call_completed_callback`.
+  #[inline(always)]
+  pub fn remove_call_completed_callback(
+    &mut self,
+    callback: CallCompletedCallback,
+  ) {
+    unsafe {
+      v8__Isolate__RemoveCallCompletedCallback(self.as_real_ptr(), callback)
     }
   }
 

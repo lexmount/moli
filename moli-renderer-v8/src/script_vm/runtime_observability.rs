@@ -490,6 +490,7 @@ impl ScriptVm {
         let action = self
             .renderer_document_isolate
             .with_entered_renderer_document_isolate_maintenance(|isolate, maintenance| {
+                maintenance.apply_pending_post_gc_valley();
                 let stats = isolate.get_heap_statistics();
                 let input = maintenance.memory_pressure_input(&stats);
                 let action = renderer_document_isolate_memory_pressure_action(input);
@@ -505,8 +506,12 @@ impl ScriptVm {
                         maintenance.record_collection(&isolate.get_heap_statistics());
                     }
                     RendererDocumentIsolateMemoryPressureAction::Moderate => {
+                        let major_gc_epoch_before = maintenance.major_gc_completion_epoch();
                         isolate.memory_pressure_notification(v8::MemoryPressureLevel::Moderate);
-                        maintenance.record_moderate_collection(&isolate.get_heap_statistics());
+                        maintenance.record_moderate_collection(
+                            &isolate.get_heap_statistics(),
+                            major_gc_epoch_before,
+                        );
                     }
                     RendererDocumentIsolateMemoryPressureAction::None => {
                         maintenance.record_skipped(&stats, input.has_pending_native_activity());

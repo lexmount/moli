@@ -27,6 +27,9 @@ Moli extensions:
   and Web IDL bindings.
 - `src/context_ext.cc` exposes global detachment and backup-incumbent-context
   support used by Moli's browsing-context lifecycle.
+- `src/isolate_ext.cc` exposes `Isolate::AddCallCompletedCallback` and
+  `Isolate::RemoveCallCompletedCallback` so the renderer can observe author JS
+  execution inside V8 foreground continuations without flagging GC-only work.
 - `src/inspector_context_ext.cc` and `src/inspector_session_ext.cc` expose the
   inspector context/session operations required by Moli's CDP implementation.
 - `src/module_ext.cc` exposes the synthetic-module export hook used to write
@@ -42,6 +45,10 @@ Version-specific corrections:
 - `src/function.rs` declares `v8::Function::GetName()` as returning `Value`,
   matching V8's public API. Declaring it as `String` is unsound for callable
   proxies and other non-string names.
+- `src/isolate.rs` declares `UseCounterCallback` as taking
+  `UnsafeRawIsolatePtr` instead of `&mut Isolate`, matching V8's C++
+  `void (*)(v8::Isolate*, UseCounterFeature)` signature (`&mut Isolate` is a
+  double pointer to `RealIsolate` and dereferences misaligned memory).
 - the snapshot path in `src/isolate.rs` drops isolate slots and guaranteed
   context-annex finalizers before disposing the isolate handle. This lets their
   `Weak` globals reset while V8 is live and prevents unserialized native-context
