@@ -1714,11 +1714,11 @@ pub(super) fn svg_length_setter<'s>(
             if !require_writable_svg_length(scope, args.this()) {
                 return;
             }
-            let Some(parsed) = parse_svg_length_value(&string_value) else {
+            let Some(parsed) = parse_svg_length_dom_value(&string_value) else {
                 throw_dom_exception(scope, "SyntaxError", 12, "Invalid SVG length value.");
                 return;
             };
-            set_svg_length_parsed_value(scope, args.this(), parsed);
+            set_svg_length_parsed_value(scope, args.this(), &parsed);
             reflect_svg_length_to_owner_attribute(scope, args.this());
             reflect_svg_value_list_item_to_owner_list(scope, args.this(), SvgListKind::Length);
         }
