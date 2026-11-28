@@ -3832,3 +3832,65 @@ fn main_window_indexed_set_and_define_reject_every_array_index() {
         r#"{"existingChildPreserved":true,"existingStrictSetThrows":true,"existingReflectSet":false,"existingReflectDefine":false,"existingDefineThrows":true,"missingRemainsAbsent":true,"missingStrictSetThrows":true,"missingReflectSet":false,"missingReflectDefine":false,"missingDefineThrows":true,"maxIndexRemainsAbsent":true,"maxIndexStrictSetThrows":true,"maxIndexReflectSet":false,"maxIndexReflectDefine":false,"nonIndexSet":1,"nonIndexReflectSet":true,"nonIndexAfterReflectSet":2,"nonIndexReflectDefine":true,"nonIndexAfterDefine":3}"#
     );
 }
+
+#[tokio::test]
+async fn child_fragment_writes_preserve_an_ongoing_child_load() {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
+    let mut vm = new_storage_page_task_executor_test_vm_with_loader(
+        "https://overlapping-child-navigation.test/",
+        &loader,
+    );
+    vm.exec(
+        r#"
+const frame = document.createElement('iframe');
+(document.body || document.documentElement).append(frame);
+const initialDocument = frame.contentDocument;
+frame.contentWindow.location.replace('about:blank?current');
+"#,
+        None,
+    )
+    .unwrap();
+    advance_page_task_executor_until_eval_equals(
+        &mut vm,
+        &loader,
+        "String(frame.contentDocument !== initialDocument && frame.contentDocument.URL === 'about:blank?current' && frame.contentDocument.readyState === 'complete')",
+        "true",
+        "the first replacement Document must finish loading",
+    )
+    .await;
+    vm.exec(
+        r#"
+const originalDocument = frame.contentDocument;
+const child = frame.contentWindow;
+let loaded = 0;
+frame.addEventListener('load', () => ++loaded);
+child.navigation.navigate('about:blank?next').finished.catch(() => {});
+child.location.hash = '#same';
+const lengthBeforeCommit = child.history.length;
+"#,
+        None,
+    )
+    .unwrap();
+    assert_eq!(
+        vm.eval(
+            "String(frame.contentDocument === originalDocument && child.location.hash === '#same')"
+        )
+        .unwrap(),
+        "true",
+        "the outgoing Document should commit its fragment before the next load"
+    );
+    advance_page_task_executor_until_eval_equals(
+        &mut vm,
+        &loader,
+        "String(frame.contentDocument !== originalDocument && child.location.search === '?next' && loaded === 1)",
+        "true",
+        "the pending child Document should commit and fire load",
+    )
+    .await;
+    assert_eq!(
+        vm.eval("String(child.history.length - lengthBeforeCommit)")
+            .unwrap(),
+        "1",
+        "the new Document should occupy a separate history entry"
+    );
+}
