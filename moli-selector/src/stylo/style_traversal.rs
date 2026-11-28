@@ -22,12 +22,14 @@ use selectors::{
 };
 use style::{
     Atom, LocalName, Namespace,
+    animation::AnimationSetKey,
     context::{QuirksMode, SharedStyleContext},
     data::{ElementDataMut, ElementDataRef, ElementDataWrapper, ElementStyles},
     dom::{LayoutIterator, NodeInfo, OpaqueNode, TDocument, TElement, TNode, TShadowRoot},
     invalidation::{element::restyle_hints::RestyleHint, stylesheets::StylesheetInvalidationSet},
     properties::{
-        ComputedValues, PropertyDeclarationBlock, longhands::display::computed_value::T as Display,
+        AnimationDeclarations, ComputedValues, PropertyDeclarationBlock,
+        longhands::display::computed_value::T as Display,
     },
     selector_parser::{AttrValue as SelectorAttrValue, Lang, PseudoElement, SelectorImpl},
     servo::restyle_damage::ServoRestyleDamage,
@@ -2154,16 +2156,34 @@ impl<'a> TElement for StyleElement<'a> {
 
     fn animation_rule(
         &self,
-        _: &SharedStyleContext,
+        context: &SharedStyleContext,
     ) -> Option<Arc<Locked<PropertyDeclarationBlock>>> {
-        None
+        context.animations.get_animation_declarations(
+            &AnimationSetKey::new_for_non_pseudo(self.as_node().opaque()),
+            context.current_time_for_animations,
+            self.as_node().owner_doc().shared_lock(),
+        )
     }
 
     fn transition_rule(
         &self,
-        _: &SharedStyleContext,
+        context: &SharedStyleContext,
     ) -> Option<Arc<Locked<PropertyDeclarationBlock>>> {
-        None
+        context.animations.get_transition_declarations(
+            &AnimationSetKey::new_for_non_pseudo(self.as_node().opaque()),
+            context.current_time_for_animations,
+            self.as_node().owner_doc().shared_lock(),
+        )
+    }
+
+    fn animation_declarations(&self, context: &SharedStyleContext) -> AnimationDeclarations {
+        // Servo's animation state lives in the document set, so no
+        // element-local may-have-animations flag is needed.
+        context.animations.get_all_declarations(
+            &AnimationSetKey::new_for_non_pseudo(self.as_node().opaque()),
+            context.current_time_for_animations,
+            self.as_node().owner_doc().shared_lock(),
+        )
     }
 
     fn state(&self) -> ElementState {
@@ -2307,16 +2327,28 @@ impl<'a> TElement for StyleElement<'a> {
         false
     }
 
-    fn has_animations(&self, _: &SharedStyleContext) -> bool {
-        false
+    fn has_animations(&self, context: &SharedStyleContext) -> bool {
+        self.has_css_animations(context, None) || self.has_css_transitions(context, None)
     }
 
-    fn has_css_animations(&self, _: &SharedStyleContext, _: Option<PseudoElement>) -> bool {
-        false
+    fn has_css_animations(
+        &self,
+        context: &SharedStyleContext,
+        pseudo: Option<PseudoElement>,
+    ) -> bool {
+        context
+            .animations
+            .has_active_animations(&AnimationSetKey::new(self.as_node().opaque(), pseudo))
     }
 
-    fn has_css_transitions(&self, _: &SharedStyleContext, _: Option<PseudoElement>) -> bool {
-        false
+    fn has_css_transitions(
+        &self,
+        context: &SharedStyleContext,
+        pseudo: Option<PseudoElement>,
+    ) -> bool {
+        context
+            .animations
+            .has_active_transitions(&AnimationSetKey::new(self.as_node().opaque(), pseudo))
     }
 
     fn shadow_root(&self) -> Option<<Self::ConcreteNode as TNode>::ConcreteShadowRoot> {

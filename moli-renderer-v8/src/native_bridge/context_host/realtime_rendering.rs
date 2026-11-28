@@ -392,11 +392,16 @@ impl PageScriptHost {
             frame.clear_cadence();
             return;
         }
+        let now = frame.sampled_now();
+        let animation_delay = self
+            .style_engine
+            .next_screen_animation_delay(self.dom_host(), now);
         let sample_all_intersections = frame.source_requested
             || callbacks_pending
             || resize_pending
             || environment_pending
-            || events_pending;
+            || events_pending
+            || animation_delay.is_some_and(|delay| delay.is_zero());
         let pending = frame.scheduled().filter(|pending| pending.target == target);
         if sample_all_intersections
             && pending.is_some_and(|pending| pending.sample_all_intersections)
@@ -408,6 +413,9 @@ impl PageScriptHost {
             Some(pending.map_or(tick, |pending| tick.min(pending.deadline)))
         } else {
             crate::observer_runtime::next_realtime_intersection_deadline(self)
+                .into_iter()
+                .chain(animation_delay.and_then(|delay| now.checked_add(delay)))
+                .min()
         };
         let Some(deadline) = deadline else {
             frame.phase = FramePhase::Idle;
@@ -534,6 +542,21 @@ impl PageScriptHost {
             sample_all_intersections: scheduled.sample_all_intersections,
             source_changed: frame.source_requested,
         });
+        let sample_time = frame.sampled_now();
+        drop(frame);
+        if self
+            .style_engine
+            .sample_screen_animations(self.dom_host(), sample_time)
+        {
+            let mut frame = state.frame.borrow_mut();
+            if let FramePhase::Running(running) = &mut frame.phase {
+                running.sample_all_intersections = true;
+                running.source_changed = true;
+            }
+            drop(frame);
+            self.invalidate_layout_projection();
+            crate::observer_runtime::request_realtime_resize_observer_checks(self);
+        }
         Ok(true)
     }
 

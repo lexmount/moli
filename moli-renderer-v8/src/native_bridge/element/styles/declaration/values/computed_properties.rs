@@ -63,25 +63,28 @@ pub(super) fn computed_style_property_value_after_style_update(
     if property == "direction" {
         return computed_direction_with_resolution(runtime, handle, resolution);
     }
-    if matches!(property, "left" | "right" | "top" | "bottom")
-        && let Some(midpoint) =
-            active_css_animation_midpoint_px_with_resolution(runtime, handle, property, resolution)
-    {
-        return format!("{midpoint}px");
-    }
-    if property == "transform"
-        && let Some(transform) =
-            active_css_animation_transform_value_with_resolution(runtime, handle, resolution)
-    {
-        return transform;
-    }
-    if color_property_is_resolved_color(property)
-        && let Some(value) =
-            active_css_animation_static_value(runtime, handle, property, resolution)
-    {
-        return resolve_computed_color_property_value(
-            runtime, handle, property, &value, resolution,
-        );
+    if !runtime.layout_policy().is_realtime() {
+        if matches!(property, "left" | "right" | "top" | "bottom")
+            && let Some(midpoint) = active_css_animation_midpoint_px_with_resolution(
+                runtime, handle, property, resolution,
+            )
+        {
+            return format!("{midpoint}px");
+        }
+        if property == "transform"
+            && let Some(transform) =
+                active_css_animation_transform_value_with_resolution(runtime, handle, resolution)
+        {
+            return transform;
+        }
+        if color_property_is_resolved_color(property)
+            && let Some(value) =
+                active_css_animation_static_value(runtime, handle, property, resolution)
+        {
+            return resolve_computed_color_property_value(
+                runtime, handle, property, &value, resolution,
+            );
+        }
     }
     if property == "animation" {
         return computed_animation_shorthand_value(runtime, handle, context);
@@ -190,9 +193,11 @@ pub(super) fn computed_style_property_value_after_style_update(
         runtime, handle, property, &value, resolution,
     )
     .unwrap_or(value);
-    if let Some(value) = active_registered_length_custom_property_animation_value(
-        runtime, handle, property, &value, resolution,
-    ) {
+    if !runtime.layout_policy().is_realtime()
+        && let Some(value) = active_registered_length_custom_property_animation_value(
+            runtime, handle, property, &value, resolution,
+        )
+    {
         return value;
     }
     let value = inputs

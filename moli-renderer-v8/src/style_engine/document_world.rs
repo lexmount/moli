@@ -2,6 +2,7 @@ use std::{
     cell::{Cell, RefCell},
     collections::HashMap,
     rc::Rc,
+    time::Instant,
 };
 
 use crate::document_runtime::DomHandle;
@@ -20,6 +21,8 @@ use super::{
 
 pub(super) struct DocumentStyleWorld {
     pub(super) document: DomHandle,
+    pub(super) animation_time: Rc<Cell<Option<f64>>>,
+    pub(super) animations: style::animation::DocumentAnimationSet,
     pub(super) registered_custom_properties: CssCustomPropertyRegistry,
     pub(super) document_state: StyleDocumentState,
     pub(super) pending_invalidations: RefCell<PendingNativeInvalidation>,
@@ -31,7 +34,9 @@ pub(super) struct DocumentStyleWorld {
 }
 
 pub(super) struct DocumentStyleWorlds {
-    worlds: RefCell<HashMap<DomHandle, Rc<DocumentStyleWorld>>>,
+    pub(super) worlds: RefCell<HashMap<DomHandle, Rc<DocumentStyleWorld>>>,
+    pub(super) animation_epoch: Instant,
+    pub(super) animation_time: Rc<Cell<Option<f64>>>,
     /// Monotonic lower bound used when no active world exists. This keeps stale
     /// computed-style wrappers distinguishable from later worlds without an
     /// O(navigations) tombstone map keyed by every retired Document.
@@ -39,9 +44,11 @@ pub(super) struct DocumentStyleWorlds {
 }
 
 impl DocumentStyleWorld {
-    fn new(document: DomHandle) -> Self {
+    fn new(document: DomHandle, animation_time: Rc<Cell<Option<f64>>>) -> Self {
         Self {
             document,
+            animation_time,
+            animations: Default::default(),
             registered_custom_properties: CssCustomPropertyRegistry::new(),
             document_state: StyleDocumentState::new(),
             pending_invalidations: RefCell::default(),
@@ -54,6 +61,7 @@ impl DocumentStyleWorld {
     }
 
     pub(super) fn clear_for_document_replacement(&self) {
+        self.animations.sets.write().clear();
         self.registered_custom_properties.clear();
         self.pending_invalidations.take();
         self.pseudo_style_cache.clear();
@@ -73,6 +81,8 @@ impl DocumentStyleWorlds {
     pub(super) fn new() -> Self {
         Self {
             worlds: RefCell::new(HashMap::new()),
+            animation_epoch: Instant::now(),
+            animation_time: Rc::default(),
             lifecycle_generation_floor: Cell::new(0),
         }
     }
@@ -81,7 +91,10 @@ impl DocumentStyleWorlds {
         if let Some(world) = self.active_world(document) {
             return world;
         }
-        let world = Rc::new(DocumentStyleWorld::new(document));
+        let world = Rc::new(DocumentStyleWorld::new(
+            document,
+            self.animation_time.clone(),
+        ));
         self.worlds.borrow_mut().insert(document, Rc::clone(&world));
         world
     }

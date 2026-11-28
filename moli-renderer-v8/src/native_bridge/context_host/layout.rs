@@ -177,6 +177,8 @@ impl PageScriptHost {
             drop(state.take_retained_layout());
             self.dom_host().track_layout_changes(None);
             self.realtime_layout_state = policy.is_realtime().then(Box::default);
+            self.style_engine
+                .set_screen_animations_enabled(policy.is_realtime());
         }
         self.layout_policy = policy;
         self.initialize_realtime_document_fonts();

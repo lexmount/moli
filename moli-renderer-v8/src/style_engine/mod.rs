@@ -26,6 +26,7 @@ mod cache;
 mod cause;
 mod cleanup;
 mod computed;
+mod css_animations;
 #[cfg(test)]
 pub(crate) use computed::take_style_resolution_context_count_for_test;
 mod document_world;
