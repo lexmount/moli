@@ -2877,7 +2877,7 @@ where
         // inline size is one character wide. Taffy and Parley both report the
         // horizontal extent of the unbroken line here, which would size the
         // column to the whole run.
-        let owner_layout_style = &self.boxes[owner.index()].style;
+        let owner_layout_style = &self.boxes[owner].style;
         let vertical_writing_mode = !matches!(
             owner_layout_style.writing_mode(),
             taffy::WritingMode::HorizontalTb
