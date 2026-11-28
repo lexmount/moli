@@ -1,8 +1,6 @@
 use crate::dom::native::{ContentEditableState, Element, FocusSupport, Node};
 
-use super::super::{
-    PageScriptHost, PendingWindowMessageEndpoint, document, node::node_runtime_and_handle_from_args,
-};
+use super::super::{PageScriptHost, document, node::node_runtime_and_handle_from_args};
 use super::forms::{
     dispatch_text_control_event, form_control_is_effectively_disabled, text_control_value,
 };
@@ -15,7 +13,7 @@ use super::{
     resolved_reflected_element_attribute_handle,
 };
 use super::{element_attribute, label_control_handle, label_receives_programmatic_focus};
-use crate::document_runtime::{DomHandle, EventTargetHandle};
+use crate::document_runtime::DomHandle;
 #[cfg(feature = "devtools")]
 use crate::runtime::RendererDomFocusOutcome;
 use crate::style_engine::{ComputedDisplayKind, ComputedWhiteSpaceCollapseKind};
@@ -189,12 +187,30 @@ pub(super) fn is_focusable(runtime: &PageScriptHost, handle: DomHandle) -> bool 
 }
 
 fn focus_target_is_available(runtime: &PageScriptHost, handle: DomHandle) -> bool {
-    if runtime.dom_host().is_inert_in_document(handle) {
+    let dom = runtime.dom_host();
+    if dom.is_inert_in_document(handle) {
         return false;
     }
-    let rendered = ElementRenderedState::read(runtime, handle);
+    let render_target = if dom.is_html_element_named(handle, "area") {
+        // An image-map shape gets its rendered focus area from the image.
+        let Some(image) = dom.image_map_image_for_area(handle) else {
+            return false;
+        };
+        if dom.is_inert_in_document(image) {
+            return false;
+        }
+        image
+    } else {
+        handle
+    };
+    let rendered = ElementRenderedState::read(runtime, render_target);
     // Reading-flow items can participate in focus order with display: contents.
-    rendered.box_state() != ElementBoxState::NoBox
+    let has_focus_area = match rendered.box_state() {
+        ElementBoxState::Box => true,
+        ElementBoxState::DisplayContents => render_target == handle,
+        ElementBoxState::NoBox => false,
+    };
+    has_focus_area
         && rendered
             .target_style()
             .is_some_and(|style| style.visibility_visible)
@@ -564,20 +580,22 @@ fn update_focus_from_previous_with_previous_focus_within(
         runtime.set_element_focus(None, None, None, None);
         return false;
     };
+    let window_with_callbacks =
+        PageScriptHost::focus_window_for_element(scope, runtime_ptr, next_handle);
+    let runtime = unsafe { &mut *runtime_ptr };
+    if runtime.active_element_handle().is_some() {
+        return false;
+    }
+    if window_with_callbacks.is_some_and(|window| {
+        !runtime.is_focused_window(window)
+            || runtime.dom_host().owner_document_handle(next_handle) != next_document
+            || !is_focusable(runtime, next_handle)
+    }) {
+        runtime.set_element_focus(None, None, None, None);
+        return false;
+    }
     runtime.set_element_focus(None, next, next, None);
-    let window_focus_transition = runtime.focus_window_for_element(next_handle);
-
-    if let Some((previous_window, _)) = window_focus_transition {
-        dispatch_window_focus_event(scope, runtime_ptr, previous_window, "blur");
-    }
-    let element_kept_focus =
-        dispatch_element_focus_events(scope, runtime_ptr, previous, next_handle, selection);
-    if let Some((_, next_window)) = window_focus_transition
-        && unsafe { &mut *runtime_ptr }.take_pending_window_focus(next_window)
-    {
-        dispatch_window_focus_event(scope, runtime_ptr, next_window, "focus");
-    }
-    element_kept_focus && unsafe { &*runtime_ptr }.active_element_handle() == Some(next_handle)
+    dispatch_element_focus_events(scope, runtime_ptr, previous, next_handle, selection)
 }
 
 fn dispatch_element_focus_events(
@@ -626,35 +644,6 @@ fn dispatch_element_focus_events(
     }
     schedule_focus_blur_if_needed(scope, runtime_ptr, next_handle);
     still_focused()
-}
-
-fn dispatch_window_focus_event(
-    scope: &mut v8::PinScope<'_, '_>,
-    runtime_ptr: *mut PageScriptHost,
-    endpoint: PendingWindowMessageEndpoint,
-    event_type: &str,
-) {
-    let event = construct_focus_event(scope, event_type, None, false)
-        .expect("Window focus transition must materialize its FocusEvent");
-    let runtime = unsafe { &mut *runtime_ptr };
-    match endpoint {
-        PendingWindowMessageEndpoint::TopWindow => {
-            let _ = runtime.dispatch_public_event_best_effort(
-                scope,
-                runtime_ptr,
-                EventTargetHandle::Window,
-                event,
-                "window focus event",
-            );
-        }
-        PendingWindowMessageEndpoint::ChildWindow(handle) => {
-            runtime.dispatch_child_window_event(scope, handle, event_type, event);
-        }
-        PendingWindowMessageEndpoint::LightweightPopup(popup_id) => {
-            let _ =
-                runtime.dispatch_lightweight_popup_window_event(scope, popup_id, event_type, event);
-        }
-    }
 }
 
 fn dispatch_interest_event_if_needed(

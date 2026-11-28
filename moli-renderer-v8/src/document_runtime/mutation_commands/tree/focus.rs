@@ -4,6 +4,24 @@ use crate::{
 };
 
 impl DocumentRuntime {
+    pub(super) fn focus_within_path_before_tree_change(
+        &self,
+        roots: &[DomHandle],
+    ) -> Vec<DomHandle> {
+        let root = self.dom_host.focus_within_root();
+        if root.is_some()
+            && roots.iter().any(|&node| self.dom_host.is_connected(node))
+            && self
+                .dom_host
+                .focus_within_ancestors(root)
+                .any(|ancestor| roots.contains(&ancestor))
+        {
+            self.dom_host.focus_within_ancestors(root).collect()
+        } else {
+            Vec::new()
+        }
+    }
+
     pub(super) fn focus_reset_handle_before_tree_change(
         &self,
         roots: &[DomHandle],

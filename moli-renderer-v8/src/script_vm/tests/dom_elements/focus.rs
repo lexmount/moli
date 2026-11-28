@@ -160,6 +160,102 @@ fn blur_callbacks_keep_focus_within_on_common_flat_tree_ancestors() {
 }
 
 #[test]
+fn mutating_the_retained_focus_within_subtree_invalidates_its_old_ancestors() {
+    let probe = r#"((mutation) => {
+  document.body.innerHTML = `
+    <style>:focus-within { background-color: rgb(255, 0, 0) }</style>
+    <div id=source><div id=common><input id=a><input id=b></div></div>
+    <div id=destination></div>`;
+  const source = document.getElementById('source');
+  const common = document.getElementById('common');
+  const destination = document.getElementById('destination');
+  const [a, b] = common.children;
+  const body = document.body;
+  const read = element => [
+    element.matches(':focus-within'),
+    getComputedStyle(element).backgroundColor === 'rgb(255, 0, 0)',
+  ].join(',');
+
+  a.focus({preventScroll: true});
+  const states = [read(body), read(source)];
+  a.addEventListener('blur', () => {
+    states.push(read(body), read(source));
+    if (mutation === 'remove') common.remove();
+    else if (mutation === 'replace') source.replaceChild(document.createElement('div'), common);
+    else if (mutation === 'inner-html') source.innerHTML = '';
+    else if (mutation === 'append') destination.appendChild(common);
+    else destination.moveBefore(common, null);
+    states.push(read(body), read(source), read(destination));
+  });
+  b.focus({preventScroll: true});
+  states.push(read(body), read(source), read(destination), document.activeElement === b);
+  return states.join('|');
+})"#;
+    let removed = concat!(
+        "true,true|true,true|true,true|true,true|",
+        "false,false|false,false|false,false|false,false|false,false|false,false|false"
+    );
+    let moved = concat!(
+        "true,true|true,true|true,true|true,true|",
+        "true,true|false,false|true,true|true,true|false,false|true,true|true"
+    );
+    for (mutation, expected) in [
+        ("remove", removed),
+        ("replace", removed),
+        ("inner-html", removed),
+        ("append", moved),
+        ("move-before", moved),
+    ] {
+        let mut vm = new_storage_html_test_vm("https://example.com/");
+        let result = vm.eval(&format!("{probe}({mutation:?})")).unwrap();
+        assert_eq!(result, expected, "{mutation}");
+    }
+}
+
+#[test]
+fn image_map_area_focus_uses_the_associated_images_rendering() {
+    let mut vm = new_rendered_test_vm(
+        "https://example.com/",
+        r##"<!doctype html>
+<img id="image" usemap="#map" width="100" height="100"
+     src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7">
+<map name="map">
+  <area id="spot" href="#target" shape="rect" coords="0,0,100,100" style="visibility:hidden">
+</map>"##,
+    );
+    let result = vm
+        .eval(
+            r#"(() => {
+  const image = document.getElementById('image');
+  const spot = document.getElementById('spot');
+  const tryFocus = () => {
+    spot.focus({preventScroll: true});
+    const focused = document.activeElement === spot;
+    spot.blur();
+    return focused;
+  };
+  const states = [tryFocus()];
+  image.style.visibility = 'hidden';
+  states.push(tryFocus());
+  image.style.visibility = 'visible';
+  image.style.display = 'none';
+  states.push(tryFocus());
+  image.style.display = '';
+  image.inert = true;
+  states.push(tryFocus());
+  image.inert = false;
+  image.removeAttribute('usemap');
+  states.push(tryFocus());
+  image.useMap = '#map';
+  states.push(tryFocus());
+  return states.join('|');
+})()"#,
+        )
+        .unwrap();
+    assert_eq!(result, "true|false|false|false|false|true");
+}
+
+#[test]
 fn superseded_focus_request_does_not_scroll_the_target() {
     let mut vm = new_rendered_test_vm(
         "https://example.com/",
@@ -187,7 +283,7 @@ target.focus();
 }
 
 #[test]
-fn window_focus_callback_refocusing_a_superseded_target_preserves_prevent_scroll() {
+fn window_focus_callback_choosing_the_target_preserves_prevent_scroll() {
     let mut vm = new_rendered_test_vm(
         "https://example.com/",
         r#"<!doctype html>
@@ -199,8 +295,8 @@ fn window_focus_callback_refocusing_a_superseded_target_preserves_prevent_scroll
         "
 const iframe = document.getElementById('frame');
 const child = iframe.contentDocument;
-child.body.innerHTML = '<input id=target><input id=other>';
-const [target, other] = child.body.children;
+child.body.innerHTML = '<input id=target>';
+const target = child.getElementById('target');
 ",
     )
     .unwrap();
@@ -209,7 +305,6 @@ const [target, other] = child.body.children;
         .eval(
             "
 outside.focus({preventScroll: true});
-target.addEventListener('focus', () => other.focus({preventScroll: true}), {once: true});
 iframe.contentWindow.addEventListener('focus', () => target.focus({preventScroll: true}), {once: true});
 target.focus();
 const keptScroll = child.activeElement === target && window.scrollX === 0 && window.scrollY === 0;
@@ -430,6 +525,6 @@ fn focusing_frame_owner_then_input_dispatches_child_window_focus_and_blur() {
 
     assert_eq!(
         result,
-        "top-window-blur,frame-focus,child-window-focus,frame-blur,child-window-blur,input-focus,top-window-focus|true"
+        "top-window-blur,child-window-focus,frame-focus,frame-blur,child-window-blur,top-window-focus,input-focus|true"
     );
 }

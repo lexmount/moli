@@ -793,6 +793,13 @@ impl DocumentRuntime {
         self.dom_host.set_element_focus(handle, focus_within_root);
     }
 
+    pub(crate) fn set_dom_focus_within_root(&self, root: Option<DomHandle>) -> Option<DomHandle> {
+        // Parser removals can still owe blur events for a disconnected element.
+        let active = self.document.active_element();
+        self.dom_host.set_element_focus(active, root);
+        active
+    }
+
     pub(crate) fn document_focus_fallback_handle(&self) -> Option<DomHandle> {
         self.dom_host
             .document_body_handle()

@@ -706,6 +706,37 @@ impl DomHost {
         }
     }
 
+    pub fn image_map_image_for_area(&self, area: DomHandle) -> Option<DomHandle> {
+        let map = std::iter::successors(self.parent_node(area), |&node| self.parent_node(node))
+            .find(|&node| self.is_html_element_named(node, "map"))?;
+        let root = self.root_node_handle(map)?;
+        let map_element = self.element(map)?;
+        let names = [map_element.id(), map_element.name_attribute()].map(|name| {
+            let name = name.filter(|name| !name.is_empty())?;
+            let first_map = self
+                .element_handles_by_id_or_name_matching_in_subtree(root, name, |candidate| {
+                    self.is_html_element_named(candidate, "map")
+                })
+                .into_iter()
+                .find(|&candidate| self.is_html_element_named(candidate, "map"));
+            (first_map == Some(map)).then_some(name)
+        });
+        if names == [None, None] {
+            return None;
+        }
+        self.dom
+            .light_subtree_handles(root, false)
+            .find(|&candidate| {
+                self.element(candidate).is_some_and(|element| {
+                    element.is_html_element("img")
+                        && element
+                            .attribute("usemap")
+                            .and_then(|value| value.split_once('#'))
+                            .is_some_and(|(_, fragment)| names.contains(&Some(fragment)))
+                })
+            })
+    }
+
     pub fn active_element_handle(&self) -> Option<DomHandle> {
         self.active_element.get().filter(|handle| {
             self.node(*handle)

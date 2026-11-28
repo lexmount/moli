@@ -2076,6 +2076,22 @@ impl PageScriptHost {
         changed
     }
 
+    pub(crate) fn update_focus_within_after_tree_change(&mut self, previous_path: &[DomHandle]) {
+        if previous_path.is_empty() {
+            return;
+        }
+        let dom = self.dom_host();
+        let root = dom.focus_within_root();
+        if dom
+            .focus_within_ancestors(root)
+            .eq(previous_path.iter().copied())
+        {
+            return;
+        }
+        let active = self.set_dom_focus_within_root(root);
+        self.invalidate_focus_style_change(active, active, previous_path.to_vec());
+    }
+
     pub(crate) fn set_element_focus(
         &mut self,
         previous: Option<DomHandle>,
@@ -2093,6 +2109,15 @@ impl PageScriptHost {
                 .focus_within_ancestors(previous_root)
                 .collect()
         });
+        self.invalidate_focus_style_change(previous, next, previous_focus_within);
+    }
+
+    fn invalidate_focus_style_change(
+        &mut self,
+        previous: Option<DomHandle>,
+        next: Option<DomHandle>,
+        previous_focus_within: Vec<DomHandle>,
+    ) {
         self.note_realtime_layout_input_change();
         let dom_host = self.dom_host() as *const _;
         self.style_engine.invalidate_focus_change(
