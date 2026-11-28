@@ -45,6 +45,13 @@ fn realtime_cli_selects_one_policy_without_enabling_optional_resources() {
 fn realtime_environment_and_cli_priority_use_actual_enabled_values() {
     for command in ["fetch", "serve"] {
         for (layout, realtime, flags, expected) in [
+            (None, None, "--mock", "Mock"),
+            (Some("false"), Some("0"), "--mock", "Mock"),
+            (Some("true"), None, "--mock", "Conflict"),
+            (None, Some("true"), "--mock", "Conflict"),
+            (None, None, "--realtime --mock", "Conflict"),
+            (None, None, "--mock --lazy", "Conflict"),
+            (None, None, "--mock --layout", "Conflict"),
             (None, Some("true"), "", "Realtime"),
             (None, Some("1"), "", "Realtime"),
             (None, Some("false"), "", "Mock"),
@@ -113,7 +120,14 @@ fn parse_realtime_in_child_process() {
     let result = Cli::try_parse_from(args)
         .map_err(anyhow::Error::from)
         .and_then(|cli| AppConfig::from_cli(&cli));
-    if expected == "Mock" && capability != "none" {
+    if expected == "Conflict" {
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("--mock cannot be combined")
+        );
+    } else if expected == "Mock" && capability != "none" {
         assert!(result.unwrap_err().to_string().contains("--realtime"));
     } else {
         let config = result.unwrap();

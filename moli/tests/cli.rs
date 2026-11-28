@@ -149,6 +149,7 @@ fn parses_explicit_fetch_command_with_compatibility_flags() {
                 text_track: false,
                 resource: false,
                 disable_subframes: false,
+                mock: false,
                 lazy: false,
                 realtime: false,
                 scrollbars: false,
