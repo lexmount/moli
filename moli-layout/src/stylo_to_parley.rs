@@ -15,7 +15,7 @@ use parley::{
 use style::{
     computed_values::{
         font_optical_sizing::T as FontOpticalSizing,
-        text_decoration_style::T as StyloTextDecorationStyle,
+        text_decoration_style::T as StyloTextDecorationStyle, writing_mode::T as StyloWritingMode,
     },
     properties::ComputedValues,
     values::{
@@ -94,6 +94,16 @@ pub(crate) fn text_style(computed: &ComputedValues) -> TextStyle<'static, 'stati
     let font = computed.get_font();
     let inherited_text = computed.get_inherited_text();
     let font_size = font.font_size.used_size.0.px();
+    // Vertical flow advances down a column, so every character may start a new
+    // line. Without this an unbreakable word such as "Workspace" stays on one
+    // line and overflows the one-character column the inline size resolves to.
+    // Latin text then also stacks one letter per line, which is why this stays
+    // a partial implementation of `writing-mode` rather than real vertical
+    // layout.
+    let vertical_writing_mode = !matches!(
+        computed.clone_writing_mode(),
+        StyloWritingMode::HorizontalTb
+    );
     let line_height = match font.line_height {
         style::values::computed::font::LineHeight::Normal => LineHeight::MetricsRelative(1.0),
         style::values::computed::font::LineHeight::Number(number) => {
@@ -205,20 +215,20 @@ pub(crate) fn text_style(computed: &ComputedValues) -> TextStyle<'static, 'stati
         line_height,
         word_spacing,
         letter_spacing,
-        text_wrap_mode: match inherited_text.text_wrap_mode {
-            style::computed_values::text_wrap_mode::T::Wrap => TextWrapMode::Wrap,
-            style::computed_values::text_wrap_mode::T::Nowrap => TextWrapMode::NoWrap,
-        },
+        // `white-space: nowrap` suppresses wrapping, which would keep a vertical
+        // label on one line while the inline size is already one character, so
+        // the label clips instead of stacking. The synthetic character breaks
+        // below must therefore win over the CSS wrap mode in vertical flow.
+        text_wrap_mode: vertical_text_wrap_mode(
+            inherited_text.text_wrap_mode,
+            vertical_writing_mode,
+        ),
         overflow_wrap: match inherited_text.overflow_wrap {
             StyloOverflowWrap::Normal => OverflowWrap::Normal,
             StyloOverflowWrap::BreakWord => OverflowWrap::BreakWord,
             StyloOverflowWrap::Anywhere => OverflowWrap::Anywhere,
         },
-        word_break: match inherited_text.word_break {
-            StyloWordBreak::Normal => WordBreak::Normal,
-            StyloWordBreak::BreakAll => WordBreak::BreakAll,
-            StyloWordBreak::KeepAll => WordBreak::KeepAll,
-        },
+        word_break: vertical_word_break(inherited_text.word_break, vertical_writing_mode),
         brush: TextBrush {
             color: fill_color,
             paint: true,
@@ -236,6 +246,43 @@ pub(crate) fn text_style(computed: &ComputedValues) -> TextStyle<'static, 'stati
         strikethrough_offset: None,
         strikethrough_size: decoration_thickness,
         strikethrough_brush: None,
+    }
+}
+
+/// Resolve the wrap mode a style run gets, given the CSS value and whether the
+/// box flows vertically.
+///
+/// `white-space: nowrap` suppresses wrapping, which in vertical flow would keep
+/// a label on one line while its inline size is already one character wide, so
+/// the label clips instead of stacking. The synthetic character breaks must win
+/// over the CSS wrap mode.
+fn vertical_text_wrap_mode(
+    css: style::computed_values::text_wrap_mode::T,
+    vertical: bool,
+) -> TextWrapMode {
+    if vertical {
+        return TextWrapMode::Wrap;
+    }
+    match css {
+        style::computed_values::text_wrap_mode::T::Wrap => TextWrapMode::Wrap,
+        style::computed_values::text_wrap_mode::T::Nowrap => TextWrapMode::NoWrap,
+    }
+}
+
+/// Resolve the break opportunity a style run gets, given the CSS value and
+/// whether the box flows vertically.
+///
+/// Vertical flow advances down a column, so every character may start a new
+/// line. Without this an unbreakable word such as "Workspace" stays on one line
+/// and overflows the one-character column its inline size resolves to.
+fn vertical_word_break(css: StyloWordBreak, vertical: bool) -> WordBreak {
+    if vertical {
+        return WordBreak::BreakAll;
+    }
+    match css {
+        StyloWordBreak::Normal => WordBreak::Normal,
+        StyloWordBreak::BreakAll => WordBreak::BreakAll,
+        StyloWordBreak::KeepAll => WordBreak::KeepAll,
     }
 }
 
@@ -456,4 +503,71 @@ fn text_stroke(
         color,
         paint_first,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use style::computed_values::text_wrap_mode::T as StyloTextWrapMode;
+
+    /// `white-space: nowrap` alone suppresses wrapping. In vertical flow that
+    /// would leave the label on one horizontal line while its inline size is
+    /// already one character, so it clips instead of stacking.
+    #[test]
+    fn vertical_flow_ignores_nowrap() {
+        assert_eq!(
+            vertical_text_wrap_mode(StyloTextWrapMode::Nowrap, true),
+            TextWrapMode::Wrap
+        );
+        assert_eq!(
+            vertical_text_wrap_mode(StyloTextWrapMode::Wrap, true),
+            TextWrapMode::Wrap
+        );
+    }
+
+    /// Horizontal flow must keep honouring `nowrap`, otherwise this change
+    /// would silently re-enable wrapping across every horizontal box.
+    #[test]
+    fn horizontal_flow_keeps_nowrap() {
+        assert_eq!(
+            vertical_text_wrap_mode(StyloTextWrapMode::Nowrap, false),
+            TextWrapMode::NoWrap
+        );
+        assert_eq!(
+            vertical_text_wrap_mode(StyloTextWrapMode::Wrap, false),
+            TextWrapMode::Wrap
+        );
+    }
+
+    /// An unbreakable word such as "Workspace" needs a break opportunity between
+    /// characters, or it overflows the one-character column.
+    #[test]
+    fn vertical_flow_breaks_between_characters() {
+        assert_eq!(
+            vertical_word_break(StyloWordBreak::Normal, true),
+            WordBreak::BreakAll
+        );
+        assert_eq!(
+            vertical_word_break(StyloWordBreak::KeepAll, true),
+            WordBreak::BreakAll
+        );
+    }
+
+    /// Horizontal flow must keep the declared break mode, including `keep-all`
+    /// which exists to prevent breaks between CJK characters.
+    #[test]
+    fn horizontal_flow_keeps_declared_break_mode() {
+        assert_eq!(
+            vertical_word_break(StyloWordBreak::Normal, false),
+            WordBreak::Normal
+        );
+        assert_eq!(
+            vertical_word_break(StyloWordBreak::KeepAll, false),
+            WordBreak::KeepAll
+        );
+        assert_eq!(
+            vertical_word_break(StyloWordBreak::BreakAll, false),
+            WordBreak::BreakAll
+        );
+    }
 }
