@@ -73,7 +73,11 @@ impl PageScriptHost {
         ));
         self.session_histories
             .detach(super::super::OwnerDispatchScope::Child(handle));
-        self.child_browsing_contexts.shift_remove(&handle)
+        let entry = self.child_browsing_contexts.shift_remove(&handle)?;
+        self.document_layout_state
+            .borrow_mut()
+            .retire_frame_viewport(handle);
+        Some(entry)
     }
 
     pub(crate) fn clear_child_browsing_context_current_document(

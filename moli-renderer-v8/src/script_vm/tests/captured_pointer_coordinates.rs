@@ -2,7 +2,7 @@ use super::*;
 
 async fn captured_child_vm(nested: bool, scaled: bool) -> StandaloneScriptVmHarness {
     let mut vm = new_storage_html_test_vm("https://captured-pointer-coordinates.test/");
-    vm.set_layout_policy(moli_page_types::LayoutPolicy::OnDemand);
+    vm.set_layout_policy(moli_page_types::LayoutPolicy::Lazy);
     vm.eval(r#"
         document.body.style.margin='0';
         document.body.innerHTML='<div id=outside style="position:absolute;left:0;top:0;width:50px;height:50px"></div>';
@@ -115,7 +115,7 @@ async fn assert_removed_pointer_target_preserves_frame_coordinates(
     scaled: bool,
 ) {
     let mut vm = new_storage_html_test_vm("https://removed-pointer-coordinates.test/");
-    vm.set_layout_policy(moli_page_types::LayoutPolicy::OnDemand);
+    vm.set_layout_policy(moli_page_types::LayoutPolicy::Lazy);
     vm.eval(r#"
         document.body.style.margin='0';
         globalThis.frame=document.createElement('iframe');
@@ -207,29 +207,24 @@ async fn captured_child_pointer_uses_published_frame_coordinates_outside_its_bou
     assert_eq!(vm.layout_pass_observability_for_test().1, builds);
     vm.eval("frame.style.left='200px';frame.style.top='100px';'moved'")
         .unwrap();
-    // Layout-affecting iframe attributes invalidate the published frame
-    // viewport. The next input initializes a new snapshot before dispatch;
-    // capture must project through that same snapshot without another pass.
+    // Capture continues to use the published coordinates until a screenshot
+    // publishes the moved frame.
     dispatch(&mut vm, "mousemove", 20.0, 20.0, 1);
-    assert_eq!(
-        vm.layout_pass_observability_for_test().1,
-        builds + 1,
-        "OnDemand input must rebuild an invalidated iframe snapshot exactly once"
-    );
+    assert_eq!(vm.layout_pass_observability_for_test().1, builds);
     vm.publish_layout_for_test().unwrap();
-    let builds = vm.layout_pass_observability_for_test().1;
+    assert_eq!(vm.layout_pass_observability_for_test().1, builds + 1);
     dispatch(&mut vm, "mousemove", 20.0, 20.0, 1);
     dispatch(&mut vm, "mouseup", 20.0, 20.0, 0);
     dispatch(&mut vm, "mousemove", 20.0, 20.0, 0);
     assert_eq!(
         vm.eval("JSON.stringify(events)").unwrap(),
-        r#"[["pointerdown","captured",30,30],["pointermove","captured",-80,-40],["pointermove","captured",-180,-80],["pointermove","captured",-180,-80],["pointerup","captured",-180,-80],["pointermove","outside",20,20]]"#
+        r#"[["pointerdown","captured",30,30],["pointermove","captured",-80,-40],["pointermove","captured",-80,-40],["pointermove","captured",-180,-80],["pointerup","captured",-180,-80],["pointermove","outside",20,20]]"#
     );
     assert_eq!(
         vm.eval("JSON.stringify(transitions)").unwrap(),
         r#"[["gotpointercapture","captured"],["lostpointercapture","captured"]]"#
     );
-    assert_eq!(vm.layout_pass_observability_for_test().1, builds);
+    assert_eq!(vm.layout_pass_observability_for_test().1, builds + 1);
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -333,12 +328,14 @@ async fn raw_update_release_preserves_pressed_mouse_frame_route() {
         r#"[["pointerdown","captured",30,30],["pointermove","",-80,-40],["mousemove","",-80,-40]]"#
     );
     assert_eq!(vm.layout_pass_observability_for_test().1, builds);
+    vm.publish_layout_for_test().unwrap();
     dispatch(&mut vm, "mouseup", 20.0, 20.0, 0);
     dispatch(&mut vm, "mousemove", 20.0, 20.0, 0);
     assert_eq!(
         vm.eval("JSON.stringify(events.slice(3))").unwrap(),
         r#"[["pointerup","",-280,-40],["pointermove","outside",20,20]]"#
     );
+    assert_eq!(vm.layout_pass_observability_for_test().1, builds + 1);
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -452,6 +449,55 @@ async fn touch_coordinates_share_the_frame_projection_and_release_restores_hit_r
         vm.eval("JSON.stringify(events)").unwrap(),
         r#"[["pointerdown","captured",30,30],["pointermove","outside",20,20],["pointerup","outside",20,20]]"#
     );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn captured_touch_uses_the_last_published_frame_geometry() {
+    for (touch, pointer) in [
+        ("touchmove", "pointermove"),
+        ("touchend", "pointerup"),
+        ("touchcancel", "pointercancel"),
+    ] {
+        for publish in [false, true] {
+            let mut vm = captured_child_vm(false, false).await;
+            vm.eval(&format!(
+            r#"
+            const style = document.createElement('style');
+            style.textContent = 'iframe[data-moved] {{ margin-left: 100px }}';
+            document.head.append(style);
+            globalThis.samples = [];
+            for (const type of ['{touch}', '{pointer}']) {{
+                captured.addEventListener(type, event => {{
+                    const point = event.changedTouches?.[0] ?? event;
+                    samples.push([event.type, point.clientX, point.clientY, point.screenX, point.screenY]);
+                }});
+            }}
+            "#,
+            ))
+            .unwrap();
+            vm.dispatch_touch_event_at_point(130.0, 90.0, "touchstart", false)
+                .unwrap();
+            let builds = vm.layout_pass_observability_for_test().1;
+            vm.eval("frame.setAttribute('data-moved', '')").unwrap();
+            if publish {
+                vm.publish_layout_for_test().unwrap();
+            }
+            vm.dispatch_touch_event_at_point(140.0, 100.0, touch, false)
+                .unwrap();
+
+            let x = if publish { -60 } else { 40 };
+            let samples = vm.eval("JSON.stringify(samples)").unwrap();
+            assert_eq!(
+                serde_json::from_str::<serde_json::Value>(&samples).unwrap(),
+                serde_json::json!([[pointer, x, 40, 140, 100], [touch, x, 40, 140, 100]]),
+                "{touch}, publish={publish}"
+            );
+            assert_eq!(
+                vm.layout_pass_observability_for_test().1,
+                builds + u64::from(publish)
+            );
+        }
+    }
 }
 
 #[tokio::test(flavor = "current_thread")]

@@ -16,6 +16,7 @@ moli-image = { path = "../moli-image" }
 moli-system-fonts = { path = "../moli-system-fonts" }
 moli-trace = { path = "../moli-trace" }
 read-fonts = "0.41.0"
+slotmap = "1.1.1"
 stylo = "0.22"
 stylo_taffy = { git = "https://github.com/DioxusLabs/blitz", rev = "fb8d6c15e9ce062b3b41e71cd48988f0093506cc", default-features = false, features = ["std", "block", "flexbox", "grid", "floats"] }
 taffy = { version = "=0.15.0", default-features = false, features = ["std", "block_layout", "flexbox", "grid", "float_layout", "content_size", "calc", "detailed_layout_info"] }

@@ -72,10 +72,10 @@ fn realtime_frame_viewport_reads_share_current_layout_and_propagate_failures() {
 }
 
 #[test]
-fn viewport_reads_do_not_add_layout_to_legacy_modes_or_top_level_queries() {
+fn viewport_reads_without_realtime_reuse_published_layout() {
     for policy in [
         LayoutPolicy::Mock,
-        LayoutPolicy::OnDemand,
+        LayoutPolicy::Lazy,
         LayoutPolicy::Realtime,
     ] {
         let mut vm = frame_fixture(policy, 320, 100);
@@ -94,13 +94,18 @@ fn viewport_reads_do_not_add_layout_to_legacy_modes_or_top_level_queries() {
             "{policy:?}"
         );
         if policy != LayoutPolicy::Realtime {
-            vm.eval("viewport.width;viewport.height;query.matches;child.matchMedia('(width:400px)').matches")
-                .unwrap();
-            assert_eq!(
-                vm.layout_pass_observability_for_test().1,
-                before,
-                "{policy:?}"
-            );
+            let read = "JSON.stringify([viewport.width, viewport.height, query.matches, child.matchMedia('(width:400px)').matches])";
+            for _ in 0..2 {
+                let values = vm.eval(read).unwrap();
+                if policy == LayoutPolicy::Lazy {
+                    assert_eq!(values, "[320,100,false,false]");
+                }
+                assert_eq!(
+                    vm.layout_pass_observability_for_test().1,
+                    before,
+                    "{policy:?}"
+                );
+            }
             assert!(
                 !vm._context_host
                     .borrow()
@@ -108,6 +113,39 @@ fn viewport_reads_do_not_add_layout_to_legacy_modes_or_top_level_queries() {
             );
         }
     }
+}
+
+#[test]
+fn lazy_frame_viewport_tracks_the_browsing_context_lifetime() {
+    let mut vm = frame_fixture(LayoutPolicy::Lazy, 320, 100);
+    assert_eq!(
+        vm.eval("frame.offsetWidth; child.innerWidth").unwrap(),
+        "320"
+    );
+    let frame = vm.element_handle_by_id_for_test("frame").unwrap();
+    assert!(vm._context_host.borrow().frame_viewport(frame).is_some());
+    let builds = vm.layout_pass_observability_for_test().1;
+    assert_eq!(
+        vm.eval("frame.style.width='400px'; child.document.open(); child.document.close(); child.innerWidth")
+            .unwrap(),
+        "320"
+    );
+    assert_eq!(
+        vm.eval("globalThis.detachedFrame=frame; detachedFrame.remove(); detachedFrame.contentWindow === null").unwrap(),
+        "true"
+    );
+    assert!(vm._context_host.borrow().frame_viewport(frame).is_none());
+    assert_eq!(
+        vm.eval("document.body.append(detachedFrame); JSON.stringify([detachedFrame.contentWindow === child, detachedFrame.contentWindow.innerWidth])").unwrap(),
+        "[false,320]"
+    );
+    assert_eq!(vm.layout_pass_observability_for_test().1, builds);
+    publish_layout_for_test(&mut vm);
+    assert_eq!(
+        vm.eval("detachedFrame.contentWindow.innerWidth").unwrap(),
+        "400"
+    );
+    assert_eq!(vm.layout_pass_observability_for_test().1, builds + 1);
 }
 
 #[test]
@@ -186,7 +224,7 @@ fn realtime_layout_zero_frame_resize_and_display_none_have_distinct_results() {
 
 #[test]
 fn legacy_layout_keeps_its_existing_zero_frame_coverage() {
-    let mut vm = frame_fixture(LayoutPolicy::OnDemand, 0, 0);
+    let mut vm = frame_fixture(LayoutPolicy::Lazy, 0, 0);
     let before = vm.layout_pass_observability_for_test().1;
     assert_eq!(vm.eval("String(fixed.offsetWidth)").unwrap(), "0");
     assert_eq!(vm.layout_pass_observability_for_test().1, before + 1);
@@ -251,7 +289,7 @@ fn realtime_child_window_reads_refresh_then_preserve_hidden_viewports() {
 
 #[test]
 fn legacy_hidden_frame_cssom_keeps_its_existing_empty_declaration() {
-    for policy in [LayoutPolicy::Mock, LayoutPolicy::OnDemand] {
+    for policy in [LayoutPolicy::Mock, LayoutPolicy::Lazy] {
         let mut vm = frame_fixture(policy, 320, 100);
         vm.eval("globalThis.retained=getComputedStyle(fixed);frame.style.display='none'")
             .unwrap();

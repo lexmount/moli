@@ -192,7 +192,7 @@ impl ScriptVm {
         }
         // Preserve the prepared point for the complete pointer action. Each
         // phase follows the layout policy: Realtime observes earlier handlers'
-        // changes, while OnDemand keeps its legacy snapshot. Do not move the
+        // changes, while Lazy keeps its legacy snapshot. Do not move the
         // point or replay phases to follow the originally requested element.
         let mut outcome = RendererInputDispatchOutcome::default();
         for (event, buttons) in [("mousemove", 0), ("mousedown", 1), ("mouseup", 0)] {

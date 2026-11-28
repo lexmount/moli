@@ -18,7 +18,7 @@ fn font_face_unicode_range_limits_layout_and_updates_after_loading() {
         "https://font-unicode-range.test/",
         "<!doctype html><html><head></head><body></body></html>",
     );
-    vm.set_layout_policy(moli_page_types::LayoutPolicy::OnDemand);
+    vm.set_layout_policy(moli_page_types::LayoutPolicy::Lazy);
     // Use fixed advances for both faces: platform monospace can match the test font.
     let (fallback_font, font) = selection_order::order_font_data();
     vm.eval(&format!(

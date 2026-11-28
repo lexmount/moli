@@ -2,16 +2,13 @@
 name = "molio-ohos"
 version = "0.1.0"
 edition = "2024"
-license = "MIT OR Apache-2.0"
+license.workspace = true
 publish = false
-
-[workspace]
-resolver = "3"
 
 [lib]
 crate-type = ["staticlib"]
 
-[dependencies]
+[target.'cfg(target_env = "ohos")'.dependencies]
 anyhow = "1.0"
 moli-core = { path = "../../moli-core", features = ["molio"] }
 moli-fetch = { path = "../../moli-fetch" }
@@ -22,3 +19,6 @@ serde_json = "1.0.145"
 tempfile = "3.27.0"
 tokio = { version = "1.53.1", features = ["fs", "macros", "rt", "sync", "time"] }
 url = "2.5.7"
+
+[lints]
+workspace = true

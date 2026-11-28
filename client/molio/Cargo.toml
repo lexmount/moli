@@ -14,10 +14,10 @@ dirs = "5.0.1"
 gpui = { package = "gpui-ce", git = "https://github.com/lexmount/gpui-ce", rev = "1d433ddc675f9946ca91e0c705e4bc9b0360a78c" }
 gpui_platform = { package = "gpui_ce_platform", git = "https://github.com/lexmount/gpui-ce", rev = "1d433ddc675f9946ca91e0c705e4bc9b0360a78c", features = ["wayland", "x11"] }
 image = { version = "0.25.10", default-features = false, features = ["bmp", "gif", "ico", "jpeg", "png", "webp"] }
-moli-core = { path = "../moli-core", features = ["molio", "media-ext"] }
-moli-fetch = { path = "../moli-fetch" }
-moli-image = { path = "../moli-image" }
-moli-web-mime = { path = "../moli-web-mime" }
+moli-core = { path = "../../moli-core", features = ["molio", "media-ext"] }
+moli-fetch = { path = "../../moli-fetch" }
+moli-image = { path = "../../moli-image" }
+moli-web-mime = { path = "../../moli-web-mime" }
 resvg = { version = "=0.48.1", default-features = false }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.145"

@@ -10,8 +10,8 @@ use std::{fmt::Debug, hash::Hash};
 use taffy::MaybeResolve;
 
 use crate::{
-    LayoutBoxId, LayoutError, LayoutPoint, LayoutRect, LayoutScrollExtent, LayoutSize,
-    LayoutTransform2D, LayoutWorld,
+    LayoutError, LayoutPoint, LayoutRect, LayoutScrollExtent, LayoutSize, LayoutTransform2D,
+    LayoutWorld,
 };
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -51,7 +51,7 @@ fn solve_sticky_axis(constraint: StickyAxisConstraint, geometry: StickyAxisGeome
 
 #[derive(Clone, Copy)]
 pub(super) struct StickyConstraints {
-    pub(super) scroll_container: LayoutBoxId,
+    pub(super) scroll_container: crate::LayoutOutputBoxId,
     scrollport: LayoutRect,
     size: LayoutSize,
     x: StickyAxisConstraint,
@@ -83,35 +83,35 @@ where
     let mut scroll_container = world.root;
     let mut remaining = world.boxes.len();
     while let Some(candidate) = ancestor {
-        let candidate_box =
-            world
-                .boxes
-                .get(candidate.index())
-                .ok_or(LayoutError::InvalidBoxReference {
-                    index: candidate.index(),
-                })?;
+        let candidate_box = world
+            .boxes
+            .get(candidate)
+            .ok_or(LayoutError::InvalidBoxHandle { id: candidate })?;
         if remaining == 0 {
             return Err(LayoutError::NumericTreeCycle {
-                index: candidate.index(),
+                index: world.boxes.index_of(candidate),
             });
         }
         remaining -= 1;
-        if candidate == world.root || scroll_extents[candidate.index()].is_scroll_container {
+        if candidate == world.root
+            || scroll_extents[world.boxes.index_of(candidate)].is_scroll_container
+        {
             scroll_container = candidate;
             break;
         }
         ancestor = candidate_box.parent;
     }
-    let scrollport = scroll_extents[scroll_container.index()].scrollport;
+    let scrollport = scroll_extents[world.boxes.index_of(scroll_container)].scrollport;
     let layout = layout_box.final_layout;
     let inset = layout_box.style.sticky_inset();
     let resolve = crate::style::resolve_stylo_calc_value;
     let containing = layout_box.layout_parent.map(|parent| {
-        let containing = world.boxes[parent.index()].final_layout;
+        let containing = world.boxes[parent].final_layout;
         let mut right = containing.size.width - containing.border.right;
         let mut bottom = containing.size.height - containing.border.bottom;
-        if parent != world.root && scroll_extents[parent.index()].is_scroll_container {
-            let extent = &scroll_extents[parent.index()];
+        if parent != world.root && scroll_extents[world.boxes.index_of(parent)].is_scroll_container
+        {
+            let extent = &scroll_extents[world.boxes.index_of(parent)];
             right = right.max(extent.scrollport.x + extent.scroll_size.width);
             bottom = bottom.max(extent.scrollport.y + extent.scroll_size.height);
         }
@@ -123,7 +123,7 @@ where
         }
     });
     Ok(Some(StickyConstraints {
-        scroll_container,
+        scroll_container: world.output_id(scroll_container),
         scrollport,
         size: LayoutSize::new(layout.size.width, layout.size.height),
         x: StickyAxisConstraint {

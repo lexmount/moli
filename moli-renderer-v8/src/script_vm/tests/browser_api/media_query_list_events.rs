@@ -5,7 +5,7 @@ const PROBE: &str = include_str!("media_query_list_events.js");
 fn run_probe(function: &str) -> Vec<serde_json::Value> {
     [
         moli_page_types::LayoutPolicy::Mock,
-        moli_page_types::LayoutPolicy::OnDemand,
+        moli_page_types::LayoutPolicy::Lazy,
         moli_page_types::LayoutPolicy::Realtime,
     ]
     .into_iter()

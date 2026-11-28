@@ -22,7 +22,7 @@ from ..serve import start_moli_serve, stop_browser, wait_for_browser_endpoint
 
 SCREENSHOT_UNSUPPORTED = (
     "Page.captureScreenshot is not supported: renderer layout is disabled; "
-    "start Moli with --layout."
+    "start Moli with --lazy or --realtime."
 )
 SCREENCAST_UNSUPPORTED = (
     "Page.startScreencast is not supported: renderer layout is disabled."

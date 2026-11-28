@@ -166,7 +166,9 @@ def webdriver_args(kwargs: dict[str, Any], config: Any | None = None) -> list[st
 
 
 def add_default_browser_parity_args(args: list[str], *, no_image_fetch: bool) -> None:
-    append_flag_once(args, "--layout")
+    if not any(arg in ("--layout", "--lazy", "-l") for arg in args):
+        # Older Moli binaries accept this spelling.
+        args.append("--layout")
     if no_image_fetch:
         for flag in (
             "--font",

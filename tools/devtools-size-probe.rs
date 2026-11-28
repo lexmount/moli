@@ -16,7 +16,7 @@ fn main() -> Result<()> {
 
 async fn run() -> Result<()> {
     let browser =
-        Browser::new(BrowserConfig::default().with_layout_policy(LayoutPolicy::OnDemand))?;
+        Browser::new(BrowserConfig::default().with_layout_policy(LayoutPolicy::Lazy))?;
     let script_attributes = if std::env::args().any(|arg| arg == "script") {
         "defer"
     } else {

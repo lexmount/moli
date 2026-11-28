@@ -2593,15 +2593,17 @@ impl PageScriptHost {
         {
             self.clear_layout_rect_cache();
         }
-        let changed_iframe_attributes = effects.iter().filter_map(|effect| {
-            let StyleMutationEffect::Attribute { element, .. } = effect else {
-                return None;
-            };
-            (self.dom_host().is_html_element_named(*element, "iframe")
-                && effect.affects_layout_metric(self.dom_host()))
-            .then_some(*element)
-        });
-        self.invalidate_published_frame_viewports(changed_iframe_attributes);
+        if self.layout_policy() == moli_page_types::LayoutPolicy::Mock {
+            let changed_iframe_attributes = effects.iter().filter_map(|effect| {
+                let StyleMutationEffect::Attribute { element, .. } = effect else {
+                    return None;
+                };
+                (self.dom_host().is_html_element_named(*element, "iframe")
+                    && effect.affects_layout_metric(self.dom_host()))
+                .then_some(*element)
+            });
+            self.invalidate_mock_frame_viewports(changed_iframe_attributes);
+        }
         let validity_containers = self.validity_containers_for_child_list_mutations(effects);
         let dom_host = self.dom_host() as *const _;
         self.style_engine

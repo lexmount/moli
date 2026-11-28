@@ -56,9 +56,7 @@ impl PreparedLayoutPublication {
         use crate::layout_renderer::LayoutInputRetention;
         match self.0 {
             LayoutPublication::CurrentScreen { .. } => LayoutInputRetention::Realtime,
-            LayoutPublication::LegacyLatest(_)
-                if policy == moli_page_types::LayoutPolicy::OnDemand =>
-            {
+            LayoutPublication::LegacyLatest(_) if policy == moli_page_types::LayoutPolicy::Lazy => {
                 LayoutInputRetention::Frozen
             }
             _ => LayoutInputRetention::Transient,
@@ -486,7 +484,7 @@ impl PageScriptHost {
     /// Explicitly sampled geometry continues to use the snapshot-only APIs.
     pub(crate) fn ensure_observable_layout(&self) -> Result<(), LayoutError> {
         match self.layout_policy {
-            moli_page_types::LayoutPolicy::Mock | moli_page_types::LayoutPolicy::OnDemand => {
+            moli_page_types::LayoutPolicy::Mock | moli_page_types::LayoutPolicy::Lazy => {
                 self.ensure_initial_layout()
             }
             moli_page_types::LayoutPolicy::Realtime => {

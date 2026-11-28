@@ -38,6 +38,10 @@ const SNAPSHOT: &str = r#"(() => {
 const HEADERS: &str = "fetch('/headers', {cache:'no-store'}).then(response => response.json())";
 
 async fn worker_user_agent_override(target_type: &str, create: &str) {
+    use crate::conn::{CdpConnection, CdpInitialStoragePartition};
+    use moli_core::{LayoutPolicy, OptionalResourceFetchMask, runtime::NavigationRuntimeConfig};
+    use moli_fetch::FetchConfig;
+
     async fn page() -> impl IntoResponse {
         (
             [(CONTENT_TYPE.as_str(), "text/html")],
@@ -113,7 +117,20 @@ async fn worker_user_agent_override(target_type: &str, create: &str) {
         .await
         .unwrap();
     });
-    let mut ctx = TestContext::new();
+    let mut fetch = FetchConfig::default();
+    fetch.set_languages(vec!["en-US".to_owned()]).unwrap();
+    let runtime_config = NavigationRuntimeConfig::new(
+        fetch,
+        OptionalResourceFetchMask::NONE,
+        true,
+        LayoutPolicy::Lazy,
+    );
+    let mut ctx = TestContext::from_conn(
+        CdpConnection::new_with_initial_storage_partition_and_runtime_config(
+            CdpInitialStoragePartition::memory(),
+            runtime_config,
+        ),
+    );
     with_loaded_http_document_async(
         &mut ctx,
         &format!("http://{addr}/page"),
@@ -146,6 +163,31 @@ async fn worker_user_agent_override(target_type: &str, create: &str) {
     let baseline_headers = evaluate(&mut ctx, &session, HEADERS).await;
     let page_baseline = evaluate(&mut ctx, "SID-page", SNAPSHOT).await;
     let page_headers = evaluate(&mut ctx, "SID-page", HEADERS).await;
+
+    assert_eq!(baseline["languages"], json!(["en-US"]));
+    assert_eq!(baseline_headers["accept-language"], "en-US,en;q=0.9");
+    set_ua(
+        &mut ctx,
+        &session,
+        "Emulation.setUserAgentOverride",
+        json!({"userAgent":"", "acceptLanguage":"en-US,en"}),
+    )
+    .await;
+    let expanded = evaluate(&mut ctx, &session, SNAPSHOT).await;
+    assert_eq!(expanded["languages"], json!(["en-US", "en"]));
+    assert_eq!(
+        evaluate(&mut ctx, &session, HEADERS).await,
+        baseline_headers
+    );
+    set_ua(
+        &mut ctx,
+        &session,
+        "Emulation.setUserAgentOverride",
+        json!({"userAgent":""}),
+    )
+    .await;
+    assert_eq!(evaluate(&mut ctx, &session, SNAPSHOT).await, baseline);
+
     // Seed both the renderer and HTTP caches before changing the Worker UA.
     let import = "importScripts('/imported.js'); importedUA";
     if target_type != "service_worker" {
@@ -167,7 +209,7 @@ async fn worker_user_agent_override(target_type: &str, create: &str) {
     assert_eq!(evaluate(&mut ctx, &session, SNAPSHOT).await, expected);
     let actual = evaluate(&mut ctx, &session, HEADERS).await;
     assert_eq!(actual["user-agent"], "Mozilla/5.0 WorkerAgent");
-    assert_eq!(actual["accept-language"], "fr-FR,fr");
+    assert_eq!(actual["accept-language"], "fr-FR,fr;q=0.9");
     assert!(actual["sec-ch-ua"].as_str().unwrap().contains("Worker"));
     assert_eq!(evaluate(&mut ctx, &session, "fetch('/redirect').then(response => response.json()).then(headers => headers['user-agent'])").await, "Mozilla/5.0 WorkerAgent");
     assert_eq!(evaluate(&mut ctx, &session, "new Promise((resolve, reject) => { const socket = new WebSocket('ws://' + location.host + '/socket'); socket.onmessage = event => { socket.close(); resolve(event.data); }; socket.onerror = () => reject(new Error('websocket failed')); })").await, "Mozilla/5.0 WorkerAgent");

@@ -14,5 +14,10 @@ fontique = { version = "=0.11.0", default-features = false, features = ["std"] }
 parking_lot = "0.12"
 yeslogic-fontconfig-sys = "=6.0.1"
 
+[target.aarch64-apple-ios.dependencies]
+objc2-core-foundation = { version = "0.3.2", default-features = false, features = ["alloc", "CFString"] }
+objc2-core-text = { version = "0.3.2", default-features = false, features = ["CTFont"] }
+write-fonts = { version = "0.50.0", default-features = false }
+
 [lints]
 workspace = true

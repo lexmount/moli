@@ -662,12 +662,12 @@ impl DocumentRuntime {
     ) -> bool {
         if style_input_changed {
             self.note_inline_style_attribute_activity(host_ptr, handle, "style");
-            // An iframe's inline style can change the viewport used by its child
-            // document, including the result of its media queries.
+            // A deferred CSSOM write has no attribute effects to invalidate
+            // the Mock policy's published frame viewport.
             if effects.style().attribute_mutations().is_empty()
                 && self.dom_host.is_html_element_named(handle, "iframe")
             {
-                unsafe { &*host_ptr }.invalidate_published_frame_viewports([handle]);
+                unsafe { &*host_ptr }.invalidate_mock_frame_viewports([handle]);
             }
         }
         self.apply_runtime_mutation_effects(

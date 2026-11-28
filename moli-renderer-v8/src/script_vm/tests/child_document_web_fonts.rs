@@ -34,23 +34,34 @@ fn font_response(resource: &StylesheetSubresourceRequest) -> CompletedStylesheet
     )
 }
 
-// These regressions exercise explicit OnDemand layout, rather than changing
+// These regressions exercise explicit Lazy layout, rather than changing
 // the legacy snapshot freshness contract to satisfy a Realtime fixture.
 pub(super) fn refresh_child_geometry_without_paint(vm: &StandaloneScriptVmHarness) {
     let host = vm._context_host.borrow();
     let document = host.document_handle();
-    let pass = host
-        .build_layout_pass_for_document(
+    let request = moli_layout::LayoutPassRequest::new(
+        host.layout_viewport_for_document(document),
+        moli_layout::LayoutFlushReason::Explicit,
+    );
+    let publication = host
+        .prepare_layout_publication(
             document,
-            moli_layout::LayoutPassRequest::new(
-                host.layout_viewport_for_document(document),
-                moli_layout::LayoutFlushReason::Explicit,
-            ),
+            request.viewport,
+            crate::native_bridge::LayoutPublicationRequest::Screen,
+        )
+        .unwrap();
+    let (pass, feedback) = host
+        .build_layout_pass_for_document_in_environment(
+            document,
+            publication.layout_request(request),
+            None,
+            publication.input_retention(host.layout_policy()),
         )
         .unwrap()
         .unwrap();
     assert_eq!(pass.metrics.paint_operation_count, 0);
-    host.publish_layout_pass_for_document(document, pass, false);
+    host.finish_layout_publication(publication, pass, feedback)
+        .unwrap();
 }
 
 #[test]
@@ -59,7 +70,7 @@ fn child_web_font_document_open_retires_registrations_and_rejects_old_owner() {
         "https://child-document-font.test/",
         "<!doctype html><span id=parentTarget style='display:inline-block;font:20px ChildDocumentSourceFont,serif'>iiii</span><iframe id=frame></iframe>",
     );
-    vm.set_layout_policy(LayoutPolicy::OnDemand);
+    vm.set_layout_policy(LayoutPolicy::Lazy);
     let rewrite = "globalThis.child=frame.contentWindow;child.document.open();\
         child.document.write('<!doctype html><style>@font-face{font-family:ChildDocumentSourceFont;src:url(font.woff2)}</style><span id=target style=\"display:inline-block;font:20px ChildDocumentSourceFont,serif\">iiii</span>');\
         child.document.close();globalThis.childTarget=child.document.getElementById('target')";
@@ -145,7 +156,7 @@ async fn child_document_fonts_ready_waits_for_its_own_resource() {
         "<!doctype html><span id=parentTarget style='display:inline-block;font:20px ChildReady,serif'>iiii</span><iframe id=frame></iframe>",
         &loader,
     );
-    vm.set_layout_policy(LayoutPolicy::OnDemand);
+    vm.set_layout_policy(LayoutPolicy::Lazy);
     vm.eval(&format!(r#"
         globalThis.child=frame.contentWindow;
         child.document.open();
@@ -207,7 +218,7 @@ async fn child_web_fonts_share_the_resource_policy_and_preserve_document_isolati
     let font = base64::engine::general_purpose::STANDARD.encode(include_bytes!(
         "../../../../moli-layout/tests/fixtures/moli-ahem.woff2"
     ));
-    for policy in [LayoutPolicy::Mock, LayoutPolicy::OnDemand] {
+    for policy in [LayoutPolicy::Mock, LayoutPolicy::Lazy] {
         for mask in [
             OptionalResourceFetchMask::NONE,
             OptionalResourceFetchMask::FONT,
@@ -242,7 +253,7 @@ async fn child_web_fonts_share_the_resource_policy_and_preserve_document_isolati
                 assert!(!host.document_web_fonts_have_pending_requests(document));
             }
             assert_eq!(vm.document_web_font_counts_for_test(), (0, 0, 0));
-            if policy == LayoutPolicy::OnDemand {
+            if policy == LayoutPolicy::Lazy {
                 refresh_child_geometry_without_paint(&vm);
                 let child = vm.eval("String(childTarget.offsetWidth)").unwrap();
                 assert_eq!(

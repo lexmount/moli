@@ -6,9 +6,8 @@ use super::{
     sticky::StickyConstraints,
 };
 use crate::{
-    LayoutBoxId, LayoutCoordinateSpaceId, LayoutError, LayoutOutputBoxId, LayoutPoint,
-    LayoutTransform2D, PaintPixelGrid, layout_tree::LayoutCoordinateSpace,
-    style::ResolvedLayoutTransform,
+    LayoutCoordinateSpaceId, LayoutError, LayoutOutputBoxId, LayoutPoint, LayoutTransform2D,
+    PaintPixelGrid, layout_tree::LayoutCoordinateSpace, style::ResolvedLayoutTransform,
 };
 
 #[derive(Clone, Copy)]
@@ -94,7 +93,7 @@ pub(super) fn compose_layout_space(
 
 #[derive(Clone, Copy)]
 pub(super) struct BoxPlacement {
-    pub(super) parent: Option<LayoutBoxId>,
+    pub(super) parent: Option<LayoutOutputBoxId>,
     pub(super) location: LayoutPoint,
     pub(super) transform: ResolvedLayoutTransform,
     pub(super) fixed: bool,
@@ -106,12 +105,12 @@ pub(super) struct ResolvedCoordinates {
 }
 
 pub(super) fn resolve_coordinate_spaces(
-    root: LayoutBoxId,
+    root: LayoutOutputBoxId,
     viewport_scroll: LayoutPoint,
     box_count: usize,
     paint_grid: Option<PaintPixelGrid>,
     placements: impl Fn(usize) -> Result<(BoxPlacement, Option<StickyConstraints>), LayoutError>,
-    scroll_offset: impl Fn(LayoutBoxId) -> Option<LayoutPoint>,
+    scroll_offset: impl Fn(LayoutOutputBoxId) -> Option<LayoutPoint>,
 ) -> Result<ResolvedCoordinates, LayoutError> {
     let mut resolver = CoordinateSpaceResolver {
         root,
@@ -158,7 +157,7 @@ pub(super) fn resolve_coordinate_spaces(
 // Resolve dependencies before projecting a box. Sticky scroll ancestry can
 // differ from numeric parentage, so both dependencies need the same cycle check.
 struct CoordinateSpaceResolver<Placement, Offset> {
-    root: LayoutBoxId,
+    root: LayoutOutputBoxId,
     viewport_scroll: LayoutPoint,
     paint_grid: Option<PaintPixelGrid>,
     placements: Placement,
@@ -171,7 +170,7 @@ struct CoordinateSpaceResolver<Placement, Offset> {
 impl<Placement, Offset> CoordinateSpaceResolver<Placement, Offset>
 where
     Placement: Fn(usize) -> Result<(BoxPlacement, Option<StickyConstraints>), LayoutError>,
-    Offset: Fn(LayoutBoxId) -> Option<LayoutPoint>,
+    Offset: Fn(LayoutOutputBoxId) -> Option<LayoutPoint>,
 {
     fn resolve(&mut self, index: usize) -> Result<(), LayoutError> {
         let Some(state) = self.state.get_mut(index) else {
@@ -246,7 +245,7 @@ where
         Ok(())
     }
 
-    fn space(&self, id: LayoutBoxId) -> Result<&ProjectedCoordinateSpace, LayoutError> {
+    fn space(&self, id: LayoutOutputBoxId) -> Result<&ProjectedCoordinateSpace, LayoutError> {
         self.spaces
             .get(id.index() + 1)
             .and_then(Option::as_ref)

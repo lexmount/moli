@@ -1,4 +1,8 @@
-use super::{Output, clean_output, fixture_runtime, run_moli, unique_temp_file_path};
+use super::{
+    Output, clean_output, fixture_runtime, run_moli,
+    timing::{PHASE_TIMEOUT_MS, TIMEOUT_MS},
+    unique_temp_file_path,
+};
 use anyhow::Result;
 use axum::{
     Router,
@@ -45,7 +49,7 @@ fn assert_done(output: Output) {
 // browser startup and storage I/O on shared runners; explicit deadline tests
 // below keep their own budgets and delayed-work relationships.
 fn run_until_done(url: &str, extra: &[&str]) -> Result<()> {
-    assert_done(run(url, super::timing::TIMEOUT_MS, extra)?);
+    assert_done(run(url, TIMEOUT_MS, extra)?);
     Ok(())
 }
 
@@ -67,6 +71,7 @@ impl Server {
                 tokio::time::sleep(Duration::from_millis(100)).await;
                 "payload"
             }))
+            .route("/pending", get(std::future::pending::<&'static str>))
             .route("/worker.js", get(|| async {
                 ([("content-type", "text/javascript")],
                  "setTimeout(() => { postMessage('payload'); close(); }, 100)")
@@ -140,7 +145,7 @@ fn idle_waits_for_animation_frame_followups_in_all_layout_policies() -> Result<(
         let mut args = vec!["--dump", "html"];
         args.extend(policy);
         eprintln!("layout policy: {policy:?}");
-        assert_done(run(&url, "3000", &args)?);
+        run_until_done(&url, &args)?;
     }
     Ok(())
 }
@@ -151,7 +156,7 @@ fn idle_times_out_for_animation_frame_loops_in_all_layout_policies() -> Result<(
     for policy in [None, Some("--layout"), Some("--realtime")] {
         let mut args = vec!["--dump", "html"];
         args.extend(policy);
-        let output = run(&url, "2000", &args)?;
+        let output = run(&url, PHASE_TIMEOUT_MS, &args)?;
         let stderr = clean_output(&output.stderr);
         assert!(!output.status.success(), "policy={policy:?}");
         assert!(output.stdout.is_empty(), "policy={policy:?}");
@@ -195,7 +200,7 @@ fn idle_settles_after_observers_and_canceled_frames_in_all_layout_policies() -> 
         let mut args = vec!["--dump", "html"];
         args.extend(policy);
         eprintln!("layout policy: {policy:?}");
-        assert_done(run(&url, "3000", &args)?);
+        run_until_done(&url, &args)?;
     }
     Ok(())
 }
@@ -302,7 +307,7 @@ fn idle_waits_for_indexed_db_requests_transactions_and_their_followups() -> Resu
 fn idle_keeps_fetch_alive_until_an_internal_abort_timeout_fires() -> Result<()> {
     let server = Server::new(
         r#"
-        fetch('/data', {signal: AbortSignal.timeout(20)}).then(
+        fetch('/pending', {signal: AbortSignal.timeout(20)}).then(
           () => document.querySelector('main').textContent = 'not aborted',
           error => setTimeout(() => {
             document.querySelector('main').textContent =
@@ -496,7 +501,7 @@ fn idle_has_a_strict_timeout_for_live_workers_and_websockets() -> Result<()> {
         "globalThis.socket = new WebSocket(location.origin.replace('http:', 'ws:') + '/socket')",
     ] {
         let server = Server::new(script)?;
-        let output = run(&server.url, "5000", &["--dump", "html"])?;
+        let output = run(&server.url, PHASE_TIMEOUT_MS, &["--dump", "html"])?;
         assert!(!output.status.success());
         assert!(output.stdout.is_empty());
         assert!(

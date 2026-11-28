@@ -570,7 +570,7 @@ fn realtime_io_claimed_notification_cannot_consume_replacement_document_work() {
 #[test]
 fn legacy_io_modes_keep_microtask_delivery_and_create_no_frame_or_io_tasks() {
     run_page_vm_large_stack_async_test("legacy-io-isolation", || async move {
-        for policy in [LayoutPolicy::Mock, LayoutPolicy::OnDemand] {
+        for policy in [LayoutPolicy::Mock, LayoutPolicy::Lazy] {
             let loader =
                 crate::network::ResourceRequestClient::new(&FetchConfig::default()).unwrap();
             let (mut page, _, _) = page_vm_with_bound_task_sources_and_owner_wake(

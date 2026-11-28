@@ -170,8 +170,8 @@ async fn wait_for_image_event_task(
 #[tokio::test]
 async fn render_image_decode_requires_both_real_layout_and_image_fetch() {
     let cases = [
-        (moli_page_types::LayoutPolicy::OnDemand, true, true),
-        (moli_page_types::LayoutPolicy::OnDemand, false, false),
+        (moli_page_types::LayoutPolicy::Lazy, true, true),
+        (moli_page_types::LayoutPolicy::Lazy, false, false),
         (moli_page_types::LayoutPolicy::Realtime, true, true),
         (moli_page_types::LayoutPolicy::Realtime, false, false),
         (moli_page_types::LayoutPolicy::Mock, true, false),
@@ -232,7 +232,7 @@ async fn render_image_decode_requires_both_real_layout_and_image_fetch() {
 async fn realtime_layout_image_decode_commits_dimensions_before_load_callback() {
     use moli_page_types::LayoutPolicy;
 
-    for policy in [LayoutPolicy::OnDemand, LayoutPolicy::Realtime] {
+    for policy in [LayoutPolicy::Lazy, LayoutPolicy::Realtime] {
         let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
         loader.set_image_fetch_enabled(true);
         let mut vm = new_storage_page_task_executor_test_vm_with_loader(
@@ -1715,7 +1715,7 @@ async fn image_decode_cross_realm_loads_settle_in_the_receiver_realm() {
 async fn available_image_reuse_does_not_start_another_fetch_or_timing_entry() {
     for policy in [
         moli_page_types::LayoutPolicy::Mock,
-        moli_page_types::LayoutPolicy::OnDemand,
+        moli_page_types::LayoutPolicy::Lazy,
     ] {
         let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
         loader.set_image_fetch_enabled(true);
@@ -1797,7 +1797,7 @@ async fn decoded_scanned_image_publishes_its_original_resource_timing_before_loa
         "https://scanned-image-timing.test/page.html",
         &loader,
     );
-    vm.set_layout_policy(moli_page_types::LayoutPolicy::OnDemand);
+    vm.set_layout_policy(moli_page_types::LayoutPolicy::Lazy);
     let image_url = Url::parse("https://scanned-image-timing.test/preloaded.gif").unwrap();
     let request = crate::types::ImageRequestKey::with_density(
         image_url.as_str().to_owned(),

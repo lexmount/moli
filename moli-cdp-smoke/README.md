@@ -842,13 +842,13 @@ Covered well:
   snapshots, and emulation changes neither initialize nor refresh it. The
   matrix also checks live viewport/scroll versus frozen content size, missing
   boxes, invalid zero clips, focus/touch branches that need no layout, and
-  four Document replacement paths. Each case uses a new target and mutates a
-  known box **before** its assertion reads geometry, proving whether the
-  command under test published layout without accidentally warming the page.
+  four Document replacement paths. Its iframe cases cover child media queries,
+  nested viewport units, hit testing, captured touch coordinates, and viewport
+  lifetime across navigation, removal, and reinsertion. Each case uses a new
+  target so the first layout starts from a known state.
   `Performance.getMetrics.LayoutCount` is not used as a layout oracle.
   DOMSnapshot placeholder bounds are not asserted as a stable contract.
-  This group tests Moli's policy and explicitly skips other browsers; it does
-  not claim Chromium freezes layout after mutations.
+  Chromium runs the same scenarios with live-layout expectations.
 - The default `playwright-compat` group takes viewport, clipped, full-page,
   and full-page clipped screenshots through `page.screenshot()` on fresh pages,
   without a geometry probe or raw CDP capture first. DOM geometry reads initialize

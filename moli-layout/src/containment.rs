@@ -79,7 +79,7 @@ where
     /// conflating the root of a subtree layout source with the document
     /// element.
     pub(crate) fn establishes_positioned_containing_block(&self, id: LayoutBoxId) -> bool {
-        let layout_box = &self.boxes[id.index()];
+        let layout_box = &self.boxes[id];
         layout_box.style.establishes_positioned_containing_block(
             self.is_document_element(id),
             layout_box.is_css_box(),
@@ -88,7 +88,7 @@ where
     }
 
     pub(crate) fn establishes_fixed_containing_block(&self, id: LayoutBoxId) -> bool {
-        let layout_box = &self.boxes[id.index()];
+        let layout_box = &self.boxes[id];
         layout_box.style.establishes_fixed_containing_block(
             self.is_document_element(id),
             layout_box.is_css_box(),

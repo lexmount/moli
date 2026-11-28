@@ -244,6 +244,17 @@ impl LayoutStyleResolver<DomHandle> for NativeLayoutStyleResolver<'_, '_, '_> {
         Ok(resolved)
     }
 
+    fn can_reuse_marker_style(
+        &self,
+        previous: &ResolvedLayoutStyle,
+        current: &ResolvedLayoutStyle,
+    ) -> bool {
+        previous
+            .stylo_computed_values()
+            .zip(current.stylo_computed_values())
+            .is_some_and(|(previous, current)| same_layout_style(previous, current))
+    }
+
     fn placeholder_style(
         &mut self,
         node: DomHandle,

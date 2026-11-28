@@ -4832,6 +4832,7 @@ dependencies = [
  "moli-protocol",
  "moli-protocol-server",
  "moli-robots",
+ "moli-system-locale",
  "moli-test-support",
  "parking_lot",
  "regex",
@@ -4844,6 +4845,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "url",
+ "wait-timeout",
 ]
 
 [[package]]
@@ -4879,6 +4881,7 @@ name = "moli-browser-profile"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "icu_locale_core",
  "moli-cookie-cache",
  "serde",
  "serde_json",
@@ -5355,6 +5358,7 @@ dependencies = [
  "moli-trace",
  "parley 0.11.0",
  "read-fonts",
+ "slotmap",
  "stylo",
  "stylo_taffy",
  "taffy 0.15.0",
@@ -5466,10 +5470,15 @@ dependencies = [
  "anyrender",
  "anyrender_svg",
  "anyrender_vello_cpu",
+ "glifo",
  "krilla",
  "lopdf",
  "moli-image",
  "moli-layout",
+ "moli-system-fonts",
+ "objc2-core-foundation",
+ "objc2-core-graphics",
+ "objc2-core-text",
  "peniko",
  "skrifa",
 ]
@@ -5910,8 +5919,19 @@ name = "moli-system-fonts"
 version = "0.1.0"
 dependencies = [
  "fontique 0.11.0",
+ "objc2-core-foundation",
+ "objc2-core-text",
  "parking_lot",
+ "write-fonts",
  "yeslogic-fontconfig-sys",
+]
+
+[[package]]
+name = "moli-system-locale"
+version = "0.1.0"
+dependencies = [
+ "icu_locale_core",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -6244,6 +6264,39 @@ dependencies = [
  "tempfile",
  "tokio",
  "unicode-segmentation",
+ "url",
+]
+
+[[package]]
+name = "molio-ios"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "moli-core",
+ "moli-fetch",
+ "moli-v8-init",
+ "parking_lot",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "url",
+ "v8",
+]
+
+[[package]]
+name = "molio-ohos"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "moli-core",
+ "moli-fetch",
+ "moli-web-mime",
+ "parking_lot",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
  "url",
 ]
 
@@ -6764,6 +6817,7 @@ checksum = "0cde0dfb48d25d2b4862161a4d5fcc0e3c24367869ad306b0c9ec0073bfed92d"
 dependencies = [
  "bitflags",
  "objc2-core-foundation",
+ "objc2-core-graphics",
 ]
 
 [[package]]

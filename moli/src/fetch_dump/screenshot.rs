@@ -47,7 +47,7 @@ async fn capture_page_screenshot(
         }),
         RendererCaptureScreenshotReply::LayoutDisabled => {
             bail!(
-                "--dump {dump_mode} requires --layout or --realtime (MOLI_LAYOUT=true or MOLI_REALTIME=true)"
+                "--dump {dump_mode} requires --lazy or --realtime (MOLI_LAYOUT=true or MOLI_REALTIME=true)"
             )
         }
         RendererCaptureScreenshotReply::NoDocument => {

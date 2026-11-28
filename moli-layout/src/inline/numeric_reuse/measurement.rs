@@ -1,9 +1,12 @@
 //! Bounded size-only results; accepted line layouts remain on their IFC owner.
 
+use std::num::NonZeroU32;
+
+use slotmap::SecondaryMap;
 use style::Atom;
 use taffy::{LayoutOutput, RunMode, Style};
 
-use super::InlineNumericInputs;
+use super::{InlineNumericInputs, cache_slot};
 use crate::LayoutBoxId;
 
 // Each owner can be probed under several intrinsic/definite constraints. Keep
@@ -43,44 +46,44 @@ struct OwnerEntry {
 #[derive(Debug)]
 pub(super) struct InlineMeasurements {
     owners: Vec<OwnerEntry>,
-    slots: Vec<Option<usize>>,
+    slots: SecondaryMap<LayoutBoxId, NonZeroU32>,
     retained_hits: usize,
 }
 
 impl InlineMeasurements {
-    pub(super) fn new(box_count: usize) -> Self {
+    pub(super) fn new() -> Self {
         Self {
             owners: Vec::new(),
-            slots: vec![None; box_count],
+            slots: SecondaryMap::new(),
             retained_hits: 0,
         }
     }
 
     pub(super) fn contains(&self, owner: LayoutBoxId) -> bool {
-        self.slots.get(owner.index()).is_some_and(Option::is_some)
+        self.slots.contains_key(owner)
     }
 
-    pub(super) fn retain_owners(
-        &mut self,
-        box_count: usize,
-        mut keep: impl FnMut(LayoutBoxId) -> bool,
-    ) {
-        self.owners
-            .retain(|entry| entry.owner.index() < box_count && keep(entry.owner));
+    pub(super) fn retain_owners(&mut self, mut keep: impl FnMut(LayoutBoxId) -> bool) {
+        let previous_len = self.owners.len();
+        self.owners.retain(|entry| keep(entry.owner));
+        if self.owners.len() == previous_len {
+            return;
+        }
         self.slots.clear();
-        self.slots.resize(box_count, None);
+
         for (slot, entry) in self.owners.iter().enumerate() {
-            self.slots[entry.owner.index()] = Some(slot);
+            self.slots.insert(entry.owner, cache_slot(slot));
         }
     }
 
     pub(super) fn discard_owner(&mut self, owner: LayoutBoxId) {
-        let Some(slot) = self.slots.get_mut(owner.index()).and_then(Option::take) else {
+        let Some(slot) = self.slots.remove(owner) else {
             return;
         };
+        let slot = (slot.get() - 1) as usize;
         self.owners.swap_remove(slot);
         if let Some(moved) = self.owners.get(slot) {
-            self.slots[moved.owner.index()] = Some(slot);
+            self.slots.insert(moved.owner, cache_slot(slot));
         }
     }
 
@@ -103,7 +106,7 @@ impl InlineMeasurements {
         inputs: InlineMeasurementInputs,
         style: &Style<Atom>,
     ) -> Option<LayoutOutput> {
-        let slot = self.slots.get(owner.index()).copied().flatten()?;
+        let slot = (self.slots.get(owner)?.get() - 1) as usize;
         let inputs = inputs.comparison_key(style);
         let results = &mut self.owners[slot].results;
         let index = results
@@ -126,18 +129,18 @@ impl InlineMeasurements {
         output: LayoutOutput,
     ) {
         assert_eq!(inputs.numeric.layout.run_mode, RunMode::ComputeSize);
-        assert!(owner.index() < self.slots.len());
         let inputs = inputs.comparison_key(&style);
-        let slot = *self.slots[owner.index()].get_or_insert_with(|| {
+        let slot = if let Some(slot) = self.slots.get(owner) {
+            (slot.get() - 1) as usize
+        } else {
             let slot = self.owners.len();
             self.owners.push(OwnerEntry {
                 owner,
-                // Most fixed-width owners use one actual measurement key.
-                // Grow to the bounded LRU capacity only for distinct probes.
                 results: Vec::with_capacity(1),
             });
+            self.slots.insert(owner, cache_slot(slot));
             slot
-        });
+        };
         let results = &mut self.owners[slot].results;
         if let Some(index) = results
             .iter()
@@ -186,10 +189,41 @@ mod tests {
     }
 
     #[test]
+    fn dense_owner_indices_reject_a_retired_generation_without_removing_its_replacement() {
+        let mut arena = slotmap::SlotMap::<LayoutBoxId, ()>::with_key();
+        let retired = arena.insert(());
+        let style = Style::default();
+        let input = inputs(100.0);
+        let mut measurement = InlineMeasurements::new();
+        let mut accepted = super::super::InlineNumericReuse::new();
+        let mut final_input = input.numeric;
+        final_input.layout.run_mode = RunMode::PerformLayout;
+        measurement.store(retired, input, style.clone(), LayoutOutput::HIDDEN);
+        accepted.store(retired, final_input, style.clone(), LayoutOutput::HIDDEN);
+        arena.remove(retired);
+        let current = arena.insert(());
+        assert_ne!(retired, current);
+        measurement.store(current, input, style.clone(), LayoutOutput::DEFAULT);
+        accepted.store(current, final_input, style.clone(), LayoutOutput::DEFAULT);
+        assert!(measurement.lookup(retired, input, &style).is_none());
+        assert!(accepted.lookup(retired, final_input, &style).is_none());
+        measurement.discard_owner(retired);
+        accepted.discard_owner(retired);
+        assert_eq!(
+            measurement.lookup(current, input, &style),
+            Some(LayoutOutput::DEFAULT)
+        );
+        assert_eq!(
+            accepted.lookup(current, final_input, &style),
+            Some(LayoutOutput::DEFAULT)
+        );
+    }
+
+    #[test]
     fn inline_measurements_bound_results_and_distinguish_retained_hits() {
         let owner = LayoutBoxId::from_index(0);
         let style = Style::default();
-        let mut cache = InlineMeasurements::new(1);
+        let mut cache = InlineMeasurements::new();
         for width in 0..CAPACITY {
             cache.store(
                 owner,
@@ -224,14 +258,14 @@ mod tests {
 
     #[test]
     fn inline_measurement_owner_retirement_releases_keys_and_never_revives_them() {
-        let mut cache = InlineMeasurements::new(3);
+        let mut cache = InlineMeasurements::new();
         let owner = LayoutBoxId::from_index(2);
         let style = Style::default();
         cache.store(owner, inputs(100.0), style.clone(), LayoutOutput::DEFAULT);
-        cache.retain_owners(1, |_| true);
+        cache.retain_owners(|id| id != owner);
         assert!(!cache.contains(owner));
         assert!(cache.owners.is_empty());
-        cache.retain_owners(3, |_| true);
+        cache.retain_owners(|_| true);
         assert!(cache.lookup(owner, inputs(100.0), &style).is_none());
     }
 }

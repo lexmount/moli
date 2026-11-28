@@ -21,6 +21,9 @@ use peniko::kurbo::{Affine, BezPath, Cap, Join, Rect, Stroke, Vec2};
 use peniko::{Fill, Mix};
 use std::sync::Arc;
 
+#[cfg(all(target_os = "ios", target_arch = "aarch64", target_abi = ""))]
+mod ios;
+
 pub(super) fn paint_text_shadow(
     scene: &mut impl PaintScene,
     snapshot: &PaintSnapshot,
@@ -52,6 +55,22 @@ pub(super) fn paint_text_shadow(
     }
     let glyph_transform = backend_glyph_transform(shadow.run.glyph_skew_radians);
     let glyph_embolden = backend_glyph_embolden(shadow.run.glyph_embolden);
+    let transform = device_transform(shadow.run.transform, scale);
+    let color = to_backend_color(shadow.color);
+    #[cfg(all(target_os = "ios", target_arch = "aarch64", target_abi = ""))]
+    if let Some(path) = ios::outline(
+        font.font.data.id(),
+        &shadow.run,
+        shadow.offset,
+        glyph_transform,
+        glyph_embolden,
+    ) {
+        scene.fill(Fill::NonZero, transform, color, None, &path);
+        if blur > 0.0 {
+            scene.pop_layer();
+        }
+        return;
+    }
     scene.draw_glyphs(
         &font.font,
         shadow.run.font_size,
@@ -59,9 +78,9 @@ pub(super) fn paint_text_shadow(
         &shadow.run.normalized_coords,
         glyph_embolden,
         Fill::NonZero,
-        to_backend_color(shadow.color),
+        color,
         1.0,
-        device_transform(shadow.run.transform, scale),
+        transform,
         glyph_transform,
         shadow.run.glyphs.iter().map(|glyph| anyrender::Glyph {
             id: glyph.id,
@@ -98,6 +117,44 @@ pub(super) fn paint_glyph_run(
         let width = finite_nonnegative(stroke.width);
         (width > 0.0 && stroke.color.alpha > 0.0).then_some((stroke, width))
     });
+    #[cfg(all(target_os = "ios", target_arch = "aarch64", target_abi = ""))]
+    if let Some(path) = ios::outline(
+        font.font.data.id(),
+        run,
+        moli_layout::PaintPoint::default(),
+        glyph_transform,
+        glyph_embolden,
+    ) {
+        let paint_stroke = |scene: &mut _| {
+            if let Some((stroke, width)) = stroke {
+                PaintScene::stroke(
+                    scene,
+                    &Stroke::new(f64::from(width))
+                        .with_join(Join::Miter)
+                        .with_miter_limit(f64::from(PaintTextStroke::MITER_LIMIT)),
+                    transform,
+                    to_backend_color(stroke.color),
+                    None,
+                    &path,
+                );
+            }
+        };
+        let stroke_first = stroke.is_some_and(|(stroke, _)| stroke.paint_first);
+        if stroke_first {
+            paint_stroke(scene);
+        }
+        scene.fill(
+            Fill::NonZero,
+            transform,
+            to_backend_color(color),
+            None,
+            &path,
+        );
+        if !stroke_first {
+            paint_stroke(scene);
+        }
+        return;
+    }
     // Fill and stroke prepare the same expanded outline. Stroke width remains
     // independent of synthetic weight, preserving both sides of the contour.
     let paint_stroke = |scene: &mut _| {
@@ -229,4 +286,41 @@ fn backend_glyph_transform(skew_radians: Option<f32>) -> Option<Affine> {
         // negating the horizontal shear at this boundary.
         Affine::skew(-f64::from(radians).tan(), 0.0)
     })
+}
+
+#[cfg(any(test, all(target_os = "ios", target_arch = "aarch64", target_abi = "")))]
+fn prepare_native_glyph(mut path: BezPath, transform: Affine, embolden: Vec2) -> BezPath {
+    use glifo::FontEmbolden;
+    use peniko::kurbo::{Diagonal2, expand_path};
+
+    // Match the raster backend's outline expansion before skew and placement.
+    if embolden != Vec2::ZERO {
+        let settings = FontEmbolden::new(Diagonal2::new(embolden.x, embolden.y));
+        path = expand_path(
+            &path,
+            settings.amount,
+            settings.join,
+            settings.miter_limit,
+            settings.tolerance,
+        );
+    }
+    path.apply_affine(transform);
+    path
+}
+
+#[cfg(test)]
+mod tests {
+    use peniko::kurbo::Shape;
+
+    use super::*;
+
+    #[test]
+    fn native_glyph_expands_in_font_space_before_skew_and_placement() {
+        let path = Rect::new(0., 0., 10., 8.).to_path(0.1);
+        let transform = Affine::translate((20., 30.)) * Affine::skew(-0.5, 0.) * Affine::FLIP_Y;
+        let plain = prepare_native_glyph(path.clone(), transform, Vec2::ZERO);
+        let bold = prepare_native_glyph(path, transform, Vec2::new(2., 1.));
+        assert_eq!(plain.bounding_box(), Rect::new(20., 22., 34., 30.));
+        assert_eq!(bold.bounding_box(), Rect::new(17.5, 21., 36.5, 31.));
+    }
 }

@@ -125,8 +125,8 @@ impl TableGroupedChildren {
         N: Copy + Debug + Eq + Hash,
     {
         let mut grouped = Self::default();
-        for child in world.boxes[root.index()].children.iter().copied() {
-            match world.boxes[child.index()].kind {
+        for child in world.boxes[root].children.iter().copied() {
+            match world.boxes[child].kind {
                 LayoutBoxKind::TableCaption => grouped.captions.push(child),
                 LayoutBoxKind::TableColumnGroup | LayoutBoxKind::TableColumn => {
                     grouped.columns.push(child)
@@ -173,10 +173,10 @@ fn collect_columns<N>(
 ) where
     N: Copy + Debug + Eq + Hash,
 {
-    let group = match world.boxes[current.index()].kind {
+    let group = match world.boxes[current].kind {
         LayoutBoxKind::TableColumnGroup => {
             let before = *column_count;
-            for child in world.boxes[current.index()].children.iter().copied() {
+            for child in world.boxes[current].children.iter().copied() {
                 collect_columns(world, child, Some(current), columns, column_count);
             }
             if *column_count != before {
@@ -206,21 +206,21 @@ fn collect_rows<N>(
 ) where
     N: Copy + Debug + Eq + Hash,
 {
-    match world.boxes[current.index()].kind {
+    match world.boxes[current].kind {
         LayoutBoxKind::TableRowGroup
         | LayoutBoxKind::TableHeaderGroup
         | LayoutBoxKind::TableFooterGroup
         | LayoutBoxKind::AnonymousTableRowGroup => {
-            for child in world.boxes[current.index()].children.iter().copied() {
+            for child in world.boxes[current].children.iter().copied() {
                 collect_rows(world, child, Some(current), rows, cells);
             }
         }
         LayoutBoxKind::TableRow | LayoutBoxKind::AnonymousTableRow => {
             let row_index = rows.len();
             let start_cell_index = cells.len();
-            for cell in world.boxes[current.index()].children.iter().copied() {
+            for cell in world.boxes[current].children.iter().copied() {
                 if !matches!(
-                    world.boxes[cell.index()].kind,
+                    world.boxes[cell].kind,
                     LayoutBoxKind::TableCell | LayoutBoxKind::AnonymousTableCell
                 ) {
                     continue;
@@ -299,7 +299,7 @@ fn table_data<N>(world: &LayoutWorld<N>, id: LayoutBoxId) -> crate::LayoutTableD
 where
     N: Copy + Debug + Eq + Hash,
 {
-    world.boxes[id.index()]
+    world.boxes[id]
         .element_semantics
         .as_ref()
         .and_then(|semantics| semantics.metadata.table)

@@ -9,6 +9,7 @@ use moli_core::{
 use moli_fetch::{
     FetchConfig, WebBotAuthProfile, WebBotAuthSigner, validate_http_host_resolve_entries,
 };
+use moli_system_locale::system_languages;
 use std::path::PathBuf;
 use std::str::FromStr;
 
@@ -77,7 +78,7 @@ impl AppConfig {
                 if let Some(interval_ms) = args.screencast_interval {
                     if !config.browser.layout_policy().uses_real_layout() {
                         bail!(
-                            "--screencast-interval-ms requires --layout or --realtime (MOLI_LAYOUT=true or MOLI_REALTIME=true)"
+                            "--screencast-interval-ms requires --lazy or --realtime (MOLI_LAYOUT=true or MOLI_REALTIME=true)"
                         );
                     }
                     config.server.screencast_interval_ms = interval_ms;
@@ -109,14 +110,14 @@ fn apply_common_args(config: &mut AppConfig, common: &CommonArgs) -> Result<()> 
         .set_web_security_disabled(common.disable_web_security);
     let layout_policy = if common.realtime {
         LayoutPolicy::Realtime
-    } else if common.layout {
-        LayoutPolicy::OnDemand
+    } else if common.lazy {
+        LayoutPolicy::Lazy
     } else {
         LayoutPolicy::Mock
     };
     if common.scrollbars && !layout_policy.uses_real_layout() {
         bail!(
-            "--scrollbars requires --layout or --realtime (MOLI_LAYOUT=true or MOLI_REALTIME=true)"
+            "--scrollbars requires --lazy or --realtime (MOLI_LAYOUT=true or MOLI_REALTIME=true)"
         );
     }
 
@@ -134,6 +135,20 @@ fn apply_common_args(config: &mut AppConfig, common: &CommonArgs) -> Result<()> 
             .browser
             .fetch_mut()
             .set_user_agent_suffix(user_agent_suffix);
+    }
+
+    let languages = if common.accept_language.is_empty() {
+        system_languages()
+    } else {
+        Some(common.accept_language.clone())
+    };
+    if let Some(languages) = languages {
+        config
+            .browser
+            .fetch_mut()
+            .set_languages(languages)
+            .map_err(anyhow::Error::msg)
+            .context("invalid browser language preferences")?;
     }
 
     if let Some(http_timeout) = common.http_timeout {
@@ -365,6 +380,52 @@ mod tests {
     use crate::cli::{Cli, Commands};
     use clap::Parser;
     use std::path::Path;
+
+    #[test]
+    fn ordered_language_preferences_configure_fetch_and_serve() {
+        for command in ["fetch", "serve"] {
+            let mut arguments = vec!["moli", command, "--accept-lang=zh-cn, EN-us,zh-CN"];
+            if command == "fetch" {
+                arguments.push("https://example.test/");
+            }
+            let cli = Cli::parse_from(arguments);
+            let config = AppConfig::from_cli(&cli).expect("explicit language should build");
+            let identity = config.browser.fetch().browser_identity();
+            assert_eq!(
+                identity.accept_language(),
+                "zh-CN,zh;q=0.9,en-US;q=0.8,en;q=0.7"
+            );
+            assert_eq!(identity.language(), "zh-CN");
+            assert_eq!(identity.languages(), ["zh-CN", "en-US"]);
+        }
+    }
+
+    #[test]
+    fn accept_language_rejects_values_outside_an_ordered_language_list() {
+        for value in [
+            "",
+            "   ",
+            "zh CN",
+            "zh-CN,",
+            "zh-CN,,en-US",
+            "zh_CN",
+            "toolonglanguage",
+            "en-abcdefghi",
+            "en-a",
+            "*",
+            "en;q=0",
+            "zh-CN,zh;q=0.9",
+            "en\n",
+        ] {
+            let config = Cli::try_parse_from(["moli", "serve", "--accept-lang", value])
+                .map_err(anyhow::Error::new)
+                .and_then(|cli| AppConfig::from_cli(&cli));
+            assert!(
+                config.is_err(),
+                "`--accept-lang {value:?}` should be rejected"
+            );
+        }
+    }
 
     #[test]
     fn serve_debugger_pauses_are_opt_in() {

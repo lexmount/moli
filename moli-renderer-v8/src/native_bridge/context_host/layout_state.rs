@@ -359,6 +359,11 @@ impl DocumentLayoutState {
         self.frame_viewports.get(&frame).copied()
     }
 
+    pub(super) fn retire_frame_viewport(&mut self, frame: DomHandle) {
+        self.frame_viewports.remove(&frame);
+        self.inferred_frame_style_viewports.remove(&frame);
+    }
+
     pub(super) fn inferred_frame_style_viewport(
         &mut self,
         frame: DomHandle,

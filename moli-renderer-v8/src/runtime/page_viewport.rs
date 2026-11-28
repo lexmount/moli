@@ -75,6 +75,8 @@ pub enum RendererViewportEditAction {
 pub struct RendererViewportEditReply {
     pub applied: bool,
     pub editor: Option<RendererViewportEditor>,
+    /// Last frame published on this subscription before taking the editor snapshot.
+    pub last_frame_sequence: u64,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -513,18 +515,24 @@ impl PageVm {
         &mut self,
         edit: RendererViewportEdit,
     ) -> anyhow::Result<RendererViewportEditReply> {
+        let last_frame_sequence = self
+            .viewport_frames
+            .as_ref()
+            .map_or(0, |state| state.sequence);
         if edit.document != self.document_lifecycle.identity()
             || !self.document_settings.document_activity.focused
         {
             return Ok(RendererViewportEditReply {
                 applied: false,
                 editor: None,
+                last_frame_sequence,
             });
         }
         let (Some(state), Some(vm)) = (self.viewport_frames.as_mut(), self.vm.as_mut()) else {
             return Ok(RendererViewportEditReply {
                 applied: false,
                 editor: None,
+                last_frame_sequence,
             });
         };
         let applied = vm.apply_viewport_editor_input(&mut state.editing, edit)?;
@@ -532,6 +540,7 @@ impl PageVm {
         Ok(RendererViewportEditReply {
             applied,
             editor: self.read_viewport_editor(),
+            last_frame_sequence,
         })
     }
 

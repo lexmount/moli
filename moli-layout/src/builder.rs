@@ -243,6 +243,7 @@ where
         world: &mut LayoutWorld<S::NodeId>,
         source_node: S::NodeId,
         inherited_style: &ResolvedLayoutStyle,
+        may_replace_leaf: bool,
     ) -> Result<Vec<LayoutBoxId>, LayoutError> {
         let source_kind = self.source.node_kind(source_node);
         match source_kind {
@@ -251,34 +252,50 @@ where
                 Ok(Vec::new())
             }
             LayoutSourceKind::Text => {
-                self.validate_non_element_semantics(source_node, source_kind)?;
-                let Some(text) = self.source.text(source_node) else {
+                let Some(text_box) = self.text_box(source_node, inherited_style)? else {
                     return Ok(Vec::new());
                 };
-                let id = world.allocate(LayoutWorld::new_box(
-                    Some(source_node),
-                    None,
-                    None,
-                    self.source.label(source_node),
-                    None,
-                    None,
-                    None,
-                    LayoutBoxKind::Text,
-                    ResolvedLayoutStyle::text_leaf_from(inherited_style),
-                    Some(Arc::from(text)),
-                ));
-                world.boxes[id.index()].text_selection = self.source.text_selection(source_node);
+                if !may_replace_leaf {
+                    world.numeric_tree = None;
+                }
+                let id = world.allocate(text_box);
                 world.map_source(source_node, id);
                 Ok(vec![id])
             }
-            LayoutSourceKind::Element => self.build_element(world, source_node),
+            LayoutSourceKind::Element => self.build_element(world, source_node, may_replace_leaf),
         }
+    }
+
+    fn text_box(
+        &self,
+        source_node: S::NodeId,
+        inherited_style: &ResolvedLayoutStyle,
+    ) -> Result<Option<crate::LayoutBox<S::NodeId>>, LayoutError> {
+        self.validate_non_element_semantics(source_node, LayoutSourceKind::Text)?;
+        let Some(text) = self.source.text(source_node) else {
+            return Ok(None);
+        };
+        let mut layout_box = LayoutWorld::new_box(
+            Some(source_node),
+            None,
+            None,
+            self.source.label(source_node),
+            None,
+            None,
+            None,
+            LayoutBoxKind::Text,
+            ResolvedLayoutStyle::text_leaf_from(inherited_style),
+            Some(Arc::from(text)),
+        );
+        layout_box.text_selection = self.source.text_selection(source_node);
+        Ok(Some(layout_box))
     }
 
     fn build_element(
         &mut self,
         world: &mut LayoutWorld<S::NodeId>,
         source_node: S::NodeId,
+        may_replace_leaf: bool,
     ) -> Result<Vec<LayoutBoxId>, LayoutError> {
         self.enter_source(source_node)?;
 
@@ -327,13 +344,17 @@ where
                         style.clone(),
                         metrics,
                     );
+                    // A new principal box retires the old order held by the
+                    // numeric tree before insert makes the working order unique.
+                    if !may_replace_leaf {
+                        world.numeric_tree = None;
+                    }
                     let id = world.allocate(box_node);
                     if matches!(
                         semantics.category,
                         crate::LayoutElementCategory::FormControl(_)
                     ) {
-                        world.boxes[id.index()].text_selection =
-                            self.source.text_selection(source_node);
+                        world.boxes[id].text_selection = self.source.text_selection(source_node);
                     }
                     world.map_source(source_node, id);
 
@@ -382,7 +403,7 @@ where
     /// style is retained by `LayoutWorld`.
     fn finalize_viewport_scroll_policy(&self, world: &mut LayoutWorld<S::NodeId>) {
         let root = world.root;
-        let root_style = &world.boxes[root.index()].style;
+        let root_style = &world.boxes[root].style;
         let body_box = self
             .viewport_body_candidate
             .as_ref()
@@ -481,22 +502,48 @@ where
         after: Option<ResolvedLayoutPseudoStyle>,
     ) -> Result<Vec<LayoutBoxId>, LayoutError> {
         let mut children = Vec::new();
-        if style.display().is_list_item()
-            && let Some(marker) = self.styles.marker_style(source_node)?
-        {
-            children.extend(self.build_generated_pseudo(
-                world,
-                source_node,
-                LayoutPseudo::Marker,
-                marker.into_style(),
-            )?);
+        if style.display().is_list_item() {
+            children.extend(self.build_list_marker(world, source_node, None)?);
         }
         children.extend(self.build_pseudo(world, source_node, LayoutPseudo::Before, before)?);
         for child in self.checked_flat_children(source_node)? {
-            children.extend(self.build_source_node(world, child, style)?);
+            children.extend(self.build_source_node(world, child, style, false)?);
         }
         children.extend(self.build_pseudo(world, source_node, LayoutPseudo::After, after)?);
         Ok(children)
+    }
+
+    fn build_list_marker(
+        &mut self,
+        world: &mut LayoutWorld<S::NodeId>,
+        source_node: S::NodeId,
+        retained_item: Option<LayoutBoxId>,
+    ) -> Result<Vec<LayoutBoxId>, LayoutError> {
+        let Some(marker) = self.styles.marker_style(source_node)? else {
+            return Ok(Vec::new());
+        };
+        let style = marker.into_style();
+        if let Some(item) = retained_item
+            && let Some(id) = world.boxes[item].children.iter().copied().find(|id| {
+                let child = &world.boxes[id];
+                child.kind == LayoutBoxKind::PseudoMarker && child.owner == Some(source_node)
+            })
+        {
+            let previous = &world.boxes[id];
+            let item_style = &world.boxes[item].style;
+            let outside =
+                item_style.list_marker_position() == crate::LayoutListMarkerPosition::Outside;
+            let default_text = item_style.list_marker_type() != &crate::LayoutListMarkerType::None;
+            if previous.outside_list_marker == outside
+                && (!style.has_normal_generated_content()
+                    || previous.children.len() == usize::from(default_text))
+                && self.styles.can_reuse_marker_style(&previous.style, &style)
+            {
+                self.collect_css_images(source_node, &style);
+                return Ok(vec![id]);
+            }
+        }
+        self.build_generated_pseudo(world, source_node, LayoutPseudo::Marker, style)
     }
 
     fn build_pseudo(
@@ -523,8 +570,11 @@ where
         pseudo: LayoutPseudo,
         style: ResolvedLayoutStyle,
     ) -> Result<Vec<LayoutBoxId>, LayoutError> {
-        let generated_child = style
-            .generated_text()
+        let generated_text = style.generated_text();
+        if generated_text.is_some() || style.display() != LayoutDisplay::Contents {
+            world.numeric_tree = None;
+        }
+        let generated_child = generated_text
             .map(|text| self.allocate_generated_text(world, owner, pseudo, &style, text));
 
         // `display: contents` suppresses the pseudo's own principal box, but
@@ -817,7 +867,7 @@ where
                 .filter(|id| {
                     !self.is_ignorable_whitespace_text(world, *id)
                         || (preserve_whitespace
-                            && world.boxes[id.index()]
+                            && world.boxes[id]
                                 .text
                                 .as_deref()
                                 .is_some_and(|text| !text.is_empty()))
@@ -1154,9 +1204,7 @@ where
         world.replace_children(parent, children)?;
         world
             .box_by_id_mut(parent)
-            .ok_or(LayoutError::InvalidBoxReference {
-                index: parent.index(),
-            })?
+            .ok_or(LayoutError::InvalidBoxHandle { id: parent })?
             .inline_formatting_context = establishes_inline_context;
         Ok(())
     }
@@ -1168,7 +1216,7 @@ where
     ) -> Result<Option<TableBoxRole>, LayoutError> {
         let layout_box = world
             .box_by_id(id)
-            .ok_or(LayoutError::InvalidBoxReference { index: id.index() })?;
+            .ok_or(LayoutError::InvalidBoxHandle { id })?;
         Ok(TableBoxRole::from_display(layout_box.style.display()))
     }
 

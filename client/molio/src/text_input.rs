@@ -6,6 +6,7 @@ use moli_core::{
 };
 
 use crate::address::{utf8_range, utf16_range};
+use crate::viewport_edit_sequence::ViewportEditSequence;
 
 /// Synchronous state for the platform input client. Versions refer to the
 /// renderer's edit position, not the most recent raster frame.
@@ -13,15 +14,14 @@ use crate::address::{utf8_range, utf16_range};
 pub struct MoliTextInputBridge {
     document: Option<RendererDocumentLifecycleIdentity>,
     editor: Option<RendererViewportEditor>,
-    pending: Option<u64>,
-    sequence: u64,
+    edits: ViewportEditSequence,
 }
 
 impl MoliTextInputBridge {
     pub fn clear(&mut self) {
         self.document = None;
         self.editor = None;
-        self.pending = None;
+        self.edits.clear();
     }
 
     pub fn refresh(
@@ -33,10 +33,9 @@ impl MoliTextInputBridge {
         let same_target = self.document == document
             && self.editor.as_ref().map(|editor| editor.target)
                 == editor.as_ref().map(|editor| editor.target);
-        if same_target && self.pending.is_some() && ack < self.pending {
+        if !self.edits.accept_editor(same_target, ack) {
             return false;
         }
-        self.pending = None;
         let changed = self.document != document || self.editor != editor;
         self.document = document;
         self.editor = editor;
@@ -67,15 +66,7 @@ impl MoliTextInputBridge {
     pub fn edit(&mut self, action: RendererViewportEditAction) -> Option<RendererViewportEdit> {
         let document = self.document?;
         let editor = self.editor.as_mut()?;
-        self.sequence += 1;
-        let edit = RendererViewportEdit {
-            document,
-            target: editor.target,
-            revision: editor.revision,
-            sequence: self.sequence,
-            previous: self.pending.replace(self.sequence),
-            action,
-        };
+        let edit = self.edits.submit(document, editor, action);
         match &edit.action {
             RendererViewportEditAction::Compose {
                 range,

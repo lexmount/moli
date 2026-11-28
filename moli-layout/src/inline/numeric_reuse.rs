@@ -6,6 +6,9 @@
 //! restored together with an unchanged IFC after construction/font validation;
 //! ordinary one-shot worlds never allocate its per-owner index or entries.
 
+use std::num::NonZeroU32;
+
+use slotmap::SecondaryMap;
 use style::Atom;
 use taffy::{
     AvailableSpace, CompactLength, LayoutInput, LayoutOutput, Rect, ResolvedAspectRatio, RunMode,
@@ -13,6 +16,14 @@ use taffy::{
 };
 
 use crate::{LayoutBoxId, LayoutDisplay, style::InlineDirection};
+
+fn cache_slot(index: usize) -> NonZeroU32 {
+    NonZeroU32::new(
+        u32::try_from(index.checked_add(1).expect("IFC cache index overflow"))
+            .expect("IFC cache exceeds u32"),
+    )
+    .unwrap()
+}
 
 mod measurement;
 pub(crate) use measurement::InlineMeasurementInputs;
@@ -131,25 +142,23 @@ pub(crate) struct InlineNumericReuse {
     // Keep entries dense: most boxes are not eligible IFC owners. The small
     // index exists only when the caller opted into a retained working set.
     entries: Vec<InlineNumericEntry>,
-    owner_slots: Vec<Option<usize>>,
+    owner_slots: SecondaryMap<LayoutBoxId, NonZeroU32>,
     retained_hits: usize,
     measurements: Option<Box<InlineMeasurements>>,
 }
 
 impl InlineNumericReuse {
-    pub(crate) fn new(box_count: usize) -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             entries: Vec::new(),
-            owner_slots: vec![None; box_count],
+            owner_slots: SecondaryMap::new(),
             retained_hits: 0,
             measurements: None,
         }
     }
 
     pub(crate) fn contains(&self, owner: LayoutBoxId) -> bool {
-        self.owner_slots
-            .get(owner.index())
-            .is_some_and(Option::is_some)
+        self.owner_slots.contains_key(owner)
             || self
                 .measurements
                 .as_ref()
@@ -163,28 +172,23 @@ impl InlineNumericReuse {
         }
     }
 
-    pub(crate) fn begin_pass(&mut self, box_count: usize) {
-        if box_count != self.owner_slots.len() {
-            self.retain_owners_for_box_count(box_count, |_| true);
-        }
+    pub(crate) fn begin_pass(&mut self) {
         self.reset_hits();
     }
 
-    /// Reindex owners that kept their IDs after construction compaction.
-    pub(crate) fn retain_owners_for_box_count(
-        &mut self,
-        box_count: usize,
-        mut keep: impl FnMut(LayoutBoxId) -> bool,
-    ) {
-        self.entries
-            .retain(|entry| entry.owner.index() < box_count && keep(entry.owner));
-        self.owner_slots.clear();
-        self.owner_slots.resize(box_count, None);
-        for (slot, entry) in self.entries.iter().enumerate() {
-            self.owner_slots[entry.owner.index()] = Some(slot);
+    /// Retire owners rejected by construction/input validation. Surviving
+    /// entries keep their generational handles across order changes.
+    pub(crate) fn retain_owners(&mut self, mut keep: impl FnMut(LayoutBoxId) -> bool) {
+        let previous_len = self.entries.len();
+        self.entries.retain(|entry| keep(entry.owner));
+        if self.entries.len() != previous_len {
+            self.owner_slots.clear();
+            for (slot, entry) in self.entries.iter().enumerate() {
+                self.owner_slots.insert(entry.owner, cache_slot(slot));
+            }
         }
         if let Some(cache) = &mut self.measurements {
-            cache.retain_owners(box_count, keep);
+            cache.retain_owners(keep);
         }
     }
 
@@ -232,9 +236,8 @@ impl InlineNumericReuse {
         style: Style<Atom>,
         output: LayoutOutput,
     ) {
-        let box_count = self.owner_slots.len();
         self.measurements
-            .get_or_insert_with(|| Box::new(InlineMeasurements::new(box_count)))
+            .get_or_insert_with(|| Box::new(InlineMeasurements::new()))
             .store(owner, inputs, style, output);
     }
 
@@ -244,7 +247,7 @@ impl InlineNumericReuse {
         inputs: InlineNumericInputs,
         style: &Style<Atom>,
     ) -> Option<LayoutOutput> {
-        let slot = self.owner_slots.get(owner.index()).copied().flatten()?;
+        let slot = (self.owner_slots.get(owner)?.get() - 1) as usize;
         let entry = &self.entries[slot];
         if entry.inputs != inputs.comparison_key(style) || entry.style != *style {
             return None;
@@ -256,16 +259,13 @@ impl InlineNumericReuse {
     }
 
     pub(crate) fn remove(&mut self, owner: LayoutBoxId) {
-        let Some(slot) = self
-            .owner_slots
-            .get_mut(owner.index())
-            .and_then(Option::take)
-        else {
+        let Some(slot) = self.owner_slots.remove(owner) else {
             return;
         };
+        let slot = (slot.get() - 1) as usize;
         self.entries.swap_remove(slot);
         if let Some(moved) = self.entries.get(slot) {
-            self.owner_slots[moved.owner.index()] = Some(slot);
+            self.owner_slots.insert(moved.owner, cache_slot(slot));
         }
     }
 
@@ -279,8 +279,8 @@ impl InlineNumericReuse {
         self.remove(owner);
         // Numeric placeholders have no IFC input owner and must never enter
         // the persistent construction graph's index.
-        assert!(owner.index() < self.owner_slots.len());
-        self.owner_slots[owner.index()] = Some(self.entries.len());
+        self.owner_slots
+            .insert(owner, cache_slot(self.entries.len()));
         let inputs = inputs.comparison_key(&style);
         self.entries.push(InlineNumericEntry {
             owner,

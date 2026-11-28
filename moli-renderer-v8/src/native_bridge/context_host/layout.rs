@@ -8,12 +8,13 @@ use moli_layout::{
     LayoutPassResult, LayoutQuery, LayoutQueryAnswer, LayoutQueryBatch, LayoutRect, LayoutViewport,
     ScrollProjectionRefresh,
 };
+use moli_page_types::LayoutPolicy;
 use moli_selector::QueryContainerSizes;
 
-use super::PageScriptHost;
 #[cfg(feature = "devtools")]
 use super::layout_snapshot::PublishedFrameGeometry;
 use super::layout_state::InferredFrameStyleViewportCacheKey;
+use super::{LayoutPublicationRequest, PageScriptHost};
 use crate::{
     css_resource_urls::{
         CompletedStylesheetWebFont, StylesheetLoadBlockingResource, StylesheetSubresourceRequest,
@@ -172,11 +173,8 @@ impl PageScriptHost {
                 .clear_latest_layout();
         }
         if self.layout_policy != policy {
-            drop(
-                self.document_layout_state
-                    .borrow_mut()
-                    .take_retained_layout(),
-            );
+            let mut state = self.document_layout_state.borrow_mut();
+            drop(state.take_retained_layout());
             self.dom_host().track_layout_changes(None);
             self.realtime_layout_state = policy.is_realtime().then(Box::default);
         }
@@ -295,14 +293,11 @@ impl PageScriptHost {
             .frame_viewport(frame)
     }
 
-    pub(crate) fn invalidate_published_frame_viewports(
+    pub(crate) fn invalidate_mock_frame_viewports(
         &self,
         frames: impl IntoIterator<Item = DomHandle>,
     ) {
-        // Realtime source invalidation already makes the screen layout stale.
-        // Preserve the last used viewport for a connected, hidden child until
-        // its next layout publishes a replacement.
-        if self.layout_policy().is_realtime() {
+        if self.layout_policy != LayoutPolicy::Mock {
             return;
         }
         let frames = frames.into_iter().collect::<Vec<_>>();
@@ -395,7 +390,7 @@ impl PageScriptHost {
             .inferred_frame_style_viewport_cache_observability()
     }
 
-    /// Lazily publishes the first screen layout for this main Document.
+    /// Lazily publishes a missing screen layout for this main Document.
     ///
     /// Every consumer shares the same recursive tree. Missing nodes or newly
     /// navigated frames in an existing tree must not refresh the whole page.
@@ -419,11 +414,20 @@ impl PageScriptHost {
             self.layout_viewport_for_document(document),
             moli_layout::LayoutFlushReason::SynchronousGeometry,
         );
-        let pass = self
-            .build_layout_pass_for_document(document, request)?
+        let publication = self.prepare_layout_publication(
+            document,
+            request.viewport,
+            LayoutPublicationRequest::Screen,
+        )?;
+        let (pass, feedback) = self
+            .build_layout_pass_for_document_in_environment(
+                document,
+                publication.layout_request(request),
+                None,
+                publication.input_retention(self.layout_policy),
+            )?
             .ok_or(LayoutError::NoLayoutRoot)?;
-        self.publish_layout_pass_for_document(document, pass, false);
-        Ok(())
+        self.finish_layout_publication(publication, pass, feedback)
     }
 
     /// FontFace and Canvas use the document's font service without requesting a
@@ -468,13 +472,14 @@ impl PageScriptHost {
             .replace_layout_container_sizes(self.dom_host(), document, sizes)
     }
 
+    #[cfg(test)]
     pub(crate) fn build_layout_pass_for_document(
         &self,
         document: DomHandle,
         request: LayoutPassRequest,
     ) -> Result<Option<LayoutPassResult<DomHandle>>, LayoutError> {
         use crate::layout_renderer::LayoutInputRetention;
-        let inputs = if self.layout_policy == moli_page_types::LayoutPolicy::OnDemand {
+        let inputs = if self.layout_policy == moli_page_types::LayoutPolicy::Lazy {
             LayoutInputRetention::Frozen
         } else {
             LayoutInputRetention::Transient
@@ -593,7 +598,7 @@ impl PageScriptHost {
         Ok(Some((pass, feedback)))
     }
 
-    pub(crate) fn publish_layout_pass_for_document(
+    pub(super) fn publish_layout_pass_for_document(
         &self,
         document: DomHandle,
         mut pass: LayoutPassResult<DomHandle>,

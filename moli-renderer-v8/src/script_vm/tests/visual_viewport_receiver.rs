@@ -4,7 +4,7 @@ use super::*;
 async fn visual_viewport_borrowed_getters_use_the_receiver_window() {
     for policy in [
         moli_page_types::LayoutPolicy::Mock,
-        moli_page_types::LayoutPolicy::OnDemand,
+        moli_page_types::LayoutPolicy::Lazy,
     ] {
         let mut vm = new_storage_html_test_vm("https://visual-viewport-receiver.test/");
         vm.set_layout_policy(policy);
@@ -18,7 +18,7 @@ async fn visual_viewport_borrowed_getters_use_the_receiver_window() {
         )
         .unwrap();
         run_child_navigation_commit_and_host_load_for_test(&mut vm, "viewport child setup").await;
-        if policy == moli_page_types::LayoutPolicy::OnDemand {
+        if policy == moli_page_types::LayoutPolicy::Lazy {
             vm.publish_layout_for_test().unwrap();
         }
         let builds = vm.layout_pass_observability_for_test().1;

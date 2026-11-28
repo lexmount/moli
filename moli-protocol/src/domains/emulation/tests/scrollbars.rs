@@ -107,7 +107,7 @@ async fn scrollbars_hidden_validates_params_and_requires_layout_without_changing
         "SID-1",
         "Emulation.setScrollbarsHidden",
         json!({"hidden":true}),
-        "Emulation.setScrollbarsHidden requires --layout",
+        "Emulation.setScrollbarsHidden requires layout. Start Moli with --lazy or --realtime.",
     )
     .await;
     mock.with_fixture(|conn| {
@@ -320,7 +320,7 @@ async fn scrollbars_hidden_false_and_detach_preserve_the_browser_startup_flag() 
             moli_fetch::FetchConfig::default(),
             moli_core::OptionalResourceFetchMask::NONE,
             true,
-            moli_core::LayoutPolicy::OnDemand,
+            moli_core::LayoutPolicy::Lazy,
         )
         .with_scrollbars_hidden(true),
     );
