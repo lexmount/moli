@@ -1054,7 +1054,7 @@ where
         } else {
             let projection = OverflowProjection::new(world, viewport);
             let candidates = (0..projection.len())
-                .map(|index| world.boxes.id_at(index))
+                .map(crate::LayoutOutputBoxId::from_index)
                 .collect();
             overflow_projection = Some(projection);
             candidates
@@ -1064,7 +1064,13 @@ where
             .expect("overflow projection is initialized above");
         let candidates = candidates
             .into_iter()
-            .map(|id| (id, projection.overflowing_axes(world, id)))
+            .map(|id| {
+                let index = id.index();
+                (
+                    world.boxes.id_at(index),
+                    projection.overflowing_axes(world, index),
+                )
+            })
             .collect::<Vec<_>>();
         metrics.overflow_detection_elapsed += phase_started.elapsed();
         let phase_started = Instant::now();
