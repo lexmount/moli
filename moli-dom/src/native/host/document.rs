@@ -2785,8 +2785,7 @@ impl DomHost {
         let assigned = if is_first_matching_slot {
             self.child_handles(host)
                 .filter(|child| {
-                    self.node(*child)
-                        .is_some_and(|node| node.is_element() || node.is_text())
+                    self.node(*child).is_some_and(Node::is_slottable)
                         && self.slot_name_for_node(*child) == slot_name
                 })
                 .collect::<Vec<_>>()
@@ -2813,7 +2812,9 @@ impl DomHost {
         visiting.push(slot_handle);
 
         let nodes = if assigned.is_empty() {
-            self.child_handles(slot_handle).collect()
+            self.child_handles(slot_handle)
+                .filter(|&child| self.node(child).is_some_and(Node::is_slottable))
+                .collect()
         } else {
             assigned
         };
@@ -2849,13 +2850,15 @@ impl DomHost {
     }
 
     fn is_slotable_host_child(&self, handle: DomHandle, host: DomHandle) -> bool {
-        self.node(handle).is_some_and(|node| {
-            (node.is_element() || node.is_text()) && node.parent_node() == Some(host)
-        })
+        self.node(handle)
+            .is_some_and(|node| node.is_slottable() && node.parent_node() == Some(host))
     }
 
     pub fn assigned_slot_for_node(&self, handle: DomHandle) -> Option<DomHandle> {
-        let parent = self.node(handle).and_then(Node::parent_node)?;
+        let parent = self
+            .node(handle)
+            .filter(|node| node.is_slottable())
+            .and_then(Node::parent_node)?;
         let shadow_root = self.shadow_root_handle(parent)?;
         if self.shadow_root_slot_assignment(shadow_root).as_deref() == Some("manual") {
             return self
